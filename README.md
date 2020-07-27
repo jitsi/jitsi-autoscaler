@@ -1,4 +1,4 @@
-# jibri-autoscaler
+# jitsi-autoscaler
 
 ## Building
 ```

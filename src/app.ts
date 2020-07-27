@@ -68,6 +68,12 @@ if (config.ProtectedApi) {
     logger.warn('starting in unprotected api mode');
 }
 
+// add a logger middleware
+app.use((req, res, done) => {
+    logger.info('', { method: req.method, url: req.originalUrl, status: res.statusCode });
+    done();
+});
+
 app.post('/hook/v1/status', async (req, res, next) => {
     try {
         await h.jibriStateWebhook(req, res);

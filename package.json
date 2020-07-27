@@ -1,10 +1,10 @@
 {
-  "name": "jibri-autoscaler",
+  "name": "jitsi-autoscaler",
   "version": "1.0.0",
-  "description": "Implements Autoscaling for Jibris",
+  "description": "Implements Autoscaling for Jitsi Services",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jitsi/jibri-autoscaler"
+    "url": "https://github.com/jitsi/jitsi-autoscaler"
   },
   "main": "src/index.js",
   "engines": {

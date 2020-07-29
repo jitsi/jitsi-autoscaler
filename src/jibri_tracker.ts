@@ -21,9 +21,15 @@ export interface JibriHealth {
     healthStatus: JibriHealthState;
 }
 
+export interface JibriMetaData {
+    group: string;
+    [key: string]: string;
+}
+
 export interface JibriState {
     jibriId: string;
     status: JibriStatus;
+    metadata: JibriMetaData;
 }
 
 export class JibriTracker {
@@ -54,21 +60,41 @@ export class JibriTracker {
     }
 
     async track(state: JibriState): Promise<boolean> {
-        const key = `jibri:idle:${state.jibriId}`;
-        if (
-            state.status.busyStatus === JibriStatusState.Idle &&
-            state.status.health.healthStatus === JibriHealthState.Healthy
-        ) {
-            const result = await this.redisClient.set(key, 1, 'ex', JibriTracker.idleTTL);
-            if (result !== 'OK') {
-                throw new Error(`unable to set ${key}`);
-            }
-            return true;
+        let group = 'default';
+        // pull the group from metadata if provided
+        if (state.metadata && state.metadata.group) {
+            group = state.metadata.group;
         }
-        await this.redisClient.del(key);
-        return false;
+
+        const key = `instance:status:${group}:${state.jibriId}`;
+
+        const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', JibriTracker.idleTTL);
+
+        if (result !== 'OK') {
+            throw new Error(`unable to set ${key}`);
+        }
+        return true;
     }
 
+    async getCurrent(group: string): Promise<Array<JibriState>> {
+        const states: Array<JibriState> = [];
+        let items: Array<string> = [];
+
+        let cursor = '0';
+        do {
+            const result = await this.redisClient.scan(cursor, 'match', `instance:status:${group}:*`);
+            cursor = result[0];
+            if (result[1].length > 0) {
+                items = await this.redisClient.mget(...result[1]);
+                items.forEach((item) => {
+                    states.push(JSON.parse(item));
+                });
+            }
+        } while (cursor != '0');
+        this.logger.debug(`jibri states: ${states}`, { group, states });
+
+        return states;
+    }
     async setPending(key: string): Promise<boolean> {
         try {
             this.logger.debug(`attempting lock of ${key}`);

@@ -1,5 +1,4 @@
 import bodyParser from 'body-parser';
-import fs from 'fs';
 import config from './config';
 import express from 'express';
 import Handlers from './handlers';
@@ -8,16 +7,13 @@ import logger from './logger';
 import ASAPPubKeyFetcher from './asap';
 import jwt from 'express-jwt';
 import { JibriTracker } from './jibri_tracker';
+import Autoscaler from './autoscaler';
 
-export const AsapPubKeyTTL: number = Number(process.env.ASAP_PUB_KEY_TTL) || 3600;
-export const RecorderTokenExpSeconds: number = Number(process.env.RECORDER_TOKEN_TTL_SECONDS) || 30;
-export const AsapPubKeyBaseUrl: string = process.env.ASAP_PUB_KEY_BASE_URL;
-export const AsapJwtIss: string = process.env.ASAP_JWT_ISS;
-export const AsapJwtKid: string = process.env.ASAP_JWT_KID;
-export const AsapJwtAcceptedAud: string = process.env.ASAP_JWT_AUD;
-export const AsapJwtAcceptedIss: string = process.env.ASAP_JWT_ACCEPTED_ISS;
-export const AsapJwtAcceptedHookIss: string = process.env.ASAP_JWT_ACCEPTED_HOOK_ISS;
-export const TokenSigningKeyFile: string = process.env.TOKEN_SIGNING_KEY_FILE;
+const AsapPubKeyTTL: number = Number(process.env.ASAP_PUB_KEY_TTL) || 3600;
+const AsapPubKeyBaseUrl: string = process.env.ASAP_PUB_KEY_BASE_URL;
+const AsapJwtAcceptedAud: string = process.env.ASAP_JWT_AUD;
+const AsapJwtAcceptedHookIss: string = process.env.ASAP_JWT_ACCEPTED_HOOK_ISS;
+const AutoscalerInterval: number = Number(process.env.AUTOSCALER_INTERVAL) || 10;
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -82,16 +78,15 @@ app.post('/hook/v1/status', async (req, res, next) => {
     }
 });
 
-// const meetProcessor = new meet.MeetProcessor({
-//     jibriTracker: jibriTracker,
-//     signingKey: jwtSigningKey,
-// });
+const autoscaleProcessor = new Autoscaler({
+    jibriTracker: jibriTracker,
+});
 
-// async function pollForRecorderReqs() {
-//     await requestTracker.processNextRequest(meetProcessor.requestProcessor);
-//     setTimeout(pollForRecorderReqs, 1000);
-// }
-// pollForRecorderReqs();
+async function pollForAutoscaling() {
+    await autoscaleProcessor.processAutoscaling();
+    setTimeout(pollForAutoscaling, AutoscalerInterval * 1000);
+}
+pollForAutoscaling();
 
 // async function pollForRequestUpdates() {
 //     await requestTracker.processUpdates(meetProcessor.updateProcessor);

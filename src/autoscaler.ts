@@ -4,26 +4,30 @@ import { JibriTracker, JibriStatusState } from './jibri_tracker';
 
 import logger from './logger';
 
-dotenv.config();
-
-const MinDesired: number = Number(process.env.JIBRI_MIN_DESIRED) || 1;
-const MaxDesired: number = Number(process.env.JIBRI_MAX_DESIRED) || 1;
-const GroupList: Array<string> = (process.env.JIBRI_GROUP_LIST || 'default').split(' ');
-
 export interface AutoscaleProcessorOptions {
     jibriTracker: JibriTracker;
+    jibriGroupList: Array<string>;
+    jibriMinDesired: number;
+    jibriMaxDesired: number;
 }
 
 export default class AutoscaleProcessor {
     private jibriTracker: JibriTracker;
+    private jibriMinDesired: number;
+    private jibriMaxDesired: number;
+    private jibriGroupList: Array<string>;
 
     constructor(options: AutoscaleProcessorOptions) {
         this.jibriTracker = options.jibriTracker;
+        this.jibriMinDesired = options.jibriMinDesired;
+        this.jibriMaxDesired = options.jibriMaxDesired;
+        this.jibriGroupList = options.jibriGroupList;
+
         this.processAutoscaling = this.processAutoscaling.bind(this);
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
     async processAutoscaling(): Promise<boolean> {
-        await Promise.all(GroupList.map(this.processAutoscalingByGroup))
+        await Promise.all(this.jibriGroupList.map(this.processAutoscalingByGroup))
         return true;
     }
 
@@ -31,6 +35,9 @@ export default class AutoscaleProcessor {
         const currentInventory = await this.jibriTracker.getCurrent(group);
         const count = currentInventory.length;
         let idleCount = 0;
+
+        const minDesired = this.jibriMinDesired;
+        const maxDesired = this.jibriMaxDesired;
 
         logger.info('inventory', { group, currentInventory });
 
@@ -40,14 +47,14 @@ export default class AutoscaleProcessor {
             }
         });
 
-        if (idleCount < MinDesired || count < MinDesired) {
+        if (idleCount < maxDesired || count < minDesired) {
             // scale up here
-            logger.info('Group should scale up, idle count not high enough', { group, idleCount, MinDesired });
+            logger.info('Group should scale up, idle count not high enough', { group, idleCount, minDesired });
         }
 
-        if (idleCount > MaxDesired) {
+        if (idleCount > maxDesired) {
             // scale down here
-            logger.info('Should scale down here, idle count too high', { group, idleCount, MaxDesired })
+            logger.info('Should scale down here, idle count too high', { group, idleCount, maxDesired })
         }
         return true;
     }

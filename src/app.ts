@@ -9,12 +9,6 @@ import jwt from 'express-jwt';
 import { JibriTracker } from './jibri_tracker';
 import Autoscaler from './autoscaler';
 
-const AsapPubKeyTTL: number = Number(process.env.ASAP_PUB_KEY_TTL) || 3600;
-const AsapPubKeyBaseUrl: string = process.env.ASAP_PUB_KEY_BASE_URL;
-const AsapJwtAcceptedAud: string = process.env.ASAP_JWT_AUD;
-const AsapJwtAcceptedHookIss: string = process.env.ASAP_JWT_ACCEPTED_HOOK_ISS;
-const AutoscalerInterval: number = Number(process.env.AUTOSCALER_INTERVAL) || 10;
-
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
 
@@ -45,13 +39,13 @@ const redisClient = new Redis({
 });
 const jibriTracker = new JibriTracker(logger, redisClient);
 const h = new Handlers(jibriTracker);
-const asapFetcher = new ASAPPubKeyFetcher(logger, AsapPubKeyBaseUrl, AsapPubKeyTTL);
+const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
 app.use(
     jwt({
         secret: asapFetcher.pubKeyCallback,
-        audience: AsapJwtAcceptedAud,
-        issuer: AsapJwtAcceptedHookIss,
+        audience: config.AsapJwtAcceptedAud,
+        issuer: config.AsapJwtAcceptedHookIss,
         algorithms: ['RS256'],
     }).unless((req) => {
         if (req.path == '/health') return true;
@@ -80,11 +74,14 @@ app.post('/hook/v1/status', async (req, res, next) => {
 
 const autoscaleProcessor = new Autoscaler({
     jibriTracker: jibriTracker,
+    jibriGroupList: config.JibriGroupList,
+    jibriMinDesired: config.JibriMinDesired,
+    jibriMaxDesired: config.JibriMaxDesired,
 });
 
 async function pollForAutoscaling() {
     await autoscaleProcessor.processAutoscaling();
-    setTimeout(pollForAutoscaling, AutoscalerInterval * 1000);
+    setTimeout(pollForAutoscaling, config.AutoscalerInterval * 1000);
 }
 pollForAutoscaling();
 

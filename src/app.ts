@@ -1,5 +1,4 @@
 import bodyParser from 'body-parser';
-import fs from 'fs';
 import config from './config';
 import express from 'express';
 import Handlers from './handlers';
@@ -8,16 +7,7 @@ import logger from './logger';
 import ASAPPubKeyFetcher from './asap';
 import jwt from 'express-jwt';
 import { JibriTracker } from './jibri_tracker';
-
-export const AsapPubKeyTTL: number = Number(process.env.ASAP_PUB_KEY_TTL) || 3600;
-export const RecorderTokenExpSeconds: number = Number(process.env.RECORDER_TOKEN_TTL_SECONDS) || 30;
-export const AsapPubKeyBaseUrl: string = process.env.ASAP_PUB_KEY_BASE_URL;
-export const AsapJwtIss: string = process.env.ASAP_JWT_ISS;
-export const AsapJwtKid: string = process.env.ASAP_JWT_KID;
-export const AsapJwtAcceptedAud: string = process.env.ASAP_JWT_AUD;
-export const AsapJwtAcceptedIss: string = process.env.ASAP_JWT_ACCEPTED_ISS;
-export const AsapJwtAcceptedHookIss: string = process.env.ASAP_JWT_ACCEPTED_HOOK_ISS;
-export const TokenSigningKeyFile: string = process.env.TOKEN_SIGNING_KEY_FILE;
+import Autoscaler from './autoscaler';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -49,13 +39,13 @@ const redisClient = new Redis({
 });
 const jibriTracker = new JibriTracker(logger, redisClient);
 const h = new Handlers(jibriTracker);
-const asapFetcher = new ASAPPubKeyFetcher(logger, AsapPubKeyBaseUrl, AsapPubKeyTTL);
+const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
 app.use(
     jwt({
         secret: asapFetcher.pubKeyCallback,
-        audience: AsapJwtAcceptedAud,
-        issuer: AsapJwtAcceptedHookIss,
+        audience: config.AsapJwtAcceptedAud,
+        issuer: config.AsapJwtAcceptedHookIss,
         algorithms: ['RS256'],
     }).unless((req) => {
         if (req.path == '/health') return true;
@@ -82,16 +72,18 @@ app.post('/hook/v1/status', async (req, res, next) => {
     }
 });
 
-// const meetProcessor = new meet.MeetProcessor({
-//     jibriTracker: jibriTracker,
-//     signingKey: jwtSigningKey,
-// });
+const autoscaleProcessor = new Autoscaler({
+    jibriTracker: jibriTracker,
+    jibriGroupList: config.JibriGroupList,
+    jibriMinDesired: config.JibriMinDesired,
+    jibriMaxDesired: config.JibriMaxDesired,
+});
 
-// async function pollForRecorderReqs() {
-//     await requestTracker.processNextRequest(meetProcessor.requestProcessor);
-//     setTimeout(pollForRecorderReqs, 1000);
-// }
-// pollForRecorderReqs();
+async function pollForAutoscaling() {
+    await autoscaleProcessor.processAutoscaling();
+    setTimeout(pollForAutoscaling, config.AutoscalerInterval * 1000);
+}
+pollForAutoscaling();
 
 // async function pollForRequestUpdates() {
 //     await requestTracker.processUpdates(meetProcessor.updateProcessor);

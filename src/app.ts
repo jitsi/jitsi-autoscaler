@@ -85,6 +85,7 @@ app.post('/sidecar/poll', async (req, res, next) => {
 
 const cloudManager = new CloudManager({
     cloud: 'aws',
+    instanceStatus,
 });
 
 const autoscaleProcessor = new Autoscaler({

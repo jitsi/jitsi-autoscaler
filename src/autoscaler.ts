@@ -28,7 +28,6 @@ export default class AutoscaleProcessor {
     private cloudManager: CloudManager;
     private jibriScaleUpThreshold: number;
     private jibriScaleDownThreshold: number;
-    private jibriGroupList: Array<string>;
     private jibriScalePeriod: number;
     private jibriScaleUpPeriodsCount: number;
     private jibriScaleDownPeriodsCount: number;
@@ -55,6 +54,7 @@ export default class AutoscaleProcessor {
         this.processAutoscaling = this.processAutoscaling.bind(this);
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
+
     async processAutoscaling(): Promise<boolean> {
         await Promise.all(this.jibriGroupList.map(this.processAutoscalingByGroup));
         return true;
@@ -89,15 +89,21 @@ export default class AutoscaleProcessor {
             if (item.status.busyStatus == JibriStatusState.Idle) {
                 idleCount += 1;
             }
+        });
+
         metricInventoryScaleUp.forEach((item) => {
             computedMetricScaleUp += item.value;
         });
         computedMetricScaleUp = computedMetricScaleUp / this.jibriScaleUpPeriodsCount;
 
-        if (idleCount < maxDesired || count < minDesired) {
+        if (idleCount < this.jibriMaxDesired || count < this.jibriMinDesired) {
             // scale up here
             // TODO: scale up quantity by group
-            logger.info('Group should scale up, idle count not high enough', { group, idleCount, minDesired });
+            logger.info('Group should scale up, idle count not high enough', {
+                group,
+                idleCount,
+                minDesired: this.jibriMinDesired,
+            });
             this.cloudManager.scaleUp(group, region, this.jibriScaleUpQuanity);
         }
         metricInventoryScaleDown.forEach((item) => {
@@ -119,7 +125,11 @@ export default class AutoscaleProcessor {
             });
         } else if (count > this.jibriMinDesired && computedMetricScaleDown > this.jibriScaleDownThreshold) {
             // scale down here
-            logger.info('Should scale down here, idle count too high', { group, idleCount, maxDesired })
+            logger.info('Should scale down here, idle count too high', {
+                group,
+                idleCount,
+                minDesired: this.jibriMinDesired,
+            });
             // TODO: select instances to be scaled down
             const scaleDownInstances: InstanceDetails[] = [];
             this.cloudManager.scaleDown(group, region, scaleDownInstances);

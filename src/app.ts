@@ -8,6 +8,7 @@ import ASAPPubKeyFetcher from './asap';
 import jwt from 'express-jwt';
 import { JibriTracker } from './jibri_tracker';
 import Autoscaler from './autoscaler';
+import CloudManager from './cloud_manager';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -72,8 +73,13 @@ app.post('/hook/v1/status', async (req, res, next) => {
     }
 });
 
+const cloudManager = new CloudManager({
+    cloud: 'aws',
+});
+
 const autoscaleProcessor = new Autoscaler({
     jibriTracker: jibriTracker,
+    cloudManager: cloudManager,
     jibriGroupList: config.JibriGroupList,
     jibriMinDesired: config.JibriMinDesired,
     jibriMaxDesired: config.JibriMaxDesired,

@@ -32,11 +32,17 @@ export interface JibriState {
     metadata: JibriMetaData;
 }
 
+export interface JibriMetric {
+    timestamp: number;
+    value: number;
+}
+
 export class JibriTracker {
     private redisClient: Redis.Redis;
     private pendingLock: Redlock;
     private logger: Logger;
 
+    static readonly metricTTL = 900; // seconds
     static readonly idleTTL = 90; // seconds
     static readonly pendingTTL = 10000; // milliseconds
 
@@ -66,14 +72,59 @@ export class JibriTracker {
             group = state.metadata.group;
         }
 
+        // Store latest instance status
         const key = `instance:status:${group}:${state.jibriId}`;
-
         const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', JibriTracker.idleTTL);
-
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }
+
+        const metricTimestamp = Date.now();
+        let metricValue = 0;
+        if (state.status.busyStatus == JibriStatusState.Idle) {
+            metricValue = 1;
+        }
+        const metricKey = `metric:available:${group}:${state.jibriId}:${metricTimestamp}`;
+        const metricObject: JibriMetric = {
+            timestamp: metricTimestamp,
+            value: metricValue,
+        };
+        const resultMetric = await this.redisClient.set(
+            metricKey,
+            JSON.stringify(metricObject),
+            'ex',
+            JibriTracker.metricTTL,
+        );
+        if (resultMetric !== 'OK') {
+            throw new Error(`unable to set ${metricKey}`);
+        }
+
         return true;
+    }
+
+    async getMetricPeriods(group: string, periodsCount: number, period: number): Promise<Array<JibriMetric>> {
+        const metricPoints: Array<JibriMetric> = [];
+        let items: Array<string> = [];
+        const windowEndTimestamp = Date.now();
+        const windowStartTimestamp = windowEndTimestamp - periodsCount * period * 1000;
+
+        let cursor = '0';
+        do {
+            const result = await this.redisClient.scan(cursor, 'match', `metric:available:${group}:*`);
+            cursor = result[0];
+            if (result[1].length > 0) {
+                items = await this.redisClient.mget(...result[1]);
+                items.forEach((item) => {
+                    const itemJson = JSON.parse(item);
+                    if (itemJson.timestamp >= windowStartTimestamp && itemJson.timestamp <= windowEndTimestamp) {
+                        metricPoints.push(itemJson);
+                    }
+                });
+            }
+        } while (cursor != '0');
+        this.logger.debug(`jibri metric periods: ${metricPoints}`, { group, periodsCount, period });
+
+        return metricPoints;
     }
 
     async getCurrent(group: string): Promise<Array<JibriState>> {
@@ -95,6 +146,7 @@ export class JibriTracker {
 
         return states;
     }
+
     async setPending(key: string): Promise<boolean> {
         try {
             this.logger.debug(`attempting lock of ${key}`);

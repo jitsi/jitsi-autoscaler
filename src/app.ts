@@ -83,6 +83,11 @@ const autoscaleProcessor = new Autoscaler({
     jibriGroupList: config.JibriGroupList,
     jibriMinDesired: config.JibriMinDesired,
     jibriMaxDesired: config.JibriMaxDesired,
+    jibriScaleUpThreshold: config.JibriScaleUpThreshold,
+    jibriScaleDownThreshold: config.JibriScaleDownThreshold,
+    jibriScalePeriod: config.JibriScalePeriod,
+    jibriScaleUpPeriodsCount: config.JibriScaleUpPeriodsCount,
+    jibriScaleDownPeriodsCount: config.JibriScaleDownPeriodsCount,
 });
 
 async function pollForAutoscaling() {

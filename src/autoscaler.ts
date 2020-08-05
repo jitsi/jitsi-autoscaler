@@ -1,7 +1,8 @@
 import { JibriTracker, JibriStatusState } from './jibri_tracker';
 
 import logger from './logger';
-import CloudManager, { InstanceDetails } from './cloud_manager';
+import CloudManager from './cloud_manager';
+import { InstanceDetails } from './instance_status';
 
 export interface AutoscaleProcessorOptions {
     jibriTracker: JibriTracker;

@@ -9,6 +9,7 @@ import jwt from 'express-jwt';
 import { JibriTracker } from './jibri_tracker';
 import Autoscaler from './autoscaler';
 import CloudManager from './cloud_manager';
+import { InstanceStatus } from './instance_status';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -39,8 +40,30 @@ const redisClient = new Redis({
     password: config.RedisPassword,
 });
 const jibriTracker = new JibriTracker(logger, redisClient);
-const h = new Handlers(jibriTracker);
+const instanceStatus = new InstanceStatus(redisClient);
+const h = new Handlers(jibriTracker, instanceStatus);
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
+
+const cloudManager = new CloudManager(
+    {
+        cloud: config.CloudProvider,
+        instanceStatus,
+    },
+    { instanceConfigurationId: config.InstanceConfigurationId },
+);
+
+const autoscaleProcessor = new Autoscaler({
+    jibriTracker: jibriTracker,
+    cloudManager: cloudManager,
+    jibriGroupList: config.JibriGroupList,
+    jibriMinDesired: config.JibriMinDesired,
+    jibriMaxDesired: config.JibriMaxDesired,
+    jibriScaleUpThreshold: config.JibriScaleUpThreshold,
+    jibriScaleDownThreshold: config.JibriScaleDownThreshold,
+    jibriScalePeriod: config.JibriScalePeriod,
+    jibriScaleUpPeriodsCount: config.JibriScaleUpPeriodsCount,
+    jibriScaleDownPeriodsCount: config.JibriScaleDownPeriodsCount,
+});
 
 app.use(
     jwt({
@@ -73,24 +96,12 @@ app.post('/hook/v1/status', async (req, res, next) => {
     }
 });
 
-const cloudManager = new CloudManager(
-    {
-        cloud: config.CloudProvider,
-    },
-    { instanceConfigurationId: config.InstanceConfigurationId },
-);
-
-const autoscaleProcessor = new Autoscaler({
-    jibriTracker: jibriTracker,
-    cloudManager: cloudManager,
-    jibriGroupList: config.JibriGroupList,
-    jibriMinDesired: config.JibriMinDesired,
-    jibriMaxDesired: config.JibriMaxDesired,
-    jibriScaleUpThreshold: config.JibriScaleUpThreshold,
-    jibriScaleDownThreshold: config.JibriScaleDownThreshold,
-    jibriScalePeriod: config.JibriScalePeriod,
-    jibriScaleUpPeriodsCount: config.JibriScaleUpPeriodsCount,
-    jibriScaleDownPeriodsCount: config.JibriScaleDownPeriodsCount,
+app.post('/sidecar/poll', async (req, res, next) => {
+    try {
+        await h.sidecarPoll(req, res);
+    } catch (err) {
+        next(err);
+    }
 });
 
 async function pollForAutoscaling() {

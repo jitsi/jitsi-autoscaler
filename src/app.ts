@@ -9,6 +9,7 @@ import jwt from 'express-jwt';
 import { JibriTracker } from './jibri_tracker';
 import Autoscaler from './autoscaler';
 import CloudManager from './cloud_manager';
+import { InstanceStatus } from './instance_status';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -39,7 +40,8 @@ const redisClient = new Redis({
     password: config.RedisPassword,
 });
 const jibriTracker = new JibriTracker(logger, redisClient);
-const h = new Handlers(jibriTracker);
+const instanceStatus = new InstanceStatus(redisClient);
+const h = new Handlers(jibriTracker, instanceStatus);
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
 app.use(
@@ -73,8 +75,17 @@ app.post('/hook/v1/status', async (req, res, next) => {
     }
 });
 
+app.post('/sidecar/poll', async (req, res, next) => {
+    try {
+        await h.sidecarPoll(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 const cloudManager = new CloudManager({
     cloud: 'aws',
+    instanceStatus,
 });
 
 const autoscaleProcessor = new Autoscaler({

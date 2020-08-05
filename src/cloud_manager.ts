@@ -1,4 +1,4 @@
-import OracleCloudManager from './oracle_cloud_manager';
+import OracleCloudManager, { OracleCloudManagerOptions } from './oracle_cloud_manager';
 
 export interface CloudManagerOptions {
     cloud: string;
@@ -15,10 +15,11 @@ import logger from './logger';
 
 export default class CloudManager {
     private cloud = 'aws';
-    private oracleCloudManager: OracleCloudManager = new OracleCloudManager();
+    private oracleCloudManager: OracleCloudManager;
 
-    constructor(options: CloudManagerOptions) {
+    constructor(options: CloudManagerOptions, oracleOptions: OracleCloudManagerOptions) {
         this.cloud = options.cloud;
+        this.oracleCloudManager = new OracleCloudManager(oracleOptions);
 
         this.scaleUp = this.scaleUp.bind(this);
         this.scaleDown = this.scaleDown.bind(this);
@@ -28,7 +29,7 @@ export default class CloudManager {
         logger.info('Scaling up', { cloud: this.cloud, group, region, quantity });
         // TODO: actually scale up
         if (this.cloud == 'oracle') {
-            this.oracleCloudManager.scaleUp(group, region, quantity);
+            this.oracleCloudManager.launchInstances(group, region, quantity);
         }
         return true;
     }

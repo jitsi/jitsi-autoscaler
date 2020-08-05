@@ -73,9 +73,12 @@ app.post('/hook/v1/status', async (req, res, next) => {
     }
 });
 
-const cloudManager = new CloudManager({
-    cloud: config.CloudProvider,
-});
+const cloudManager = new CloudManager(
+    {
+        cloud: config.CloudProvider,
+    },
+    { instanceConfigurationId: config.InstanceConfigurationId },
+);
 
 const autoscaleProcessor = new Autoscaler({
     jibriTracker: jibriTracker,

@@ -1,5 +1,4 @@
 import logger from './logger';
-import { CloudManagerOptions, InstanceDetails } from './cloud_manager';
 
 import core = require('oci-core');
 import common = require('oci-common');
@@ -13,25 +12,38 @@ const provider: common.ConfigFileAuthenticationDetailsProvider = new common.Conf
     configProfile,
 );
 
-//TODO configure instance config id
-const instanceConfigurationId =
-    'ocid1.instanceconfiguration.oc1.phx.aaaaaaaaued7h55rvp7dwp3hzcgck6ropvycpgxtxcpm6ljwih3e4yw6r4aq';
-
-//This is only for testing purposes
+//TODO remove this, as it is only for testing purposes
 let testOnlyInstanceCreated = false;
 
+function makeRandomString(length: number) {
+    let result = '';
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const charactersLength = characters.length;
+    for (let i = 0; i < length; i++) {
+        result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    }
+    return result;
+}
+
+export interface OracleCloudManagerOptions {
+    instanceConfigurationId: string;
+}
+
 export default class OracleCloudManager {
+    private instanceConfigurationId: string;
+
     private computeManagementClient: core.ComputeManagementClient = new core.ComputeManagementClient({
         authenticationDetailsProvider: provider,
     });
 
-    constructor() {
-        this.scaleUp = this.scaleUp.bind(this);
-        this.scaleDown = this.scaleDown.bind(this);
+    constructor(options: OracleCloudManagerOptions) {
+        this.instanceConfigurationId = options.instanceConfigurationId;
+
+        this.launchInstances = this.launchInstances.bind(this);
     }
 
-    async scaleUp(group: string, region: string, quantity: number): Promise<boolean> {
-        logger.info('[oracle] Scaling up', { group, region, quantity });
+    async launchInstances(group: string, region: string, quantity: number): Promise<boolean> {
+        logger.info('[oracle] Launching a batch of instances', { group, region, quantity });
 
         //TODO use region param
         this.computeManagementClient.regionId = 'us-phoenix-1';
@@ -44,12 +56,17 @@ export default class OracleCloudManager {
         for (let i = 0; i < quantity; i++) {
             logger.info('[oracle] Launching instance ', region);
 
-            //TODO pick AD/FD/displayName
-            //TODO add free-form tag with group
+            //TODO pick AD/FD
+
+            const displayName = group + '-' + this.computeManagementClient.regionId + '-' + makeRandomString(5);
+            const freeformTags = {
+                group: group,
+            };
 
             const overwriteLaunchDetails: core.models.InstanceConfigurationLaunchInstanceDetails = {
                     availabilityDomain: 'ObqI:PHX-AD-2',
-                    displayName: 'testraluca3',
+                    displayName: displayName,
+                    freeformTags: freeformTags,
                 },
                 overwriteComputeInstanceDetails: core.models.ComputeInstanceDetails = {
                     launchDetails: overwriteLaunchDetails,
@@ -58,7 +75,7 @@ export default class OracleCloudManager {
 
             this.computeManagementClient
                 .launchInstanceConfiguration({
-                    instanceConfigurationId: instanceConfigurationId,
+                    instanceConfigurationId: this.instanceConfigurationId,
                     instanceConfiguration: overwriteComputeInstanceDetails,
                 })
                 .then((launchResponse) => {
@@ -70,12 +87,6 @@ export default class OracleCloudManager {
                 });
         }
 
-        return true;
-    }
-
-    async scaleDown(group: string, region: string, instances: Array<InstanceDetails>): Promise<boolean> {
-        logger.info('[oracle] Scaling down', { group, region, instances });
-        // TODO: actually scale down
         return true;
     }
 }

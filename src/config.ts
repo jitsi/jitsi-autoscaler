@@ -14,6 +14,9 @@ export default {
     AsapJwtAcceptedAud: process.env.ASAP_JWT_AUD,
     AsapJwtAcceptedHookIss: process.env.ASAP_JWT_ACCEPTED_HOOK_ISS,
     CloudProvider: process.env.CLOUD_PROVIDER || 'oracle',
+    InstanceConfigurationId:
+        process.env.INSTANCE_CONFIGURATION_ID ||
+        'ocid1.instanceconfiguration.oc1.phx.aaaaaaaaued7h55rvp7dwp3hzcgck6ropvycpgxtxcpm6ljwih3e4yw6r4aq',
     // interval for autoscaling calculation, in seconds
     AutoscalerInterval: Number(process.env.AUTOSCALER_INTERVAL || 10),
     JibriMinDesired: Number(process.env.JIBRI_MIN_DESIRED || 1),

@@ -74,7 +74,7 @@ app.post('/hook/v1/status', async (req, res, next) => {
 });
 
 const cloudManager = new CloudManager({
-    cloud: 'aws',
+    cloud: config.CloudProvider,
 });
 
 const autoscaleProcessor = new Autoscaler({

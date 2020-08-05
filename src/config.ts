@@ -13,6 +13,7 @@ export default {
     AsapPubKeyBaseUrl: process.env.ASAP_PUB_KEY_BASE_URL,
     AsapJwtAcceptedAud: process.env.ASAP_JWT_AUD,
     AsapJwtAcceptedHookIss: process.env.ASAP_JWT_ACCEPTED_HOOK_ISS,
+    CloudProvider: process.env.CLOUD_PROVIDER || 'oracle',
     // interval for autoscaling calculation, in seconds
     AutoscalerInterval: Number(process.env.AUTOSCALER_INTERVAL || 10),
     JibriMinDesired: Number(process.env.JIBRI_MIN_DESIRED || 1),

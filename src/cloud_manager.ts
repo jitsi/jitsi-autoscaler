@@ -1,3 +1,5 @@
+import OracleCloudManager from './oracle_cloud_manager';
+
 export interface CloudManagerOptions {
     cloud: string;
 }
@@ -13,6 +15,7 @@ import logger from './logger';
 
 export default class CloudManager {
     private cloud = 'aws';
+    private oracleCloudManager: OracleCloudManager = new OracleCloudManager();
 
     constructor(options: CloudManagerOptions) {
         this.cloud = options.cloud;
@@ -24,6 +27,9 @@ export default class CloudManager {
     async scaleUp(group: string, region: string, quantity: number): Promise<boolean> {
         logger.info('Scaling up', { cloud: this.cloud, group, region, quantity });
         // TODO: actually scale up
+        if (this.cloud == 'oracle') {
+            this.oracleCloudManager.scaleUp(group, region, quantity);
+        }
         return true;
     }
 

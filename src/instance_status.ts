@@ -2,12 +2,19 @@ import Redis from 'ioredis';
 import logger from './logger';
 
 const ShutdownTTL = 900;
+const StatsTTL = 900;
 
 export interface InstanceDetails {
     instanceId: string;
     cloud?: string;
     region?: string;
     group?: string;
+}
+
+export interface StatsReport {
+    instance: InstanceDetails;
+    timestamp?: number;
+    stats: unknown;
 }
 
 export class InstanceStatus {
@@ -21,8 +28,8 @@ export class InstanceStatus {
         this.getShutdownStatus = this.getShutdownStatus.bind(this);
     }
 
-    instanceKey(details: InstanceDetails): string {
-        return `instance:shutdown:${details.instanceId}`;
+    instanceKey(details: InstanceDetails, type = 'shutdown'): string {
+        return `instance:${type}:${details.instanceId}`;
     }
 
     async setShutdownStatus(details: InstanceDetails, status = 'shutdown'): Promise<boolean> {
@@ -40,5 +47,13 @@ export class InstanceStatus {
             return true;
         }
         return false;
+    }
+
+    // @TODO: handle stats like JibriTracker does
+    async stats(report: StatsReport): Promise<boolean> {
+        const key = this.instanceKey(report.instance, 'stats');
+        logger.debug('Writing instance stats', { key, stats: report.stats });
+        await this.redisClient.set(key, JSON.stringify(report.stats), 'ex', StatsTTL);
+        return true;
     }
 }

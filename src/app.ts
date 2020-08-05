@@ -83,6 +83,14 @@ app.post('/sidecar/poll', async (req, res, next) => {
     }
 });
 
+app.post('/sidecar/stats', async (req, res, next) => {
+    try {
+        await h.sidecarStats(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 const cloudManager = new CloudManager({
     cloud: 'aws',
     instanceStatus,

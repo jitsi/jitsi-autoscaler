@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { JibriTracker, JibriState } from './jibri_tracker';
-import { InstanceStatus, InstanceDetails } from './instance_status';
+import { InstanceStatus, InstanceDetails, StatsReport } from './instance_status';
 
 interface SidecarResponse {
     shutdown: boolean;
@@ -41,6 +41,14 @@ class Handlers {
 
         res.status(200);
         res.send(sendResponse);
+    }
+
+    async sidecarStats(req: Request, res: Response): Promise<void> {
+        const report: StatsReport = req.body;
+        await this.instanceStatus.stats(report);
+
+        res.status(200);
+        res.send({ save: 'OK' });
     }
 }
 

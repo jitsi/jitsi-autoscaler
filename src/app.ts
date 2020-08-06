@@ -44,13 +44,14 @@ const instanceStatus = new InstanceStatus(redisClient);
 const h = new Handlers(jibriTracker, instanceStatus);
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
-const cloudManager = new CloudManager(
-    {
-        cloud: config.CloudProvider,
-        instanceStatus,
+const cloudManager = new CloudManager({
+    cloud: config.CloudProvider,
+    instanceStatus: instanceStatus,
+    cloudOptions: {
+        instanceConfigurationId: config.InstanceConfigurationId,
+        compartmentId: config.CompartmentId,
     },
-    { instanceConfigurationId: config.InstanceConfigurationId },
-);
+});
 
 const autoscaleProcessor = new Autoscaler({
     jibriTracker: jibriTracker,
@@ -58,6 +59,8 @@ const autoscaleProcessor = new Autoscaler({
     jibriGroupList: config.JibriGroupList,
     jibriMinDesired: config.JibriMinDesired,
     jibriMaxDesired: config.JibriMaxDesired,
+    jibriScaleUpQuantity: config.JibriScaleUpQuantity,
+    jibriScaleDownQuantity: config.JibriScaleDownQuantity,
     jibriScaleUpThreshold: config.JibriScaleUpThreshold,
     jibriScaleDownThreshold: config.JibriScaleDownThreshold,
     jibriScalePeriod: config.JibriScalePeriod,

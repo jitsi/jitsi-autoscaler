@@ -1,4 +1,4 @@
-import { JibriTracker, JibriStatusState } from './jibri_tracker';
+import { JibriTracker } from './jibri_tracker';
 
 import logger from './logger';
 import CloudManager from './cloud_manager';
@@ -10,8 +10,8 @@ export interface AutoscaleProcessorOptions {
     jibriGroupList: Array<string>;
     jibriMinDesired: number;
     jibriMaxDesired: number;
-    jibriScaleUpQuanity?: number;
-    jibriScaleDownQuanity?: number;
+    jibriScaleUpQuantity?: number;
+    jibriScaleDownQuantity?: number;
     jibriScaleUpThreshold: number;
     jibriScaleDownThreshold: number;
     jibriScalePeriod: number;
@@ -23,8 +23,8 @@ export default class AutoscaleProcessor {
     private jibriTracker: JibriTracker;
     private jibriMinDesired: number;
     private jibriMaxDesired: number;
-    private jibriScaleUpQuanity = 1;
-    private jibriScaleDownQuanity = 1;
+    private jibriScaleUpQuantity = 1;
+    private jibriScaleDownQuantity = 1;
     private jibriGroupList: Array<string>;
     private cloudManager: CloudManager;
     private jibriScaleUpThreshold: number;
@@ -45,11 +45,11 @@ export default class AutoscaleProcessor {
         this.jibriScaleUpPeriodsCount = options.jibriScaleUpPeriodsCount;
         this.jibriScaleDownPeriodsCount = options.jibriScaleDownPeriodsCount;
 
-        if (options.jibriScaleUpQuanity) {
-            this.jibriScaleUpQuanity = options.jibriScaleUpQuanity;
+        if (options.jibriScaleUpQuantity) {
+            this.jibriScaleUpQuantity = options.jibriScaleUpQuantity;
         }
-        if (options.jibriScaleDownQuanity) {
-            this.jibriScaleDownQuanity = options.jibriScaleDownQuanity;
+        if (options.jibriScaleDownQuantity > 0) {
+            this.jibriScaleDownQuantity = options.jibriScaleDownQuantity;
         }
 
         this.processAutoscaling = this.processAutoscaling.bind(this);
@@ -64,7 +64,6 @@ export default class AutoscaleProcessor {
     async processAutoscalingByGroup(group: string): Promise<boolean> {
         const currentInventory = await this.jibriTracker.getCurrent(group);
         const count = currentInventory.length;
-        let idleCount = 0;
         let region = '';
 
         //TODO get both inventories from one redis call
@@ -87,9 +86,6 @@ export default class AutoscaleProcessor {
             if (item.metadata && item.metadata.region) {
                 region = item.metadata.region;
             }
-            if (item.status.busyStatus == JibriStatusState.Idle) {
-                idleCount += 1;
-            }
         });
 
         metricInventoryScaleUp.forEach((item) => {
@@ -97,22 +93,12 @@ export default class AutoscaleProcessor {
         });
         computedMetricScaleUp = computedMetricScaleUp / this.jibriScaleUpPeriodsCount;
 
-        if (idleCount < this.jibriMaxDesired || count < this.jibriMinDesired) {
-            // scale up here
-            // TODO: scale up quantity by group
-            logger.info('Group should scale up, idle count not high enough', {
-                group,
-                idleCount,
-                minDesired: this.jibriMinDesired,
-            });
-            this.cloudManager.scaleUp(group, region, this.jibriScaleUpQuanity);
-        }
         metricInventoryScaleDown.forEach((item) => {
             computedMetricScaleDown += item.value;
         });
         computedMetricScaleDown = computedMetricScaleDown / this.jibriScaleDownPeriodsCount;
 
-        logger.info('===== Evaluating scale computed metrics....');
+        logger.info('Evaluating scale computed metrics....');
 
         if (
             (count < this.jibriMaxDesired && computedMetricScaleUp < this.jibriScaleUpThreshold) ||
@@ -124,21 +110,24 @@ export default class AutoscaleProcessor {
                 computedMetricScaleUp,
                 count,
             });
+
+            let actualScaleUpQuantity = this.jibriScaleUpQuantity;
+            if (count + actualScaleUpQuantity > this.jibriMaxDesired) {
+                actualScaleUpQuantity = this.jibriMaxDesired - count;
+            }
+
+            this.cloudManager.scaleUp(group, region, count, actualScaleUpQuantity);
         } else if (count > this.jibriMinDesired && computedMetricScaleDown > this.jibriScaleDownThreshold) {
             // scale down here
-            logger.info('Should scale down here, idle count too high', {
-                group,
-                idleCount,
-                minDesired: this.jibriMinDesired,
-            });
-            // TODO: select instances to be scaled down
-            const scaleDownInstances: InstanceDetails[] = [];
-            this.cloudManager.scaleDown(group, region, scaleDownInstances);
             logger.info('Should scale down here, idle count too high', {
                 group,
                 computedMetricScaleDown,
                 count,
             });
+
+            // TODO: select instances to be scaled down
+            const scaleDownInstances: InstanceDetails[] = [];
+            this.cloudManager.scaleDown(group, region, scaleDownInstances);
         } else {
             logger.info('NOTHING TO BE DONE. ', {
                 group,

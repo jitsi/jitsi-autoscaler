@@ -44,6 +44,30 @@ const instanceStatus = new InstanceStatus(redisClient);
 const h = new Handlers(jibriTracker, instanceStatus);
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
+const cloudManager = new CloudManager({
+    cloud: config.CloudProvider,
+    instanceStatus: instanceStatus,
+    cloudOptions: {
+        instanceConfigurationId: config.InstanceConfigurationId,
+        compartmentId: config.CompartmentId,
+    },
+});
+
+const autoscaleProcessor = new Autoscaler({
+    jibriTracker: jibriTracker,
+    cloudManager: cloudManager,
+    jibriGroupList: config.JibriGroupList,
+    jibriMinDesired: config.JibriMinDesired,
+    jibriMaxDesired: config.JibriMaxDesired,
+    jibriScaleUpQuantity: config.JibriScaleUpQuantity,
+    jibriScaleDownQuantity: config.JibriScaleDownQuantity,
+    jibriScaleUpThreshold: config.JibriScaleUpThreshold,
+    jibriScaleDownThreshold: config.JibriScaleDownThreshold,
+    jibriScalePeriod: config.JibriScalePeriod,
+    jibriScaleUpPeriodsCount: config.JibriScaleUpPeriodsCount,
+    jibriScaleDownPeriodsCount: config.JibriScaleDownPeriodsCount,
+});
+
 app.use(
     jwt({
         secret: asapFetcher.pubKeyCallback,
@@ -89,24 +113,6 @@ app.post('/sidecar/stats', async (req, res, next) => {
     } catch (err) {
         next(err);
     }
-});
-
-const cloudManager = new CloudManager({
-    cloud: 'aws',
-    instanceStatus,
-});
-
-const autoscaleProcessor = new Autoscaler({
-    jibriTracker: jibriTracker,
-    cloudManager: cloudManager,
-    jibriGroupList: config.JibriGroupList,
-    jibriMinDesired: config.JibriMinDesired,
-    jibriMaxDesired: config.JibriMaxDesired,
-    jibriScaleUpThreshold: config.JibriScaleUpThreshold,
-    jibriScaleDownThreshold: config.JibriScaleDownThreshold,
-    jibriScalePeriod: config.JibriScalePeriod,
-    jibriScaleUpPeriodsCount: config.JibriScaleUpPeriodsCount,
-    jibriScaleDownPeriodsCount: config.JibriScaleDownPeriodsCount,
 });
 
 async function pollForAutoscaling() {

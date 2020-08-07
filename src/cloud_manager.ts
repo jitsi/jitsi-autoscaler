@@ -1,40 +1,41 @@
-import OracleCloudManager, { CloudOptions } from './oracle_instance_manager';
-
-export interface CloudManagerOptions {
-    cloud: string;
-    instanceStatus: InstanceStatus;
-    cloudOptions: CloudOptions;
-}
-
+import OracleCloudManager from './oracle_instance_manager';
 import logger from './logger';
 import { InstanceStatus, InstanceDetails } from './instance_status';
 import OracleInstanceManager from './oracle_instance_manager';
+import { InstanceGroup } from './instance_group';
+
+export interface CloudManagerOptions {
+    instanceStatus: InstanceStatus;
+    isDryRun: boolean;
+}
 
 export default class CloudManager {
-    private cloud = 'aws';
-    private instanceManager: OracleInstanceManager;
+    private oracleInstanceManager: OracleInstanceManager;
     private instanceStatus: InstanceStatus;
+    private isDryRun: boolean;
 
     constructor(options: CloudManagerOptions) {
-        this.cloud = options.cloud;
-        this.instanceManager = new OracleCloudManager(options.cloudOptions);
+        this.isDryRun = options.isDryRun;
+        this.oracleInstanceManager = new OracleCloudManager(this.isDryRun);
         this.instanceStatus = options.instanceStatus;
 
         this.scaleUp = this.scaleUp.bind(this);
         this.scaleDown = this.scaleDown.bind(this);
     }
 
-    async scaleUp(group: string, region: string, groupCurrentCount: number, quantity: number): Promise<boolean> {
-        logger.info('Scaling up', { cloud: this.cloud, group, region, quantity });
-        // TODO: actually scale up
-        if (this.cloud == 'oracle') {
-            this.instanceManager.launchInstances(group, region, groupCurrentCount, quantity);
+    async scaleUp(group: InstanceGroup, groupCurrentCount: number, quantity: number): Promise<boolean> {
+        const groupName = group.name;
+        logger.info('Scaling up', { groupName, quantity });
+        // TODO: get the instance manager by cloud
+        if (group.cloud == 'oracle') {
+            this.oracleInstanceManager.launchInstances(group, groupCurrentCount, quantity);
         }
         return true;
     }
 
-    async scaleDown(group: string, region: string, instances: Array<InstanceDetails>): Promise<boolean> {
-        logger.info('Scaling down', { cloud: this.cloud, group, region, instances });
+    async scaleDown(group: InstanceGroup, instances: Array<InstanceDetails>): Promise<boolean> {
+        const groupName = group.name;
+        logger.info('Scaling down', { groupName, instances });
         instances.forEach((details) => {
             this.instanceStatus.setShutdownStatus(details);
         });

@@ -107,6 +107,14 @@ app.post('/sidecar/poll', async (req, res, next) => {
     }
 });
 
+app.post('/sidecar/stats', async (req, res, next) => {
+    try {
+        await h.sidecarStats(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 async function pollForAutoscaling() {
     await autoscaleProcessor.processAutoscaling();
     setTimeout(pollForAutoscaling, config.AutoscalerInterval * 1000);

@@ -10,11 +10,13 @@ import { JibriTracker } from './jibri_tracker';
 import Autoscaler from './autoscaler';
 import CloudManager from './cloud_manager';
 import { InstanceStatus } from './instance_status';
+import instanceGroups from './instance_group';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
 
 //const jwtSigningKey = fs.readFileSync(meet.TokenSigningKeyFile);
+
 const app = express();
 app.use(bodyParser.json());
 
@@ -45,27 +47,14 @@ const h = new Handlers(jibriTracker, instanceStatus);
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
 const cloudManager = new CloudManager({
-    cloud: config.CloudProvider,
     instanceStatus: instanceStatus,
-    cloudOptions: {
-        instanceConfigurationId: config.InstanceConfigurationId,
-        compartmentId: config.CompartmentId,
-    },
+    isDryRun: config.DryRun,
 });
 
 const autoscaleProcessor = new Autoscaler({
     jibriTracker: jibriTracker,
     cloudManager: cloudManager,
-    jibriGroupList: config.JibriGroupList,
-    jibriMinDesired: config.JibriMinDesired,
-    jibriMaxDesired: config.JibriMaxDesired,
-    jibriScaleUpQuantity: config.JibriScaleUpQuantity,
-    jibriScaleDownQuantity: config.JibriScaleDownQuantity,
-    jibriScaleUpThreshold: config.JibriScaleUpThreshold,
-    jibriScaleDownThreshold: config.JibriScaleDownThreshold,
-    jibriScalePeriod: config.JibriScalePeriod,
-    jibriScaleUpPeriodsCount: config.JibriScaleUpPeriodsCount,
-    jibriScaleDownPeriodsCount: config.JibriScaleDownPeriodsCount,
+    jibriGroupList: instanceGroups.GroupList,
 });
 
 app.use(

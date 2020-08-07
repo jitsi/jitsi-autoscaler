@@ -1,8 +1,8 @@
 import logger from './logger';
-
 import core = require('oci-core');
 import common = require('oci-common');
 import identity = require('oci-identity');
+import { InstanceGroup } from './instance_group';
 
 //TODO implement instance principal auth as well
 const configurationFilePath = '~/.oci/config';
@@ -12,9 +12,6 @@ const provider: common.ConfigFileAuthenticationDetailsProvider = new common.Conf
     configurationFilePath,
     configProfile,
 );
-
-//TODO remove this, as it is only for testing purposes
-let testOnlyInstanceCreated = false;
 
 function makeRandomString(length: number) {
     let result = '';
@@ -64,66 +61,39 @@ async function getFaultDomains(compartmentId: string, region: string, availabili
     });
 }
 
-export interface CloudOptions {
-    //TODO this should be a config per region and compartment?
-    instanceConfigurationId: string;
-    compartmentId: string;
-}
-
 export default class OracleInstanceManager {
-    private instanceConfigurationId: string;
-    private compartmentId: string;
+    private isDryRun = false;
 
     private computeManagementClient: core.ComputeManagementClient = new core.ComputeManagementClient({
         authenticationDetailsProvider: provider,
     });
 
-    constructor(options: CloudOptions) {
-        this.instanceConfigurationId = options.instanceConfigurationId;
-        this.compartmentId = options.compartmentId;
-
-        this.launchInstances = this.launchInstances.bind(this);
+    constructor(isDryRun: boolean) {
+        (this.isDryRun = isDryRun), (this.launchInstances = this.launchInstances.bind(this));
     }
 
-    async launchInstances(
-        group: string,
-        region: string,
-        groupCurrentCount: number,
-        quantity: number,
-    ): Promise<boolean> {
-        logger.info('[oracle] Launching a batch of instances', { group, region, groupCurrentCount, quantity });
+    async launchInstances(group: InstanceGroup, groupCurrentCount: number, quantity: number): Promise<boolean> {
+        const groupName = group.name;
+        const groupInstanceConfigurationId = group.instanceConfigurationId;
+        logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${groupName}`);
 
-        //TODO use region param
-        const usedRegion = 'us-phoenix-1';
-        this.computeManagementClient.regionId = usedRegion;
+        this.computeManagementClient.regionId = group.region;
 
-        if (testOnlyInstanceCreated) {
-            logger.info('Instances for test already created. Stopping here');
-            return;
-        }
-
-        const availabilityDomains: string[] = await getAvailabilityDomains(this.compartmentId, usedRegion);
+        const availabilityDomains: string[] = await getAvailabilityDomains(group.compartmentId, group.region);
 
         for (let i = 0; i < quantity; i++) {
-            logger.info('[oracle] Gathering properties for launching instance ', region);
+            logger.info(`[oracle] Gathering properties for launching instance ${i} in group ${groupName}`);
 
             const adIndex: number = (groupCurrentCount + i + 1) % availabilityDomains.length;
             const availabilityDomain = availabilityDomains[adIndex];
             //TODO get instance count per ADs, so that FD can be distributed evenly
-            const faultDomains: string[] = await getFaultDomains(this.compartmentId, usedRegion, availabilityDomain);
+            const faultDomains: string[] = await getFaultDomains(group.compartmentId, group.region, availabilityDomain);
             const fdIndex: number = (groupCurrentCount + i + 1) % faultDomains.length;
             const faultDomain = faultDomains[fdIndex];
-            const displayName = group + '-' + usedRegion + '-' + makeRandomString(5);
+            const displayName = groupName + '-' + group.region + '-' + makeRandomString(5);
             const freeformTags = {
-                group: group,
+                group: groupName,
             };
-
-            logger.info('[oracle] Launching instance with properties ', {
-                region,
-                availabilityDomain,
-                faultDomain,
-                displayName,
-            });
 
             const overwriteLaunchDetails: core.models.InstanceConfigurationLaunchInstanceDetails = {
                     availabilityDomain: availabilityDomain,
@@ -135,18 +105,33 @@ export default class OracleInstanceManager {
                     instanceType: 'compute',
                 };
 
+            logger.info(`[oracle] Launching instance ${i} in group ${groupName} with properties`, {
+                groupName,
+                availabilityDomain,
+                faultDomain,
+                displayName,
+                groupInstanceConfigurationId,
+                overwriteComputeInstanceDetails,
+            });
+
+            if (this.isDryRun) {
+                logger.debug('[oracle] Dry run enabled, skipping the instance launch');
+                return;
+            }
             this.computeManagementClient
                 .launchInstanceConfiguration({
-                    instanceConfigurationId: this.instanceConfigurationId,
+                    instanceConfigurationId: groupInstanceConfigurationId,
                     instanceConfiguration: overwriteComputeInstanceDetails,
                 })
                 .then((launchResponse) => {
-                    logger.info('[oracle] Got launch response', launchResponse);
+                    logger.info(`[oracle] Got launch response for instance ${i} in group ${groupName}`, launchResponse);
                     //TODO interpret/wait for launch final status?
-                    testOnlyInstanceCreated = true;
                 })
                 .catch((launchFailedReason) => {
-                    logger.error('[oracle] Failed launching instance with reason', launchFailedReason);
+                    logger.error(
+                        `[oracle] Failed launching instance  instance ${i} in group ${groupName}`,
+                        launchFailedReason,
+                    );
                 });
         }
 

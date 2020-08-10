@@ -20,5 +20,5 @@ export default {
     AutoscalerInterval: Number(process.env.AUTOSCALER_INTERVAL || 10),
     DefaultInstanceConfigurationId: process.env.DEFAULT_INSTANCE_CONFIGURATION_ID,
     DefaultCompartmentId: process.env.DEFAULT_COMPARTMENT_ID,
-    DryRun: Boolean(process.env.DRY_RUN || true),
+    DryRun: Boolean((process.env.DRY_RUN || 'true') === 'true'),
 };

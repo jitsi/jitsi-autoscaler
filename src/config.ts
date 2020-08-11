@@ -32,6 +32,6 @@ export default {
     AsapJwtAcceptedAud: process.env.ASAP_JWT_AUD,
     AsapJwtAcceptedHookIss: process.env.ASAP_JWT_ACCEPTED_HOOK_ISS,
     AutoscalerInterval: Number(process.env.AUTOSCALER_INTERVAL || 10),
-    DryRun: Boolean(process.env.DRY_RUN || true),
     GroupList: groupList,
+    DryRun: Boolean((process.env.DRY_RUN || 'true') === 'true'),
 };

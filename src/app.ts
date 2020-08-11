@@ -10,7 +10,6 @@ import { JibriTracker } from './jibri_tracker';
 import Autoscaler from './autoscaler';
 import CloudManager from './cloud_manager';
 import { InstanceStatus } from './instance_status';
-import instanceGroups from './instance_group';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -54,7 +53,7 @@ const cloudManager = new CloudManager({
 const autoscaleProcessor = new Autoscaler({
     jibriTracker: jibriTracker,
     cloudManager: cloudManager,
-    jibriGroupList: instanceGroups.GroupList,
+    jibriGroupList: config.GroupList,
 });
 
 app.use(

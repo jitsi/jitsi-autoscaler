@@ -4,7 +4,6 @@ import common = require('oci-common');
 import identity = require('oci-identity');
 import { InstanceGroup } from './instance_group';
 
-//TODO implement instance principal auth as well
 const configurationFilePath = '~/.oci/config';
 const configProfile = 'DEFAULT';
 
@@ -90,7 +89,7 @@ export default class OracleInstanceManager {
             const faultDomains: string[] = await getFaultDomains(group.compartmentId, group.region, availabilityDomain);
             const fdIndex: number = (groupCurrentCount + i + 1) % faultDomains.length;
             const faultDomain = faultDomains[fdIndex];
-            const displayName = groupName + '-' + group.region + '-' + makeRandomString(5);
+            const displayName = groupName + '-' + makeRandomString(5);
             const freeformTags = {
                 group: groupName,
             };

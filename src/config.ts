@@ -1,10 +1,24 @@
 import * as dotenv from 'dotenv';
+import * as fs from 'fs';
+import { InstanceGroup } from './instance_group';
 
 const result = dotenv.config();
 
 if (result.error) {
     throw result.error;
 }
+
+const groupsJsonRaw: string = fs.readFileSync(process.env.GROUP_CONFIG_FILE, { encoding: 'utf-8' });
+const groupList: Array<InstanceGroup> = JSON.parse(groupsJsonRaw)['groupEntries'];
+
+groupList.forEach((group) => {
+    if (!group.instanceConfigurationId) {
+        group.instanceConfigurationId = process.env.DEFAULT_INSTANCE_CONFIGURATION_ID;
+    }
+    if (!group.compartmentId) {
+        group.compartmentId = process.env.DEFAULT_COMPARTMENT_ID;
+    }
+});
 
 export default {
     HTTPServerPort: process.env.PORT || 3000,
@@ -18,7 +32,6 @@ export default {
     AsapJwtAcceptedAud: process.env.ASAP_JWT_AUD,
     AsapJwtAcceptedHookIss: process.env.ASAP_JWT_ACCEPTED_HOOK_ISS,
     AutoscalerInterval: Number(process.env.AUTOSCALER_INTERVAL || 10),
-    DefaultInstanceConfigurationId: process.env.DEFAULT_INSTANCE_CONFIGURATION_ID,
-    DefaultCompartmentId: process.env.DEFAULT_COMPARTMENT_ID,
     DryRun: Boolean(process.env.DRY_RUN || true),
+    GroupList: groupList,
 };

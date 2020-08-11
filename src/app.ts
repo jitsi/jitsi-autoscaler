@@ -35,11 +35,20 @@ app.get('/health', (req: express.Request, res: express.Response) => {
     res.send('healthy!');
 });
 
-const redisClient = new Redis({
+const redisOptions = <Redis.RedisOptions>{
     host: config.RedisHost,
-    port: Number(config.RedisPort),
-    password: config.RedisPassword,
-});
+    port: config.RedisPort,
+};
+
+if (config.RedisPassword) {
+    redisOptions.password = config.RedisPassword;
+}
+
+if (config.RedisTLS) {
+    redisOptions.tls = {};
+}
+
+const redisClient = new Redis(redisOptions);
 const jibriTracker = new JibriTracker(logger, redisClient);
 const instanceStatus = new InstanceStatus(redisClient);
 const h = new Handlers(jibriTracker, instanceStatus);
@@ -64,7 +73,7 @@ app.use(
         algorithms: ['RS256'],
     }).unless((req) => {
         if (req.path == '/health') return true;
-        return config.ProtectedApi === 'false';
+        return config.ProtectedApi;
     }),
 );
 if (config.ProtectedApi) {

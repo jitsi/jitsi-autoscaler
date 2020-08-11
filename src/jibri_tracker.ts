@@ -45,6 +45,7 @@ export class JibriTracker {
     static readonly metricTTL = 900; // seconds
     static readonly idleTTL = 90; // seconds
     static readonly pendingTTL = 10000; // milliseconds
+    static readonly gracePeriodTTL = 300; // seconds
 
     constructor(logger: Logger, redisClient: Redis.Redis) {
         //this.setPending = this.setPending.bind(this);
@@ -125,6 +126,23 @@ export class JibriTracker {
         this.logger.debug(`jibri metric periods: ${metricPoints}`, { group, periodsCount, period });
 
         return metricPoints;
+    }
+
+    async allowScaling(group: string): Promise<boolean> {
+        const result = await this.redisClient.get(`gracePeriod:${group}`);
+        if (result !== null && result.length > 0) {
+            return false;
+        }
+        return true;
+    }
+
+    async setGracePeriod(group: string): Promise<boolean> {
+        const key = `gracePeriod:${group}`;
+        const result = await this.redisClient.set(key, JSON.stringify(false), 'ex', JibriTracker.gracePeriodTTL);
+        if (result !== 'OK') {
+            throw new Error(`unable to set ${key}`);
+        }
+        return true;
     }
 
     async getCurrent(group: string): Promise<Array<JibriState>> {

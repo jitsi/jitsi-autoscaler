@@ -34,6 +34,12 @@ export default class AutoscaleProcessor {
         const currentInventory = await this.jibriTracker.getCurrent(group.name);
         const count = currentInventory.length;
 
+        const scalingAllowed = await this.jibriTracker.allowScaling(group.name);
+        if (!scalingAllowed) {
+            logger.info(`Wait before allowing another scaling activity for group ${group.name}`);
+            return;
+        }
+
         //TODO get both inventories from one redis call
         const metricInventoryScaleUp = await this.jibriTracker.getMetricPeriods(
             group.name,
@@ -79,6 +85,7 @@ export default class AutoscaleProcessor {
             }
 
             this.cloudManager.scaleUp(group, count, actualScaleUpQuantity);
+            this.jibriTracker.setGracePeriod(group.name);
         } else if (
             count > group.scalingOptions.jibriMinDesired &&
             computedMetricScaleDown > group.scalingOptions.jibriScaleDownThreshold
@@ -93,6 +100,7 @@ export default class AutoscaleProcessor {
             // TODO: select instances to be scaled down
             const scaleDownInstances: InstanceDetails[] = [];
             this.cloudManager.scaleDown(group, scaleDownInstances);
+            this.jibriTracker.setGracePeriod(group.name);
         } else {
             logger.info('NOTHING TO BE DONE. ', {
                 group,

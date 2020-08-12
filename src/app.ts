@@ -88,7 +88,7 @@ app.use(
         algorithms: ['RS256'],
     }).unless((req) => {
         if (req.path == '/health') return true;
-        return config.ProtectedApi;
+        return !config.ProtectedApi;
     }),
 );
 if (config.ProtectedApi) {

@@ -6,7 +6,6 @@
       "compartmentId": "",
       "instanceConfigurationId": "",
       "scalingOptions": {
-        "autoscalerInterval": 10,
         "jibriMinDesired": 1,
         "jibriMaxDesired": 2,
         "jibriScaleUpQuantity": 1,
@@ -25,7 +24,6 @@
       "compartmentId": "",
       "instanceConfigurationId": "",
       "scalingOptions": {
-        "autoscalerInterval": 10,
         "jibriMinDesired": 1,
         "jibriMaxDesired": 2,
         "jibriScaleUpQuantity": 1,

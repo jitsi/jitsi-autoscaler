@@ -3,30 +3,33 @@ import { JibriTracker } from './jibri_tracker';
 import logger from './logger';
 import CloudManager from './cloud_manager';
 import { InstanceDetails } from './instance_status';
-import { InstanceGroup } from './instance_group';
+import InstanceGroupManager, { InstanceGroup } from './instance_group';
 
 export interface AutoscaleProcessorOptions {
     jibriTracker: JibriTracker;
     cloudManager: CloudManager;
-    jibriGroupList: Array<InstanceGroup>;
+    instanceGroupManager: InstanceGroupManager;
 }
 
 export default class AutoscaleProcessor {
     private jibriTracker: JibriTracker;
-    private jibriGroupList: Array<InstanceGroup>;
+    private instaceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
 
     constructor(options: AutoscaleProcessorOptions) {
         this.jibriTracker = options.jibriTracker;
         this.cloudManager = options.cloudManager;
-        this.jibriGroupList = options.jibriGroupList;
+        this.instaceGroupManager = options.instanceGroupManager;
 
         this.processAutoscaling = this.processAutoscaling.bind(this);
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
 
     async processAutoscaling(): Promise<boolean> {
-        await Promise.all(this.jibriGroupList.map(this.processAutoscalingByGroup));
+        logger.debug('Starting to process scaling activities');
+        const instanceGroups: Array<InstanceGroup> = await this.instaceGroupManager.getAllInstanceGroups();
+        await Promise.all(instanceGroups.map(this.processAutoscalingByGroup));
+        logger.debug('Stopped to process scaling activities');
         return true;
     }
 
@@ -38,6 +41,8 @@ export default class AutoscaleProcessor {
         if (!scalingAllowed) {
             logger.info(`Wait before allowing another scaling activity for group ${group.name}`);
             return;
+        } else {
+            logger.info(`Evaluating scale computed metrics for group ${group.name}`);
         }
 
         //TODO get both inventories from one redis call
@@ -65,19 +70,12 @@ export default class AutoscaleProcessor {
         });
         computedMetricScaleDown = computedMetricScaleDown / group.scalingOptions.jibriScaleDownPeriodsCount;
 
-        logger.info('Evaluating scale computed metrics....');
-
         if (
             (count < group.scalingOptions.jibriMaxDesired &&
                 computedMetricScaleUp < group.scalingOptions.jibriScaleUpThreshold) ||
             count < group.scalingOptions.jibriMinDesired
         ) {
-            // scale up here
-            logger.info('Group should scale up, idle count not high enough', {
-                group,
-                computedMetricScaleUp,
-                count,
-            });
+            logger.info(`Group ${group.name} with ${count} instances should scale up`, { computedMetricScaleUp });
 
             let actualScaleUpQuantity = group.scalingOptions.jibriScaleUpQuantity;
             if (count + actualScaleUpQuantity > group.scalingOptions.jibriMaxDesired) {
@@ -90,23 +88,16 @@ export default class AutoscaleProcessor {
             count > group.scalingOptions.jibriMinDesired &&
             computedMetricScaleDown > group.scalingOptions.jibriScaleDownThreshold
         ) {
-            // scale down here
-            logger.info('Should scale down here, idle count too high', {
-                group,
-                computedMetricScaleDown,
-                count,
-            });
+            logger.info(`Group ${group.name} with ${count} instances should scale up.`, { computedMetricScaleDown });
 
             // TODO: select instances to be scaled down
             const scaleDownInstances: InstanceDetails[] = [];
             this.cloudManager.scaleDown(group, scaleDownInstances);
             this.jibriTracker.setGracePeriod(group.name);
         } else {
-            logger.info('NOTHING TO BE DONE. ', {
-                group,
+            logger.info(`No scaling activity needed for group ${group} with ${count} instances.`, {
                 computedMetricScaleUp,
                 computedMetricScaleDown,
-                count,
             });
         }
 

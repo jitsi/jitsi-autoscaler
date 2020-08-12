@@ -7,9 +7,10 @@ import logger from './logger';
 import ASAPPubKeyFetcher from './asap';
 import jwt from 'express-jwt';
 import { JibriTracker } from './jibri_tracker';
-import Autoscaler from './autoscaler';
 import CloudManager from './cloud_manager';
 import { InstanceStatus } from './instance_status';
+import InstanceGroupManager from './instance_group';
+import AutoscaleProcessor from './autoscaler';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -51,7 +52,6 @@ if (config.RedisTLS) {
 const redisClient = new Redis(redisOptions);
 const jibriTracker = new JibriTracker(logger, redisClient);
 const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
-const h = new Handlers(jibriTracker, instanceStatus);
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
 const cloudManager = new CloudManager({
@@ -59,11 +59,26 @@ const cloudManager = new CloudManager({
     isDryRun: config.DryRun,
 });
 
-const autoscaleProcessor = new Autoscaler({
-    jibriTracker: jibriTracker,
-    cloudManager: cloudManager,
-    jibriGroupList: config.GroupList,
+const instanceGroupManager = new InstanceGroupManager({
+    redisClient: redisClient,
+    initialGroupList: config.GroupList,
 });
+
+instanceGroupManager.init().then(() => {
+    const autoscaleProcessor = new AutoscaleProcessor({
+        jibriTracker: jibriTracker,
+        cloudManager: cloudManager,
+        instanceGroupManager: instanceGroupManager,
+    });
+    pollForAutoscaling(autoscaleProcessor);
+});
+
+async function pollForAutoscaling(autoscaleProcessor: AutoscaleProcessor) {
+    await autoscaleProcessor.processAutoscaling();
+    setTimeout(pollForAutoscaling.bind(null, autoscaleProcessor), config.AutoscalerInterval * 1000);
+}
+
+const h = new Handlers(jibriTracker, instanceStatus, instanceGroupManager);
 
 app.use(
     jwt({
@@ -73,7 +88,7 @@ app.use(
         algorithms: ['RS256'],
     }).unless((req) => {
         if (req.path == '/health') return true;
-        return config.ProtectedApi;
+        return !config.ProtectedApi;
     }),
 );
 if (config.ProtectedApi) {
@@ -112,11 +127,29 @@ app.post('/sidecar/stats', async (req, res, next) => {
     }
 });
 
-async function pollForAutoscaling() {
-    await autoscaleProcessor.processAutoscaling();
-    setTimeout(pollForAutoscaling, config.AutoscalerInterval * 1000);
-}
-pollForAutoscaling();
+app.put('/groups/:name', async (req, res, next) => {
+    try {
+        await h.upsertInstanceGroup(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/groups', async (req, res, next) => {
+    try {
+        await h.getInstanceGroups(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.delete('/groups/:name', async (req, res, next) => {
+    try {
+        await h.deleteInstanceGroup(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
 
 // async function pollForRequestUpdates() {
 //     await requestTracker.processUpdates(meetProcessor.updateProcessor);

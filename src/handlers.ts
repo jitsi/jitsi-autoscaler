@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { JibriTracker, JibriState } from './jibri_tracker';
 import { InstanceStatus, InstanceDetails, StatsReport } from './instance_status';
+import InstanceGroupManager, { InstanceGroup } from './instance_group';
 
 interface SidecarResponse {
     shutdown: boolean;
@@ -9,13 +10,19 @@ interface SidecarResponse {
 class Handlers {
     private jibriTracker: JibriTracker;
     private instanceStatus: InstanceStatus;
+    private instanceGroupManager: InstanceGroupManager;
 
-    constructor(jibriTracker: JibriTracker, instanceStatus: InstanceStatus) {
+    constructor(
+        jibriTracker: JibriTracker,
+        instanceStatus: InstanceStatus,
+        instanceGroupManager: InstanceGroupManager,
+    ) {
         this.jibriStateWebhook = this.jibriStateWebhook.bind(this);
         this.sidecarPoll = this.sidecarPoll.bind(this);
 
         this.jibriTracker = jibriTracker;
         this.instanceStatus = instanceStatus;
+        this.instanceGroupManager = instanceGroupManager;
     }
 
     async jibriStateWebhook(req: Request, res: Response): Promise<void> {
@@ -49,6 +56,33 @@ class Handlers {
 
         res.status(200);
         res.send({ save: 'OK' });
+    }
+
+    async upsertInstanceGroup(req: Request, res: Response): Promise<void> {
+        const instanceGroup: InstanceGroup = req.body;
+        if (instanceGroup.name != req.params.name) {
+            res.status(400);
+            res.send({ errors: ['The request param group name must match group name in the body'] });
+            return;
+        }
+        await this.instanceGroupManager.upsertInstanceGroup(instanceGroup);
+
+        res.status(200);
+        res.send({ save: 'OK' });
+    }
+
+    async getInstanceGroups(req: Request, res: Response): Promise<void> {
+        const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups();
+
+        res.status(200);
+        res.send({ instanceGroups: instanceGroups });
+    }
+
+    async deleteInstanceGroup(req: Request, res: Response): Promise<void> {
+        const instanceGroups = await this.instanceGroupManager.deleteInstanceGroup(req.params.name);
+
+        res.status(200);
+        res.send({ instanceGroups: instanceGroups });
     }
 }
 

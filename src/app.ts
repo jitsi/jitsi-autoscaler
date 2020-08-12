@@ -41,7 +41,7 @@ const redisClient = new Redis({
     password: config.RedisPassword,
 });
 const jibriTracker = new JibriTracker(logger, redisClient);
-const instanceStatus = new InstanceStatus(redisClient);
+const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
 const h = new Handlers(jibriTracker, instanceStatus);
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 

@@ -39,7 +39,6 @@ export default class CloudManager {
         instances.forEach((details) => {
             this.instanceStatus.setShutdownStatus(details);
         });
-        // TODO: actually scale down
         return true;
     }
 }

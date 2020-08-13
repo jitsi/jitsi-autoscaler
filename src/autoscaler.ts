@@ -1,4 +1,4 @@
-import { JibriTracker } from './jibri_tracker';
+import { JibriTracker, JibriState, JibriStatusState } from './jibri_tracker';
 
 import logger from './logger';
 import CloudManager from './cloud_manager';
@@ -88,10 +88,15 @@ export default class AutoscaleProcessor {
             count > group.scalingOptions.jibriMinDesired &&
             computedMetricScaleDown > group.scalingOptions.jibriScaleDownThreshold
         ) {
-            logger.info(`Group ${group.name} with ${count} instances should scale up.`, { computedMetricScaleDown });
+            logger.info(`Group ${group.name} with ${count} instances should scale down.`, { computedMetricScaleDown });
 
-            // TODO: select instances to be scaled down
-            const scaleDownInstances: InstanceDetails[] = [];
+            let actualScaleDownQuantity = group.scalingOptions.jibriScaleDownQuantity;
+            if (count - actualScaleDownQuantity < group.scalingOptions.jibriMinDesired) {
+                actualScaleDownQuantity = count - group.scalingOptions.jibriMinDesired;
+            }
+
+            const scaleDownInstances = await this.getAvailableJibris(actualScaleDownQuantity, currentInventory);
+
             this.cloudManager.scaleDown(group, scaleDownInstances);
             this.jibriTracker.setGracePeriod(group.name);
         } else {
@@ -102,5 +107,24 @@ export default class AutoscaleProcessor {
         }
 
         return true;
+    }
+
+    async getAvailableJibris(size: number, states: Array<JibriState>): Promise<Array<InstanceDetails>> {
+        return states
+            .filter((response) => {
+                if (response.status.busyStatus == JibriStatusState.Idle) {
+                    return true;
+                } else {
+                    return false;
+                }
+            })
+            .slice(0, size)
+            .map((response) => {
+                return {
+                    instanceId: response.jibriId,
+                    instanceType: 'jibri',
+                    group: response.metadata.group,
+                };
+            });
     }
 }

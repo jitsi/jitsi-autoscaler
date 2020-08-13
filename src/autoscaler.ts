@@ -4,22 +4,46 @@ import logger from './logger';
 import CloudManager from './cloud_manager';
 import { InstanceDetails } from './instance_status';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import Redlock from 'redlock';
+import Redis from 'ioredis';
 
 export interface AutoscaleProcessorOptions {
     jibriTracker: JibriTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
+    autoscalerProcessingLockTTL: number;
 }
 
 export default class AutoscaleProcessor {
     private jibriTracker: JibriTracker;
     private instaceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
+    private redisClient: Redis.Redis;
+    private autoscalerLock: Redlock;
+    private autoscalerProcessingLockTTL: number;
 
-    constructor(options: AutoscaleProcessorOptions) {
+    // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
+    static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
+
+    constructor(options: AutoscaleProcessorOptions, redisClient: Redis.Redis) {
         this.jibriTracker = options.jibriTracker;
         this.cloudManager = options.cloudManager;
         this.instaceGroupManager = options.instanceGroupManager;
+        this.autoscalerProcessingLockTTL = options.autoscalerProcessingLockTTL;
+        this.redisClient = redisClient;
+        this.autoscalerLock = new Redlock(
+            // TODO: you should have one client for each independent redis node or cluster
+            [this.redisClient],
+            {
+                driftFactor: 0.01, // time in ms
+                retryCount: 3,
+                retryDelay: 200, // time in ms
+                retryJitter: 200, // time in ms
+            },
+        );
+        this.autoscalerLock.on('clientError', (err) => {
+            logger.error('A redis error has occurred on the autoscalerLock:', err);
+        });
 
         this.processAutoscaling = this.processAutoscaling.bind(this);
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
@@ -27,9 +51,29 @@ export default class AutoscaleProcessor {
 
     async processAutoscaling(): Promise<boolean> {
         logger.debug('Starting to process scaling activities');
-        const instanceGroups: Array<InstanceGroup> = await this.instaceGroupManager.getAllInstanceGroups();
-        await Promise.all(instanceGroups.map(this.processAutoscalingByGroup));
-        logger.debug('Stopped to process scaling activities');
+        logger.debug('Obtaining request lock in redis');
+
+        let lock: Redlock.Lock = undefined;
+        try {
+            lock = await this.autoscalerLock.lock(
+                AutoscaleProcessor.autoscalerProcessingLockKey,
+                this.autoscalerProcessingLockTTL,
+            );
+            logger.debug(`Lock obtained for ${AutoscaleProcessor.autoscalerProcessingLockKey}`);
+        } catch (err) {
+            logger.error(`Error obtaining lock for ${AutoscaleProcessor.autoscalerProcessingLockKey}`, { err });
+            return false;
+        }
+
+        try {
+            const instanceGroups: Array<InstanceGroup> = await this.instaceGroupManager.getAllInstanceGroups();
+            await Promise.all(instanceGroups.map(this.processAutoscalingByGroup));
+            logger.debug('Stopped to process scaling activities');
+        } catch (err) {
+            logger.error(`Processing request ${err}`);
+        } finally {
+            lock.unlock();
+        }
         return true;
     }
 

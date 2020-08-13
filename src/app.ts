@@ -70,11 +70,15 @@ const instanceGroupManager = new InstanceGroupManager({
 });
 
 instanceGroupManager.init().then(() => {
-    const autoscaleProcessor = new AutoscaleProcessor({
-        jibriTracker: jibriTracker,
-        cloudManager: cloudManager,
-        instanceGroupManager: instanceGroupManager,
-    });
+    const autoscaleProcessor = new AutoscaleProcessor(
+        {
+            jibriTracker: jibriTracker,
+            cloudManager: cloudManager,
+            instanceGroupManager: instanceGroupManager,
+            autoscalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
+        },
+        redisClient,
+    );
     pollForAutoscaling(autoscaleProcessor);
 });
 

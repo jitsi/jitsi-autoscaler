@@ -33,6 +33,7 @@ export interface JibriState {
 }
 
 export interface JibriMetric {
+    jibriId: string;
     timestamp: number;
     value: number;
 }
@@ -94,6 +95,7 @@ export class JibriTracker {
         }
         const metricKey = `metric:available:${group}:${state.jibriId}:${metricTimestamp}`;
         const metricObject: JibriMetric = {
+            jibriId: state.jibriId,
             timestamp: metricTimestamp,
             value: metricValue,
         };
@@ -105,11 +107,31 @@ export class JibriTracker {
         return true;
     }
 
-    async getMetricPeriods(group: string, periodsCount: number, period: number): Promise<Array<JibriMetric>> {
-        const metricPoints: Array<JibriMetric> = [];
+    async getAvailableMetricPerPeriod(
+        metricInventoryPerPeriod: Array<Array<JibriMetric>>,
+        periodCount: number,
+    ): Promise<Array<number>> {
+        this.logger.debug(`Getting available metric per period for  ${periodCount} periods`, {
+            metricInventoryPerPeriod,
+        });
+
+        return metricInventoryPerPeriod.slice(0, periodCount).map((jibriMetrics) => {
+            return this.computeAvailableMetric(jibriMetrics);
+        });
+    }
+
+    async getMetricPeriods(
+        group: string,
+        periodsCount: number,
+        periodDurationSeconds: number,
+    ): Promise<Array<Array<JibriMetric>>> {
+        const metricPoints: Array<Array<JibriMetric>> = [];
         let items: Array<string> = [];
-        const windowEndTimestamp = Date.now();
-        const windowStartTimestamp = windowEndTimestamp - periodsCount * period * 1000;
+        const currentTime = Date.now();
+
+        for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
+            metricPoints[periodIdx] = [];
+        }
 
         let cursor = '0';
         do {
@@ -119,15 +141,53 @@ export class JibriTracker {
                 items = await this.redisClient.mget(...result[1]);
                 items.forEach((item) => {
                     const itemJson = JSON.parse(item);
-                    if (itemJson.timestamp >= windowStartTimestamp && itemJson.timestamp <= windowEndTimestamp) {
-                        metricPoints.push(itemJson);
+                    for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
+                        const periodEndTimestamp = currentTime - periodIdx * periodDurationSeconds * 1000;
+                        const periodStartTimestamp = periodEndTimestamp - periodDurationSeconds * 1000;
+
+                        if (itemJson.timestamp > periodStartTimestamp && itemJson.timestamp <= periodEndTimestamp) {
+                            metricPoints[periodIdx].push(itemJson);
+                        }
                     }
                 });
             }
         } while (cursor != '0');
-        this.logger.debug(`jibri metric periods: ${metricPoints}`, { group, periodsCount, period });
+        this.logger.debug(`jibri metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });
 
         return metricPoints;
+    }
+
+    computeAvailableMetric(jibriMetrics: Array<JibriMetric>): number {
+        const dataPointsPerJibri: Map<string, number> = new Map();
+        const aggregatedDataPerJibri: Map<string, number> = new Map();
+
+        jibriMetrics.forEach((jibriMetric) => {
+            let currentDataPoints = dataPointsPerJibri.get(jibriMetric.jibriId);
+            if (!currentDataPoints) {
+                currentDataPoints = 0;
+            }
+            dataPointsPerJibri.set(jibriMetric.jibriId, currentDataPoints + 1);
+
+            let currentAggregatedValue = aggregatedDataPerJibri.get(jibriMetric.jibriId);
+            if (!currentAggregatedValue) {
+                currentAggregatedValue = 0;
+            }
+            aggregatedDataPerJibri.set(jibriMetric.jibriId, currentAggregatedValue + jibriMetric.value);
+        });
+
+        const jibriIds: Array<string> = Array.from(aggregatedDataPerJibri.keys());
+
+        if (jibriIds.length > 0) {
+            return jibriIds
+                .map((jibriId) => {
+                    return aggregatedDataPerJibri.get(jibriId) / dataPointsPerJibri.get(jibriId);
+                })
+                .reduce((previousSum, currentValue) => {
+                    return previousSum + currentValue;
+                });
+        } else {
+            return 0;
+        }
     }
 
     async allowScaling(group: string): Promise<boolean> {

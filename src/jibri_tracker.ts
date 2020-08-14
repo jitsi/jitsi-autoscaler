@@ -120,7 +120,7 @@ export class JibriTracker {
         });
     }
 
-    async getMetricPeriods(
+    async getMetricInventoryPerPeriod(
         group: string,
         periodsCount: number,
         periodDurationSeconds: number,
@@ -141,13 +141,10 @@ export class JibriTracker {
                 items = await this.redisClient.mget(...result[1]);
                 items.forEach((item) => {
                     const itemJson = JSON.parse(item);
-                    for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
-                        const periodEndTimestamp = currentTime - periodIdx * periodDurationSeconds * 1000;
-                        const periodStartTimestamp = periodEndTimestamp - periodDurationSeconds * 1000;
 
-                        if (itemJson.timestamp > periodStartTimestamp && itemJson.timestamp <= periodEndTimestamp) {
-                            metricPoints[periodIdx].push(itemJson);
-                        }
+                    const periodIdx = Math.floor((currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000));
+                    if (periodIdx < periodsCount) {
+                        metricPoints[periodIdx].push(itemJson);
                     }
                 });
             }

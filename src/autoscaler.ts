@@ -49,7 +49,7 @@ export default class AutoscaleProcessor {
             group.scalingOptions.jibriScaleUpPeriodsCount,
             group.scalingOptions.jibriScaleDownPeriodsCount,
         );
-        const metricInventoryPerPeriod: Array<Array<JibriMetric>> = await this.jibriTracker.getMetricPeriods(
+        const metricInventoryPerPeriod: Array<Array<JibriMetric>> = await this.jibriTracker.getMetricInventoryPerPeriod(
             group.name,
             maxPeriodCount,
             group.scalingOptions.jibriScalePeriod,

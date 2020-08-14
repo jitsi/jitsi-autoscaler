@@ -75,6 +75,7 @@ export class InstanceStatus {
                 jibriState = {
                     jibriId: report.instance.instanceId,
                     status: jibriStats.status,
+                    timestamp: report.timestamp,
                     metadata: <JibriMetaData>{ ...report.instance },
                 };
                 logger.debug('Tracking jibri state', { state: jibriState });

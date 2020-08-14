@@ -50,7 +50,12 @@ if (config.RedisTLS) {
 }
 
 const redisClient = new Redis(redisOptions);
-const jibriTracker = new JibriTracker(logger, redisClient);
+const jibriTracker = new JibriTracker(logger, {
+    redisClient,
+    idleTTL: config.IdleTTL,
+    metricTTL: config.MetricTTL,
+    gracePeriodTTL: config.GracePeriodTTL,
+});
 const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 

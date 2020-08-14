@@ -37,20 +37,27 @@ export interface JibriMetric {
     value: number;
 }
 
+export interface JibriTrackerOptions {
+    redisClient: Redis.Redis;
+    idleTTL: number;
+    metricTTL: number;
+    gracePeriodTTL: number;
+}
+
 export class JibriTracker {
     private redisClient: Redis.Redis;
     private pendingLock: Redlock;
     private logger: Logger;
+    private gracePeriodTTL: number;
+    private idleTTL: number;
+    private metricTTL: number;
 
-    static readonly metricTTL = 900; // seconds
-    static readonly idleTTL = 90; // seconds
-    static readonly pendingTTL = 10000; // milliseconds
-    static readonly gracePeriodTTL = 300; // seconds
-
-    constructor(logger: Logger, redisClient: Redis.Redis) {
-        //this.setPending = this.setPending.bind(this);
+    constructor(logger: Logger, options: JibriTrackerOptions) {
         this.logger = logger;
-        this.redisClient = redisClient;
+        this.redisClient = options.redisClient;
+        this.idleTTL = options.idleTTL;
+        this.metricTTL = options.metricTTL;
+        this.gracePeriodTTL = options.gracePeriodTTL;
         this.pendingLock = new Redlock(
             // TODO: you should have one client for each independent redis node or cluster
             [this.redisClient],
@@ -75,7 +82,7 @@ export class JibriTracker {
 
         // Store latest instance status
         const key = `instance:status:${group}:${state.jibriId}`;
-        const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', JibriTracker.idleTTL);
+        const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', this.idleTTL);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }
@@ -90,12 +97,7 @@ export class JibriTracker {
             timestamp: metricTimestamp,
             value: metricValue,
         };
-        const resultMetric = await this.redisClient.set(
-            metricKey,
-            JSON.stringify(metricObject),
-            'ex',
-            JibriTracker.metricTTL,
-        );
+        const resultMetric = await this.redisClient.set(metricKey, JSON.stringify(metricObject), 'ex', this.metricTTL);
         if (resultMetric !== 'OK') {
             throw new Error(`unable to set ${metricKey}`);
         }
@@ -138,7 +140,7 @@ export class JibriTracker {
 
     async setGracePeriod(group: string): Promise<boolean> {
         const key = `gracePeriod:${group}`;
-        const result = await this.redisClient.set(key, JSON.stringify(false), 'ex', JibriTracker.gracePeriodTTL);
+        const result = await this.redisClient.set(key, JSON.stringify(false), 'ex', this.gracePeriodTTL);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }
@@ -163,41 +165,5 @@ export class JibriTracker {
         this.logger.debug(`jibri states: ${states}`, { group, states });
 
         return states;
-    }
-
-    async setPending(key: string): Promise<boolean> {
-        try {
-            this.logger.debug(`attempting lock of ${key}`);
-            await this.pendingLock.lock(key, JibriTracker.pendingTTL);
-            this.logger.debug(`${key} lock obtained`);
-            return true;
-        } catch (err) {
-            this.logger.warn(`error obtaining lock for ${key} - ${err}`);
-            return false;
-        }
-    }
-
-    async nextAvailable(): Promise<string> {
-        const idle: Array<string> = [];
-        let cursor = '0';
-        do {
-            const result = await this.redisClient.scan(cursor, 'match', 'jibri:idle:*');
-            cursor = result[0];
-            idle.push(...result[1]);
-        } while (cursor != '0');
-        this.logger.debug(`idle jibri: ${idle}`);
-
-        for (const value of idle) {
-            const id: string = value.split(':')[2];
-            const pendingKey = `jibri:pending:${id}`;
-            const locked = await this.setPending(pendingKey);
-            if (locked) {
-                this.logger.debug(`${id} is now pending`);
-                return id;
-            } else {
-                continue;
-            }
-        }
-        throw new Error('no recorder');
     }
 }

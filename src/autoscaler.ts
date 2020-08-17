@@ -1,9 +1,9 @@
-import { JibriTracker, JibriState, JibriStatusState } from './jibri_tracker';
+import { JibriTracker, JibriState, JibriStatusState, JibriMetric } from './jibri_tracker';
 
 import logger from './logger';
 import CloudManager from './cloud_manager';
 import { InstanceDetails } from './instance_status';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager, { InstanceGroup, ScalingOptions } from './instance_group';
 
 export interface AutoscaleProcessorOptions {
     jibriTracker: JibriTracker;
@@ -45,37 +45,31 @@ export default class AutoscaleProcessor {
             logger.info(`Evaluating scale computed metrics for group ${group.name}`);
         }
 
-        //TODO get both inventories from one redis call
-        const metricInventoryScaleUp = await this.jibriTracker.getMetricPeriods(
-            group.name,
+        const maxPeriodCount = Math.max(
             group.scalingOptions.jibriScaleUpPeriodsCount,
-            group.scalingOptions.jibriScalePeriod,
-        );
-        const metricInventoryScaleDown = await this.jibriTracker.getMetricPeriods(
-            group.name,
             group.scalingOptions.jibriScaleDownPeriodsCount,
+        );
+        const metricInventoryPerPeriod: Array<Array<JibriMetric>> = await this.jibriTracker.getMetricInventoryPerPeriod(
+            group.name,
+            maxPeriodCount,
             group.scalingOptions.jibriScalePeriod,
         );
 
-        let computedMetricScaleUp = 0;
-        let computedMetricScaleDown = 0;
+        const availableJibrisPerPeriodForScaleUp: Array<number> = await this.jibriTracker.getAvailableMetricPerPeriod(
+            metricInventoryPerPeriod,
+            group.scalingOptions.jibriScaleUpPeriodsCount,
+        );
 
-        metricInventoryScaleUp.forEach((item) => {
-            computedMetricScaleUp += item.value;
-        });
-        computedMetricScaleUp = computedMetricScaleUp / group.scalingOptions.jibriScaleUpPeriodsCount;
+        const availableJibrisPerPeriodForScaleDown: Array<number> = await this.jibriTracker.getAvailableMetricPerPeriod(
+            metricInventoryPerPeriod,
+            group.scalingOptions.jibriScaleDownPeriodsCount,
+        );
 
-        metricInventoryScaleDown.forEach((item) => {
-            computedMetricScaleDown += item.value;
-        });
-        computedMetricScaleDown = computedMetricScaleDown / group.scalingOptions.jibriScaleDownPeriodsCount;
+        logger.info(`Available jibris for scale up decision`, { availableJibrisPerPeriodForScaleUp });
+        logger.info('Available jibris for scale down decision', { availableJibrisPerPeriodForScaleDown });
 
-        if (
-            (count < group.scalingOptions.jibriMaxDesired &&
-                computedMetricScaleUp < group.scalingOptions.jibriScaleUpThreshold) ||
-            count < group.scalingOptions.jibriMinDesired
-        ) {
-            logger.info(`Group ${group.name} with ${count} instances should scale up`, { computedMetricScaleUp });
+        if (this.evalScaleUpConditionForAllPeriods(availableJibrisPerPeriodForScaleUp, count, group.scalingOptions)) {
+            logger.info(`Group ${group.name} with ${count} instances should scale up`);
 
             let actualScaleUpQuantity = group.scalingOptions.jibriScaleUpQuantity;
             if (count + actualScaleUpQuantity > group.scalingOptions.jibriMaxDesired) {
@@ -85,10 +79,9 @@ export default class AutoscaleProcessor {
             this.cloudManager.scaleUp(group, count, actualScaleUpQuantity);
             this.jibriTracker.setGracePeriod(group.name);
         } else if (
-            count > group.scalingOptions.jibriMinDesired &&
-            computedMetricScaleDown > group.scalingOptions.jibriScaleDownThreshold
+            this.evalScaleDownConditionForAllPeriods(availableJibrisPerPeriodForScaleDown, count, group.scalingOptions)
         ) {
-            logger.info(`Group ${group.name} with ${count} instances should scale down.`, { computedMetricScaleDown });
+            logger.info(`Group ${group.name} with ${count} instances should scale down.`);
 
             let actualScaleDownQuantity = group.scalingOptions.jibriScaleDownQuantity;
             if (count - actualScaleDownQuantity < group.scalingOptions.jibriMinDesired) {
@@ -100,10 +93,7 @@ export default class AutoscaleProcessor {
             this.cloudManager.scaleDown(group, scaleDownInstances);
             this.jibriTracker.setGracePeriod(group.name);
         } else {
-            logger.info(`No scaling activity needed for group ${group} with ${count} instances.`, {
-                computedMetricScaleUp,
-                computedMetricScaleDown,
-            });
+            logger.info(`No scaling activity needed for group ${group} with ${count} instances.`);
         }
 
         return true;
@@ -125,6 +115,41 @@ export default class AutoscaleProcessor {
                     instanceType: 'jibri',
                     group: response.metadata.group,
                 };
+            });
+    }
+
+    evalScaleUpConditionForAllPeriods(
+        availableJibrisByPeriod: Array<number>,
+        count: number,
+        scalingOptions: ScalingOptions,
+    ): boolean {
+        return availableJibrisByPeriod
+            .map((availableForPeriod) => {
+                return (
+                    (count < scalingOptions.jibriMaxDesired &&
+                        availableForPeriod < scalingOptions.jibriScaleUpThreshold) ||
+                    count < scalingOptions.jibriMinDesired
+                );
+            })
+            .reduce((previousValue, currentValue) => {
+                return previousValue && currentValue;
+            });
+    }
+
+    evalScaleDownConditionForAllPeriods(
+        availableJibrisByPeriod: Array<number>,
+        count: number,
+        scalingOptions: ScalingOptions,
+    ): boolean {
+        return availableJibrisByPeriod
+            .map((availableForPeriod) => {
+                return (
+                    count > scalingOptions.jibriMinDesired &&
+                    availableForPeriod > scalingOptions.jibriScaleDownThreshold
+                );
+            })
+            .reduce((previousValue, currentValue) => {
+                return previousValue && currentValue;
             });
     }
 }

@@ -84,6 +84,13 @@ class Handlers {
         res.status(200);
         res.send({ instanceGroups: instanceGroups });
     }
+
+    async resetInstanceGroups(req: Request, res: Response): Promise<void> {
+        await this.instanceGroupManager.resetInstanceGroups();
+
+        res.status(200);
+        res.send({ reset: 'OK' });
+    }
 }
 
 export default Handlers;

@@ -46,7 +46,13 @@ export default class InstanceGroupManager {
 
     async init(): Promise<void> {
         logger.info('Initializing instance group manager...');
-        await Promise.all(this.initialGroupList.map(this.upsertInstanceGroup));
+        const result = await this.redisClient.scan(0, 'match', `${this.keyPrefix}*`);
+        if (result[1].length == 0) {
+            logger.info('Storing instance groups into redis');
+            await Promise.all(this.initialGroupList.map(this.upsertInstanceGroup));
+            logger.info('Stored instance groups into redis');
+        }
+
         logger.info('Instance group manager initialized.');
     }
 
@@ -55,6 +61,7 @@ export default class InstanceGroupManager {
     }
 
     async upsertInstanceGroup(group: InstanceGroup): Promise<void> {
+        logger.info(`Storing ${group.name}`);
         const groupKey = this.getGroupKey(group.name);
         const result = await this.redisClient.set(groupKey, JSON.stringify(group));
         if (result !== 'OK') {
@@ -93,7 +100,22 @@ export default class InstanceGroupManager {
     }
 
     async deleteInstanceGroup(groupName: string): Promise<void> {
+        logger.info(`Deleting group ${groupName}`);
         const groupKey = this.getGroupKey(groupName);
         await this.redisClient.del(groupKey);
+        logger.info(`Group ${groupName} is deleted`);
+    }
+
+    async resetInstanceGroups(): Promise<void> {
+        //TODO grab group processing lock
+        logger.info('Resetting instance groups');
+
+        logger.info('Deleting all instance groups');
+        const instanceGroups = await this.getAllInstanceGroups();
+        await Promise.all(instanceGroups.map((group) => this.deleteInstanceGroup(group.name)));
+        logger.info('Storing instance groups into redis');
+        await Promise.all(this.initialGroupList.map(this.upsertInstanceGroup));
+
+        logger.info('Instance groups are now reset');
     }
 }

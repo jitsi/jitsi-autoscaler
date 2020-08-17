@@ -160,6 +160,14 @@ app.delete('/groups/:name', async (req, res, next) => {
     }
 });
 
+app.post('/groups/actions/reset', async (req, res, next) => {
+    try {
+        await h.resetInstanceGroups(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 // async function pollForRequestUpdates() {
 //     await requestTracker.processUpdates(meetProcessor.updateProcessor);
 //     setTimeout(pollForRequestUpdates, 3000);

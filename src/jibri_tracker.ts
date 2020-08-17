@@ -29,6 +29,7 @@ export interface JibriMetaData {
 export interface JibriState {
     jibriId: string;
     status: JibriStatus;
+    timestamp?: number;
     metadata: JibriMetaData;
 }
 
@@ -88,7 +89,11 @@ export class JibriTracker {
             throw new Error(`unable to set ${key}`);
         }
 
-        const metricTimestamp = Date.now();
+        let metricTimestamp = Number(state.timestamp);
+        if (!metricTimestamp) {
+            metricTimestamp = Date.now();
+        }
+
         let metricValue = 0;
         if (state.status.busyStatus == JibriStatusState.Idle) {
             metricValue = 1;

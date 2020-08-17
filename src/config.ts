@@ -28,9 +28,10 @@ const env = envalid.cleanEnv(process.env, {
     GROUP_CONFIG_FILE: envalid.str(),
     DEFAULT_INSTANCE_CONFIGURATION_ID: envalid.str(),
     DEFAULT_COMPARTMENT_ID: envalid.str(),
-    METRIC_TTL: envalid.num({ default: 900 }), // seconds
-    IDLE_TTL: envalid.num({ default: 90 }), // seconds
-    GRACE_PERIOD_TTL: envalid.num({ default: 300 }), // seconds
+    METRIC_TTL_SEC: envalid.num({ default: 900 }), // seconds
+    IDLE_TTL_SEC: envalid.num({ default: 90 }), // seconds
+    GRACE_PERIOD_TTL_SEC: envalid.num({ default: 300 }), // seconds
+    AUTOSCALER_PROCESSING_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
 });
 
 const groupsJsonRaw: string = fs.readFileSync(env.GROUP_CONFIG_FILE, { encoding: 'utf-8' });
@@ -61,7 +62,8 @@ export default {
     AutoscalerInterval: env.AUTOSCALER_INTERVAL,
     GroupList: groupList,
     DryRun: env.DRY_RUN,
-    MetricTTL: env.METRIC_TTL,
-    IdleTTL: env.IDLE_TTL,
-    GracePeriodTTL: env.GRACE_PERIOD_TTL,
+    MetricTTL: env.METRIC_TTL_SEC,
+    IdleTTL: env.IDLE_TTL_SEC,
+    GracePeriodTTL: env.GRACE_PERIOD_TTL_SEC,
+    AutoscalerProcessingLockTTL: env.AUTOSCALER_PROCESSING_LOCK_TTL_MS,
 };

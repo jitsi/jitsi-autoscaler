@@ -1,8 +1,7 @@
-import { JibriTracker, JibriState, JibriStatusState, JibriMetric } from './jibri_tracker';
+import { JibriMetric, JibriTracker } from './jibri_tracker';
 
 import logger from './logger';
 import CloudManager from './cloud_manager';
-import { InstanceDetails } from './instance_status';
 import Redlock from 'redlock';
 import Redis from 'ioredis';
 
@@ -14,11 +13,12 @@ export interface AutoscaleProcessorOptions {
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
+    redisClient: Redis.Redis;
 }
 
 export default class AutoscaleProcessor {
     private jibriTracker: JibriTracker;
-    private instaceGroupManager: InstanceGroupManager;
+    private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
     private redisClient: Redis.Redis;
     private lockManager: LockManager;
@@ -26,19 +26,19 @@ export default class AutoscaleProcessor {
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
 
-    constructor(options: AutoscaleProcessorOptions, redisClient: Redis.Redis) {
+    constructor(options: AutoscaleProcessorOptions) {
         this.jibriTracker = options.jibriTracker;
         this.cloudManager = options.cloudManager;
-        this.instaceGroupManager = options.instanceGroupManager;
+        this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
-        this.redisClient = redisClient;
+        this.redisClient = options.redisClient;
 
         this.processAutoscaling = this.processAutoscaling.bind(this);
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
 
     async processAutoscaling(): Promise<boolean> {
-        logger.debug('Starting to process scaling activities');
+        logger.debug('Starting to process autoscaling activities');
         logger.debug('Obtaining request lock in redis');
 
         let lock: Redlock.Lock = undefined;
@@ -50,9 +50,9 @@ export default class AutoscaleProcessor {
         }
 
         try {
-            const instanceGroups: Array<InstanceGroup> = await this.instaceGroupManager.getAllInstanceGroups();
+            const instanceGroups: Array<InstanceGroup> = await this.instanceGroupManager.getAllInstanceGroups();
             await Promise.all(instanceGroups.map(this.processAutoscalingByGroup));
-            logger.debug('Stopped to process scaling activities');
+            logger.debug('Stopped to process autoscaling activities');
         } catch (err) {
             logger.error(`Processing request ${err}`);
         } finally {
@@ -65,9 +65,13 @@ export default class AutoscaleProcessor {
         const currentInventory = await this.jibriTracker.getCurrent(group.name);
         const count = currentInventory.length;
 
-        const scalingAllowed = await this.jibriTracker.allowScaling(group.name);
-        if (!scalingAllowed) {
-            logger.info(`Wait before allowing another scaling activity for group ${group.name}`);
+        if (!group.enableAutoScale) {
+            logger.info(`Autoscaling not enabled for group ${group.name}`);
+            return;
+        }
+        const autoscalingAllowed = await this.instanceGroupManager.allowAutoscaling(group.name);
+        if (!autoscalingAllowed) {
+            logger.info(`Wait before allowing another autoscaling activity for group ${group.name}`);
             return;
         } else {
             logger.info(`Evaluating scale computed metrics for group ${group.name}`);
@@ -97,53 +101,39 @@ export default class AutoscaleProcessor {
         logger.info('Available jibris for scale down decision', { availableJibrisPerPeriodForScaleDown });
 
         if (this.evalScaleUpConditionForAllPeriods(availableJibrisPerPeriodForScaleUp, count, group.scalingOptions)) {
-            logger.info(`Group ${group.name} with ${count} instances should scale up`);
-
-            let actualScaleUpQuantity = group.scalingOptions.jibriScaleUpQuantity;
-            if (count + actualScaleUpQuantity > group.scalingOptions.jibriMaxDesired) {
-                actualScaleUpQuantity = group.scalingOptions.jibriMaxDesired - count;
+            let desiredCount = count + group.scalingOptions.jibriScaleUpQuantity;
+            if (desiredCount > group.scalingOptions.jibriMaxDesired) {
+                desiredCount = group.scalingOptions.jibriMaxDesired;
             }
-
-            this.cloudManager.scaleUp(group, count, actualScaleUpQuantity);
-            this.jibriTracker.setGracePeriod(group.name);
+            if (desiredCount > group.scalingOptions.jibriDesiredCount) {
+                this.updateDesiredCount(desiredCount, group);
+                this.instanceGroupManager.setAutoScaleGracePeriod(group.name);
+            }
         } else if (
             this.evalScaleDownConditionForAllPeriods(availableJibrisPerPeriodForScaleDown, count, group.scalingOptions)
         ) {
-            logger.info(`Group ${group.name} with ${count} instances should scale down.`);
-
-            let actualScaleDownQuantity = group.scalingOptions.jibriScaleDownQuantity;
-            if (count - actualScaleDownQuantity < group.scalingOptions.jibriMinDesired) {
-                actualScaleDownQuantity = count - group.scalingOptions.jibriMinDesired;
+            let desiredCount = count - group.scalingOptions.jibriScaleDownQuantity;
+            if (desiredCount < group.scalingOptions.jibriMinDesired) {
+                desiredCount = group.scalingOptions.jibriMinDesired;
             }
-
-            const scaleDownInstances = await this.getAvailableJibris(actualScaleDownQuantity, currentInventory);
-
-            this.cloudManager.scaleDown(group, scaleDownInstances);
-            this.jibriTracker.setGracePeriod(group.name);
+            if (desiredCount < group.scalingOptions.jibriDesiredCount) {
+                this.updateDesiredCount(desiredCount, group);
+                this.instanceGroupManager.setAutoScaleGracePeriod(group.name);
+            }
         } else {
-            logger.info(`No scaling activity needed for group ${group} with ${count} instances.`);
+            logger.info(`No autoscaling activity needed for group ${group.name} with ${count} instances.`);
         }
 
         return true;
     }
 
-    async getAvailableJibris(size: number, states: Array<JibriState>): Promise<Array<InstanceDetails>> {
-        return states
-            .filter((response) => {
-                if (response.status.busyStatus == JibriStatusState.Idle) {
-                    return true;
-                } else {
-                    return false;
-                }
-            })
-            .slice(0, size)
-            .map((response) => {
-                return {
-                    instanceId: response.jibriId,
-                    instanceType: 'jibri',
-                    group: response.metadata.group,
-                };
-            });
+    private async updateDesiredCount(desiredCount: number, group: InstanceGroup) {
+        if (desiredCount !== group.scalingOptions.jibriDesiredCount) {
+            group.scalingOptions.jibriDesiredCount = desiredCount;
+            const groupName = group.name;
+            logger.info('Updating desired count to', { groupName, desiredCount });
+            await this.instanceGroupManager.upsertInstanceGroup(group);
+        }
     }
 
     evalScaleUpConditionForAllPeriods(

@@ -11,6 +11,7 @@ import CloudManager from './cloud_manager';
 import { InstanceStatus } from './instance_status';
 import InstanceGroupManager from './instance_group';
 import AutoscaleProcessor from './autoscaler';
+import InstanceLauncher from './instance_launcher';
 import LockManager from './lock_manager';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
@@ -56,7 +57,6 @@ const jibriTracker = new JibriTracker(logger, {
     redisClient,
     idleTTL: config.IdleTTL,
     metricTTL: config.MetricTTL,
-    gracePeriodTTL: config.GracePeriodTTL,
 });
 
 const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
@@ -71,32 +71,46 @@ const cloudManager = new CloudManager({
 const lockManager: LockManager = new LockManager({
     redisClient: redisClient,
     autoscalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
+    scalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
 });
 
 const instanceGroupManager = new InstanceGroupManager({
     redisClient: redisClient,
     initialGroupList: config.GroupList,
+    gracePeriodTTL: config.GracePeriodTTL,
 });
 
 instanceGroupManager.init().catch((err) => {
     logger.info('Failed initializing list of groups', { err });
 });
 
-const autoscaleProcessor = new AutoscaleProcessor(
-    {
-        jibriTracker: jibriTracker,
-        cloudManager: cloudManager,
-        instanceGroupManager: instanceGroupManager,
-        lockManager: lockManager,
-    },
+const autoscaleProcessor = new AutoscaleProcessor({
+    jibriTracker: jibriTracker,
+    cloudManager: cloudManager,
+    instanceGroupManager: instanceGroupManager,
+    lockManager: lockManager,
     redisClient,
-);
+});
 
 pollForAutoscaling(autoscaleProcessor);
+
+const instanceLauncher = new InstanceLauncher({
+    jibriTracker: jibriTracker,
+    cloudManager: cloudManager,
+    instanceGroupManager: instanceGroupManager,
+    lockManager: lockManager,
+    redisClient,
+});
+pollForLaunching(instanceLauncher);
 
 async function pollForAutoscaling(autoscaleProcessor: AutoscaleProcessor) {
     await autoscaleProcessor.processAutoscaling();
     setTimeout(pollForAutoscaling.bind(null, autoscaleProcessor), config.AutoscalerInterval * 1000);
+}
+
+async function pollForLaunching(instanceLauncher: InstanceLauncher) {
+    await instanceLauncher.launchInstances();
+    setTimeout(pollForLaunching.bind(null, instanceLauncher), config.AutoscalerInterval * 1000);
 }
 
 const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);

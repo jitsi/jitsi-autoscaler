@@ -5,18 +5,21 @@ import logger from './logger';
 export interface LockManagerOptions {
     redisClient: Redis.Redis;
     autoscalerProcessingLockTTL: number;
+    scalerProcessingLockTTL: number;
 }
 
 export default class LockManager {
     private redisClient: Redis.Redis;
     private groupProcessingLockManager: Redlock;
     private autoscalerProcessingLockTTL: number;
+    private scalerProcessingLockTTL: number;
     private static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
+    private static readonly scalerProcessingLockKey = 'scalerLockKey';
 
     constructor(options: LockManagerOptions) {
         this.redisClient = options.redisClient;
         this.autoscalerProcessingLockTTL = options.autoscalerProcessingLockTTL;
-
+        this.scalerProcessingLockTTL = options.scalerProcessingLockTTL;
         this.groupProcessingLockManager = new Redlock(
             // TODO: you should have one client for each independent redis node or cluster
             [this.redisClient],
@@ -40,6 +43,16 @@ export default class LockManager {
             this.autoscalerProcessingLockTTL,
         );
         logger.debug(`Lock obtained for ${LockManager.autoscalerProcessingLockKey}`);
+        return lock;
+    }
+
+    async lockScaleProcessing(): Promise<Redlock.Lock> {
+        logger.debug(`Obtaining lock ${LockManager.scalerProcessingLockKey}`);
+        const lock = await this.groupProcessingLockManager.lock(
+            LockManager.scalerProcessingLockKey,
+            this.scalerProcessingLockTTL,
+        );
+        logger.debug(`Lock obtained for ${LockManager.scalerProcessingLockKey}`);
         return lock;
     }
 }

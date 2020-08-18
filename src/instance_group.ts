@@ -107,7 +107,6 @@ export default class InstanceGroupManager {
     }
 
     async resetInstanceGroups(): Promise<void> {
-        //TODO grab group processing lock
         logger.info('Resetting instance groups');
 
         logger.info('Deleting all instance groups');

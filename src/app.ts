@@ -64,6 +64,8 @@ const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
 const cloudManager = new CloudManager({
     instanceStatus: instanceStatus,
     isDryRun: config.DryRun,
+    ociConfigurationFilePath: config.OciConfigurationFilePath,
+    ociConfigurationProfile: config.OciConfigurationProfile,
 });
 
 const lockManager: LockManager = new LockManager({

@@ -32,6 +32,8 @@ const env = envalid.cleanEnv(process.env, {
     IDLE_TTL_SEC: envalid.num({ default: 90 }), // seconds
     GRACE_PERIOD_TTL_SEC: envalid.num({ default: 300 }), // seconds
     AUTOSCALER_PROCESSING_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
+    OCI_CONFIGURATION_FILE_PATH: envalid.str(),
+    OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),
 });
 
 const groupsJsonRaw: string = fs.readFileSync(env.GROUP_CONFIG_FILE, { encoding: 'utf-8' });
@@ -66,4 +68,6 @@ export default {
     IdleTTL: env.IDLE_TTL_SEC,
     GracePeriodTTL: env.GRACE_PERIOD_TTL_SEC,
     AutoscalerProcessingLockTTL: env.AUTOSCALER_PROCESSING_LOCK_TTL_MS,
+    OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
+    OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,
 };

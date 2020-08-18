@@ -42,6 +42,7 @@ export default class InstanceGroupManager {
         this.getInstanceGroup = this.getInstanceGroup.bind(this);
         this.getAllInstanceGroups = this.getAllInstanceGroups.bind(this);
         this.upsertInstanceGroup = this.upsertInstanceGroup.bind(this);
+        this.resetInstanceGroups = this.resetInstanceGroups.bind(this);
     }
 
     async init(): Promise<void> {

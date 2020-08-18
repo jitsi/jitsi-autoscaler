@@ -7,6 +7,8 @@ import { InstanceGroup } from './instance_group';
 export interface CloudManagerOptions {
     instanceStatus: InstanceStatus;
     isDryRun: boolean;
+    ociConfigurationFilePath: string;
+    ociConfigurationProfile: string;
 }
 
 export default class CloudManager {
@@ -16,7 +18,11 @@ export default class CloudManager {
 
     constructor(options: CloudManagerOptions) {
         this.isDryRun = options.isDryRun;
-        this.oracleInstanceManager = new OracleCloudManager(this.isDryRun);
+        this.oracleInstanceManager = new OracleCloudManager({
+            isDryRun: options.isDryRun,
+            ociConfigurationFilePath: options.ociConfigurationFilePath,
+            ociConfigurationProfile: options.ociConfigurationProfile,
+        });
         this.instanceStatus = options.instanceStatus;
 
         this.scaleUp = this.scaleUp.bind(this);

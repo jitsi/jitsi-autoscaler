@@ -6,7 +6,16 @@ import envalid from 'envalid';
 const result = dotenv.config();
 
 if (result.error) {
-    throw result.error;
+    const err = <NodeJS.ErrnoException>result.error;
+    switch (err.code) {
+        case 'ENOENT':
+            // skip if only error is missing file, this isn't fatal
+            console.debug('Missing .env file, not loading environment file disk');
+            break;
+        default:
+            throw result.error;
+            break;
+    }
 }
 
 const env = envalid.cleanEnv(process.env, {
@@ -21,7 +30,7 @@ const env = envalid.cleanEnv(process.env, {
     ASAP_PUB_KEY_BASE_URL: envalid.str(),
     ASAP_JWT_AUD: envalid.str(),
     ASAP_JWT_ACCEPTED_HOOK_ISS: envalid.str(),
-    AUTOSCALER_INTERVAL: envalid.num({ default: 10 }),
+    AUTOSCALER_INTERVAL: envalid.num({ default: 30 }),
     JIBRI_MIN_DESIRED: envalid.num({ default: 1 }),
     JIBRI_MAX_DESIRED: envalid.num({ default: 1 }),
     DRY_RUN: envalid.bool({ default: false }),

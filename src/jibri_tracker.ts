@@ -43,14 +43,12 @@ export interface JibriTrackerOptions {
     redisClient: Redis.Redis;
     idleTTL: number;
     metricTTL: number;
-    gracePeriodTTL: number;
 }
 
 export class JibriTracker {
     private redisClient: Redis.Redis;
     private pendingLock: Redlock;
     private logger: Logger;
-    private gracePeriodTTL: number;
     private idleTTL: number;
     private metricTTL: number;
 
@@ -59,7 +57,6 @@ export class JibriTracker {
         this.redisClient = options.redisClient;
         this.idleTTL = options.idleTTL;
         this.metricTTL = options.metricTTL;
-        this.gracePeriodTTL = options.gracePeriodTTL;
         this.pendingLock = new Redlock(
             // TODO: you should have one client for each independent redis node or cluster
             [this.redisClient],
@@ -190,23 +187,6 @@ export class JibriTracker {
         } else {
             return 0;
         }
-    }
-
-    async allowScaling(group: string): Promise<boolean> {
-        const result = await this.redisClient.get(`gracePeriod:${group}`);
-        if (result !== null && result.length > 0) {
-            return false;
-        }
-        return true;
-    }
-
-    async setGracePeriod(group: string): Promise<boolean> {
-        const key = `gracePeriod:${group}`;
-        const result = await this.redisClient.set(key, JSON.stringify(false), 'ex', this.gracePeriodTTL);
-        if (result !== 'OK') {
-            throw new Error(`unable to set ${key}`);
-        }
-        return true;
     }
 
     async getCurrent(group: string): Promise<Array<JibriState>> {

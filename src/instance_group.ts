@@ -4,6 +4,7 @@ import logger from './logger';
 export interface ScalingOptions {
     jibriMinDesired: number;
     jibriMaxDesired: number;
+    jibriDesiredCount: number;
     jibriScaleUpQuantity: number;
     jibriScaleDownQuantity: number;
     jibriScaleUpThreshold: number;
@@ -19,6 +20,7 @@ export interface InstanceGroup {
     region: string;
     compartmentId: string;
     instanceConfigurationId: string;
+    enableAutoScale: boolean;
     scalingOptions: ScalingOptions;
     cloud: string;
 }
@@ -26,16 +28,19 @@ export interface InstanceGroup {
 export interface InstanceGroupManagerOptions {
     redisClient: Redis.Redis;
     initialGroupList: Array<InstanceGroup>;
+    gracePeriodTTL: number;
 }
 
 export default class InstanceGroupManager {
     private readonly keyPrefix = 'group:';
     private redisClient: Redis.Redis;
     private initialGroupList: Array<InstanceGroup>;
+    private gracePeriodTTL: number;
 
     constructor(options: InstanceGroupManagerOptions) {
         this.redisClient = options.redisClient;
         this.initialGroupList = options.initialGroupList;
+        this.gracePeriodTTL = options.gracePeriodTTL;
 
         this.init = this.init.bind(this);
         this.getGroupKey = this.getGroupKey.bind(this);
@@ -117,5 +122,30 @@ export default class InstanceGroupManager {
         await Promise.all(this.initialGroupList.map(this.upsertInstanceGroup));
 
         logger.info('Instance groups are now reset');
+    }
+
+    async allowAutoscaling(group: string): Promise<boolean> {
+        const result = await this.redisClient.get(`autoScaleGracePeriod:${group}`);
+        return !(result !== null && result.length > 0);
+    }
+
+    async allowScaling(group: string): Promise<boolean> {
+        const result = await this.redisClient.get(`scaleGracePeriod:${group}`);
+        return !(result !== null && result.length > 0);
+    }
+    async setScaleGracePeriod(groupName: string): Promise<boolean> {
+        return this.setGracePeriod(`scaleGracePeriod:${groupName}`);
+    }
+
+    async setAutoScaleGracePeriod(groupName: string): Promise<boolean> {
+        return this.setGracePeriod(`autoScaleGracePeriod:${groupName}`);
+    }
+
+    async setGracePeriod(key: string): Promise<boolean> {
+        const result = await this.redisClient.set(key, JSON.stringify(false), 'ex', this.gracePeriodTTL);
+        if (result !== 'OK') {
+            throw new Error(`unable to set ${key}`);
+        }
+        return true;
     }
 }

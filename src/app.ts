@@ -11,6 +11,7 @@ import CloudManager from './cloud_manager';
 import { InstanceStatus } from './instance_status';
 import InstanceGroupManager from './instance_group';
 import AutoscaleProcessor from './autoscaler';
+import LockManager from './lock_manager';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -50,18 +51,24 @@ if (config.RedisTLS) {
 }
 
 const redisClient = new Redis(redisOptions);
+
 const jibriTracker = new JibriTracker(logger, {
     redisClient,
     idleTTL: config.IdleTTL,
     metricTTL: config.MetricTTL,
     gracePeriodTTL: config.GracePeriodTTL,
 });
+
 const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
-const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
 const cloudManager = new CloudManager({
     instanceStatus: instanceStatus,
     isDryRun: config.DryRun,
+});
+
+const lockManager: LockManager = new LockManager({
+    redisClient: redisClient,
+    autoscalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
 });
 
 const instanceGroupManager = new InstanceGroupManager({
@@ -69,25 +76,30 @@ const instanceGroupManager = new InstanceGroupManager({
     initialGroupList: config.GroupList,
 });
 
-instanceGroupManager.init().then(() => {
-    const autoscaleProcessor = new AutoscaleProcessor(
-        {
-            jibriTracker: jibriTracker,
-            cloudManager: cloudManager,
-            instanceGroupManager: instanceGroupManager,
-            autoscalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
-        },
-        redisClient,
-    );
-    pollForAutoscaling(autoscaleProcessor);
+instanceGroupManager.init().catch((err) => {
+    logger.info('Failed initializing list of groups', { err });
 });
+
+const autoscaleProcessor = new AutoscaleProcessor(
+    {
+        jibriTracker: jibriTracker,
+        cloudManager: cloudManager,
+        instanceGroupManager: instanceGroupManager,
+        lockManager: lockManager,
+    },
+    redisClient,
+);
+
+pollForAutoscaling(autoscaleProcessor);
 
 async function pollForAutoscaling(autoscaleProcessor: AutoscaleProcessor) {
     await autoscaleProcessor.processAutoscaling();
     setTimeout(pollForAutoscaling.bind(null, autoscaleProcessor), config.AutoscalerInterval * 1000);
 }
 
-const h = new Handlers(jibriTracker, instanceStatus, instanceGroupManager);
+const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
+
+const h = new Handlers(jibriTracker, instanceStatus, instanceGroupManager, lockManager);
 
 app.use(
     jwt({
@@ -155,6 +167,14 @@ app.get('/groups', async (req, res, next) => {
 app.delete('/groups/:name', async (req, res, next) => {
     try {
         await h.deleteInstanceGroup(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/groups/actions/reset', async (req, res, next) => {
+    try {
+        await h.resetInstanceGroups(req, res);
     } catch (err) {
         next(err);
     }

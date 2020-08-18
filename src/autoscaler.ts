@@ -7,12 +7,13 @@ import Redlock from 'redlock';
 import Redis from 'ioredis';
 
 import InstanceGroupManager, { InstanceGroup, ScalingOptions } from './instance_group';
+import LockManager from './lock_manager';
 
 export interface AutoscaleProcessorOptions {
     jibriTracker: JibriTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
-    autoscalerProcessingLockTTL: number;
+    lockManager: LockManager;
 }
 
 export default class AutoscaleProcessor {
@@ -20,8 +21,7 @@ export default class AutoscaleProcessor {
     private instaceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
     private redisClient: Redis.Redis;
-    private autoscalerLock: Redlock;
-    private autoscalerProcessingLockTTL: number;
+    private lockManager: LockManager;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
@@ -30,21 +30,8 @@ export default class AutoscaleProcessor {
         this.jibriTracker = options.jibriTracker;
         this.cloudManager = options.cloudManager;
         this.instaceGroupManager = options.instanceGroupManager;
-        this.autoscalerProcessingLockTTL = options.autoscalerProcessingLockTTL;
+        this.lockManager = options.lockManager;
         this.redisClient = redisClient;
-        this.autoscalerLock = new Redlock(
-            // TODO: you should have one client for each independent redis node or cluster
-            [this.redisClient],
-            {
-                driftFactor: 0.01, // time in ms
-                retryCount: 3,
-                retryDelay: 200, // time in ms
-                retryJitter: 200, // time in ms
-            },
-        );
-        this.autoscalerLock.on('clientError', (err) => {
-            logger.error('A redis error has occurred on the autoscalerLock:', err);
-        });
 
         this.processAutoscaling = this.processAutoscaling.bind(this);
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
@@ -56,13 +43,9 @@ export default class AutoscaleProcessor {
 
         let lock: Redlock.Lock = undefined;
         try {
-            lock = await this.autoscalerLock.lock(
-                AutoscaleProcessor.autoscalerProcessingLockKey,
-                this.autoscalerProcessingLockTTL,
-            );
-            logger.debug(`Lock obtained for ${AutoscaleProcessor.autoscalerProcessingLockKey}`);
+            lock = await this.lockManager.lockAutoscaleProcessing();
         } catch (err) {
-            logger.error(`Error obtaining lock for ${AutoscaleProcessor.autoscalerProcessingLockKey}`, { err });
+            logger.error(`Error obtaining lock for processing`, { err });
             return false;
         }
 

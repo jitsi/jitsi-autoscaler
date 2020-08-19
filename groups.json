@@ -5,16 +5,19 @@
       "region": "us-phoenix-1",
       "compartmentId": "",
       "instanceConfigurationId": "",
+      "enableAutoScale": true,
+      "gracePeriodTTLSec": 300,
       "scalingOptions": {
-        "jibriMinDesired": 1,
-        "jibriMaxDesired": 2,
-        "jibriScaleUpQuantity": 1,
-        "jibriScaleDownQuantity": 1,
-        "jibriScaleUpThreshold": 1,
-        "jibriScaleDownThreshold": 2,
-        "jibriScalePeriod": 60,
-        "jibriScaleUpPeriodsCount": 2,
-        "jibriScaleDownPeriodsCount": 4
+        "minDesired": 1,
+        "maxDesired": 2,
+        "desiredCount": 2,
+        "scaleUpQuantity": 1,
+        "scaleDownQuantity": 1,
+        "scaleUpThreshold": 1,
+        "scaleDownThreshold": 2,
+        "scalePeriod": 60,
+        "scaleUpPeriodsCount": 2,
+        "scaleDownPeriodsCount": 4
       },
       "cloud": "oracle"
     },
@@ -23,16 +26,19 @@
       "region": "us-phoenix-1",
       "compartmentId": "",
       "instanceConfigurationId": "",
+      "enableAutoScale": false,
+      "gracePeriodTTLSec": 300,
       "scalingOptions": {
-        "jibriMinDesired": 1,
-        "jibriMaxDesired": 2,
-        "jibriScaleUpQuantity": 1,
-        "jibriScaleDownQuantity": 1,
-        "jibriScaleUpThreshold": 1,
-        "jibriScaleDownThreshold": 2,
-        "jibriScalePeriod": 60,
-        "jibriScaleUpPeriodsCount": 2,
-        "jibriScaleDownPeriodsCount": 4
+        "minDesired": 1,
+        "maxDesired": 2,
+        "desiredCount": 2,
+        "scaleUpQuantity": 1,
+        "scaleDownQuantity": 1,
+        "scaleUpThreshold": 1,
+        "scaleDownThreshold": 2,
+        "scalePeriod": 60,
+        "scaleUpPeriodsCount": 2,
+        "scaleDownPeriodsCount": 4
       },
       "cloud": "oracle"
     }

@@ -77,7 +77,6 @@ const lockManager: LockManager = new LockManager({
 const instanceGroupManager = new InstanceGroupManager({
     redisClient: redisClient,
     initialGroupList: config.GroupList,
-    gracePeriodTTL: config.GracePeriodTTL,
 });
 
 instanceGroupManager.init().catch((err) => {

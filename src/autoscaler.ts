@@ -78,47 +78,47 @@ export default class AutoscaleProcessor {
         }
 
         const maxPeriodCount = Math.max(
-            group.scalingOptions.jibriScaleUpPeriodsCount,
-            group.scalingOptions.jibriScaleDownPeriodsCount,
+            group.scalingOptions.scaleUpPeriodsCount,
+            group.scalingOptions.scaleDownPeriodsCount,
         );
         const metricInventoryPerPeriod: Array<Array<JibriMetric>> = await this.jibriTracker.getMetricInventoryPerPeriod(
             group.name,
             maxPeriodCount,
-            group.scalingOptions.jibriScalePeriod,
+            group.scalingOptions.scalePeriod,
         );
 
         const availableJibrisPerPeriodForScaleUp: Array<number> = await this.jibriTracker.getAvailableMetricPerPeriod(
             metricInventoryPerPeriod,
-            group.scalingOptions.jibriScaleUpPeriodsCount,
+            group.scalingOptions.scaleUpPeriodsCount,
         );
 
         const availableJibrisPerPeriodForScaleDown: Array<number> = await this.jibriTracker.getAvailableMetricPerPeriod(
             metricInventoryPerPeriod,
-            group.scalingOptions.jibriScaleDownPeriodsCount,
+            group.scalingOptions.scaleDownPeriodsCount,
         );
 
         logger.info(`Available jibris for scale up decision`, { availableJibrisPerPeriodForScaleUp });
         logger.info('Available jibris for scale down decision', { availableJibrisPerPeriodForScaleDown });
 
         if (this.evalScaleUpConditionForAllPeriods(availableJibrisPerPeriodForScaleUp, count, group.scalingOptions)) {
-            let desiredCount = count + group.scalingOptions.jibriScaleUpQuantity;
-            if (desiredCount > group.scalingOptions.jibriMaxDesired) {
-                desiredCount = group.scalingOptions.jibriMaxDesired;
+            let desiredCount = count + group.scalingOptions.scaleUpQuantity;
+            if (desiredCount > group.scalingOptions.maxDesired) {
+                desiredCount = group.scalingOptions.maxDesired;
             }
-            if (desiredCount > group.scalingOptions.jibriDesiredCount) {
+            if (desiredCount > group.scalingOptions.desiredCount) {
                 this.updateDesiredCount(desiredCount, group);
-                this.instanceGroupManager.setAutoScaleGracePeriod(group.name);
+                this.instanceGroupManager.setAutoScaleGracePeriod(group);
             }
         } else if (
             this.evalScaleDownConditionForAllPeriods(availableJibrisPerPeriodForScaleDown, count, group.scalingOptions)
         ) {
-            let desiredCount = count - group.scalingOptions.jibriScaleDownQuantity;
-            if (desiredCount < group.scalingOptions.jibriMinDesired) {
-                desiredCount = group.scalingOptions.jibriMinDesired;
+            let desiredCount = count - group.scalingOptions.scaleDownQuantity;
+            if (desiredCount < group.scalingOptions.minDesired) {
+                desiredCount = group.scalingOptions.minDesired;
             }
-            if (desiredCount < group.scalingOptions.jibriDesiredCount) {
+            if (desiredCount < group.scalingOptions.desiredCount) {
                 this.updateDesiredCount(desiredCount, group);
-                this.instanceGroupManager.setAutoScaleGracePeriod(group.name);
+                this.instanceGroupManager.setAutoScaleGracePeriod(group);
             }
         } else {
             logger.info(`No autoscaling activity needed for group ${group.name} with ${count} instances.`);
@@ -128,8 +128,8 @@ export default class AutoscaleProcessor {
     }
 
     private async updateDesiredCount(desiredCount: number, group: InstanceGroup) {
-        if (desiredCount !== group.scalingOptions.jibriDesiredCount) {
-            group.scalingOptions.jibriDesiredCount = desiredCount;
+        if (desiredCount !== group.scalingOptions.desiredCount) {
+            group.scalingOptions.desiredCount = desiredCount;
             const groupName = group.name;
             logger.info('Updating desired count to', { groupName, desiredCount });
             await this.instanceGroupManager.upsertInstanceGroup(group);
@@ -144,9 +144,8 @@ export default class AutoscaleProcessor {
         return availableJibrisByPeriod
             .map((availableForPeriod) => {
                 return (
-                    (count < scalingOptions.jibriMaxDesired &&
-                        availableForPeriod < scalingOptions.jibriScaleUpThreshold) ||
-                    count < scalingOptions.jibriMinDesired
+                    (count < scalingOptions.maxDesired && availableForPeriod < scalingOptions.scaleUpThreshold) ||
+                    count < scalingOptions.minDesired
                 );
             })
             .reduce((previousValue, currentValue) => {
@@ -161,10 +160,7 @@ export default class AutoscaleProcessor {
     ): boolean {
         return availableJibrisByPeriod
             .map((availableForPeriod) => {
-                return (
-                    count > scalingOptions.jibriMinDesired &&
-                    availableForPeriod > scalingOptions.jibriScaleDownThreshold
-                );
+                return count > scalingOptions.minDesired && availableForPeriod > scalingOptions.scaleDownThreshold;
             })
             .reduce((previousValue, currentValue) => {
                 return previousValue && currentValue;

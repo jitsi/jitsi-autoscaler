@@ -60,7 +60,7 @@ export default class InstanceLauncher {
 
     async launchInstancesByGroup(group: InstanceGroup): Promise<boolean> {
         const groupName = group.name;
-        const desiredCount = group.scalingOptions.jibriDesiredCount;
+        const desiredCount = group.scalingOptions.desiredCount;
         const currentInventory = await this.jibriTracker.getCurrent(groupName);
         const count = currentInventory.length;
 
@@ -70,22 +70,22 @@ export default class InstanceLauncher {
             return;
         }
 
-        if (count < group.scalingOptions.jibriDesiredCount && count < group.scalingOptions.jibriMaxDesired) {
+        if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
             logger.info('Will scale up to the desired count', { groupName, desiredCount });
 
             const actualScaleUpQuantity =
-                Math.min(group.scalingOptions.jibriMaxDesired, group.scalingOptions.jibriDesiredCount) - count;
+                Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
             this.cloudManager.scaleUp(group, count, actualScaleUpQuantity);
-            this.instaceGroupManager.setScaleGracePeriod(groupName);
-        } else if (count > group.scalingOptions.jibriDesiredCount && count > group.scalingOptions.jibriMinDesired) {
+            this.instaceGroupManager.setScaleGracePeriod(group);
+        } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
             logger.info('Will scale down to the desired count', { groupName, desiredCount });
 
             const actualScaleDownQuantity =
-                count - Math.max(group.scalingOptions.jibriMinDesired, group.scalingOptions.jibriDesiredCount);
+                count - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
             const availableInstances = await this.getAvailableJibris(currentInventory);
             const scaleDownInstances = availableInstances.slice(0, actualScaleDownQuantity);
             this.cloudManager.scaleDown(group, scaleDownInstances);
-            this.instaceGroupManager.setScaleGracePeriod(groupName);
+            this.instaceGroupManager.setScaleGracePeriod(group);
         } else {
             logger.info(`No scaling activity needed for group ${groupName} with ${count} instances.`);
         }

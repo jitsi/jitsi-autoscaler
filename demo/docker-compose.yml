@@ -1,0 +1,31 @@
+version: "3.8"
+services:
+ redis:
+   image: "redis:alpine"
+   command: redis-server /usr/local/etc/redis/redis.conf
+   ports:
+    - "6379:6379"
+   volumes:
+    - $PWD/redis-data:/var/lib/redis
+    - $PWD/redis.conf:/usr/local/etc/redis/redis.conf
+ autoscaler:
+   # image: "103425057857.dkr.ecr.us-west-2.amazonaws.com/jitsi-vo/jibri-queue:0.0.3"
+   build: ../.
+   ports:
+    - "8080:8080"
+   environment:
+    - LOG_LEVEL=debug
+    - PROTECTED_API=false
+    - REDIS_HOST=redis
+    - PORT=8080
+    - REDIS_PASSWORD=demopw
+    - ASAP_PUB_KEY_BASE_URL=null
+    - ASAP_JWT_AUD=jitsi-autoscaler
+    - ASAP_JWT_ACCEPTED_HOOK_ISS=jitsi-autoscaler-sidecar
+    - GROUP_CONFIG_FILE=/config/groups.json
+    - OCI_CONFIGURATION_FILE_PATH=/config/oci.config
+    - DEFAULT_INSTANCE_CONFIGURATION_ID=ocid1.instanceconfiguration.oc1.example.configid
+    - DEFAULT_COMPARTMENT_ID=ocid1.compartment.oc1..examplecompartment
+    - REDIS_TLS=false
+   volumes:
+    - $PWD/config:/config

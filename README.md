@@ -11,21 +11,36 @@ You can find the build in `dist/`. There's only one bundled file there - `main.j
 ## Runnning
 
 ```
-npm start <path_to_config_json>
+npm run build
+npm run start
 ```
 
-or
+or after the build is done:
 
 ```
-node dist/main.js <path_to_config_json>
+node dist/main.js
 ```
 
 ### Config.json
 
-You must specify the path to a `config.json` file as a first argument of the app. We read the following properties from there:
- - jwt - required. Configuration options for the JWT generation.
-   - privateKeyPath - required. The path to the private key.
-   - keyid - required. The kid claim.
-   - iss - required. The iss claim.
-   - expiresIn - required. Period of time after which the JWT will expire.
- - debug - optional. Enable the debug log level.
+You must specify the path to a `groups.json` file as an environment variable. We read the groups for autoscaling from there.
+
+## docker-compose
+
+To run the demo docker-compose setup, all config must be added to the config/ directory.
+The following commands may then be used:
+
+### build the images
+```
+docker-compose -f demo/docker-compose.yml build
+```
+
+### start up the containers
+```
+docker-compose -f demo/docker-compose.yml up
+```
+
+### tear down the containers
+```
+docker-compose -f demo/docker-compose.yml down
+```

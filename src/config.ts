@@ -6,7 +6,16 @@ import envalid from 'envalid';
 const result = dotenv.config();
 
 if (result.error) {
-    throw result.error;
+    const err = <NodeJS.ErrnoException>result.error;
+    switch (err.code) {
+        case 'ENOENT':
+            // skip if only error is missing file, this isn't fatal
+            console.debug('Missing .env file, not loading environment file disk');
+            break;
+        default:
+            throw result.error;
+            break;
+    }
 }
 
 const env = envalid.cleanEnv(process.env, {

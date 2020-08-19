@@ -30,7 +30,7 @@ const env = envalid.cleanEnv(process.env, {
     ASAP_PUB_KEY_BASE_URL: envalid.str(),
     ASAP_JWT_AUD: envalid.str(),
     ASAP_JWT_ACCEPTED_HOOK_ISS: envalid.str(),
-    AUTOSCALER_INTERVAL: envalid.num({ default: 10 }),
+    AUTOSCALER_INTERVAL: envalid.num({ default: 30 }),
     DRY_RUN: envalid.bool({ default: false }),
     GROUP_CONFIG_FILE: envalid.str(),
     DEFAULT_INSTANCE_CONFIGURATION_ID: envalid.str(),

@@ -31,12 +31,14 @@ const env = envalid.cleanEnv(process.env, {
     ASAP_JWT_AUD: envalid.str(),
     ASAP_JWT_ACCEPTED_HOOK_ISS: envalid.str(),
     AUTOSCALER_INTERVAL: envalid.num({ default: 30 }),
+    INITIAL_WAIT_FOR_POOLING_MS: envalid.num({ default: 120000 }),
     DRY_RUN: envalid.bool({ default: false }),
     GROUP_CONFIG_FILE: envalid.str(),
     DEFAULT_INSTANCE_CONFIGURATION_ID: envalid.str(),
     DEFAULT_COMPARTMENT_ID: envalid.str(),
     METRIC_TTL_SEC: envalid.num({ default: 900 }), // seconds
     IDLE_TTL_SEC: envalid.num({ default: 90 }), // seconds
+    PROVISIONING_TTL_SEC: envalid.num({ default: 600 }), // seconds
     AUTOSCALER_PROCESSING_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     OCI_CONFIGURATION_FILE_PATH: envalid.str(),
     OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),
@@ -68,9 +70,11 @@ export default {
     AsapJwtAcceptedHookIss: env.ASAP_JWT_ACCEPTED_HOOK_ISS,
     // interval for autoscaling calculation, in seconds
     AutoscalerInterval: env.AUTOSCALER_INTERVAL,
+    InitialWaitForPooling: env.INITIAL_WAIT_FOR_POOLING_MS,
     GroupList: groupList,
     DryRun: env.DRY_RUN,
     MetricTTL: env.METRIC_TTL_SEC,
+    ProvisioningTTL: env.PROVISIONING_TTL_SEC,
     IdleTTL: env.IDLE_TTL_SEC,
     AutoscalerProcessingLockTTL: env.AUTOSCALER_PROCESSING_LOCK_TTL_MS,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,

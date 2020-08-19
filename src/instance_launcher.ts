@@ -64,28 +64,26 @@ export default class InstanceLauncher {
         const currentInventory = await this.jibriTracker.getCurrent(groupName);
         const count = currentInventory.length;
 
-        const scalingAllowed = await this.instaceGroupManager.allowScaling(groupName);
-        if (!scalingAllowed) {
-            logger.info(`Wait before allowing another scaling activity for group ${groupName}`);
-            return;
-        }
-
         if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
-            logger.info('Will scale up to the desired count', { groupName, desiredCount });
+            logger.info('Will scale up to the desired count', { groupName, desiredCount, count });
 
             const actualScaleUpQuantity =
                 Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
-            this.cloudManager.scaleUp(group, count, actualScaleUpQuantity);
-            this.instaceGroupManager.setScaleGracePeriod(group);
+            await this.cloudManager.scaleUp(group, count, actualScaleUpQuantity);
         } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
-            logger.info('Will scale down to the desired count', { groupName, desiredCount });
+            const scalingAllowed = await this.instaceGroupManager.allowScaling(groupName);
+            if (!scalingAllowed) {
+                logger.info(`Wait before allowing another scale down for group ${groupName}`);
+                return;
+            }
+            logger.info('Will scale down to the desired count', { groupName, desiredCount, count });
 
             const actualScaleDownQuantity =
                 count - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
-            const availableInstances = await this.getAvailableJibris(currentInventory);
+            const availableInstances = this.getAvailableJibris(currentInventory);
             const scaleDownInstances = availableInstances.slice(0, actualScaleDownQuantity);
-            this.cloudManager.scaleDown(group, scaleDownInstances);
-            this.instaceGroupManager.setScaleGracePeriod(group);
+            await this.cloudManager.scaleDown(group, scaleDownInstances);
+            await this.instaceGroupManager.setScaleGracePeriod(group);
         } else {
             logger.info(`No scaling activity needed for group ${groupName} with ${count} instances.`);
         }
@@ -93,7 +91,7 @@ export default class InstanceLauncher {
         return true;
     }
 
-    async getAvailableJibris(states: Array<JibriState>): Promise<Array<InstanceDetails>> {
+    getAvailableJibris(states: Array<JibriState>): Array<InstanceDetails> {
         return states
             .filter((response) => {
                 return response.status.busyStatus == JibriStatusState.Idle;

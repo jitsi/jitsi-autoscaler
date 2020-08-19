@@ -6,7 +6,7 @@
       "compartmentId": "",
       "instanceConfigurationId": "",
       "enableAutoScale": true,
-      "gracePeriodTTLSec": 300,
+      "gracePeriodTTLSec": 480,
       "scalingOptions": {
         "minDesired": 1,
         "maxDesired": 2,
@@ -27,7 +27,7 @@
       "compartmentId": "",
       "instanceConfigurationId": "",
       "enableAutoScale": false,
-      "gracePeriodTTLSec": 300,
+      "gracePeriodTTLSec": 480,
       "scalingOptions": {
         "minDesired": 1,
         "maxDesired": 2,

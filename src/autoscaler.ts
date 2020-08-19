@@ -97,31 +97,35 @@ export default class AutoscaleProcessor {
             group.scalingOptions.scaleDownPeriodsCount,
         );
 
-        logger.info(`Available jibris for scale up decision`, { availableJibrisPerPeriodForScaleUp });
-        logger.info('Available jibris for scale down decision', { availableJibrisPerPeriodForScaleDown });
+        logger.info(
+            `[autoScaler] Making desired count adjustments for ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
+            { availableJibrisPerPeriodForScaleUp, availableJibrisPerPeriodForScaleDown },
+        );
 
-        if (this.evalScaleUpConditionForAllPeriods(availableJibrisPerPeriodForScaleUp, count, group.scalingOptions)) {
-            let desiredCount = count + group.scalingOptions.scaleUpQuantity;
+        if (
+            group.scalingOptions.desiredCount <= count &&
+            this.evalScaleUpConditionForAllPeriods(availableJibrisPerPeriodForScaleUp, count, group.scalingOptions)
+        ) {
+            let desiredCount = group.scalingOptions.desiredCount + group.scalingOptions.scaleUpQuantity;
             if (desiredCount > group.scalingOptions.maxDesired) {
                 desiredCount = group.scalingOptions.maxDesired;
             }
-            if (desiredCount > group.scalingOptions.desiredCount) {
-                this.updateDesiredCount(desiredCount, group);
-                this.instanceGroupManager.setAutoScaleGracePeriod(group);
-            }
+            await this.updateDesiredCount(desiredCount, group);
+            await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else if (
+            group.scalingOptions.desiredCount >= count &&
             this.evalScaleDownConditionForAllPeriods(availableJibrisPerPeriodForScaleDown, count, group.scalingOptions)
         ) {
-            let desiredCount = count - group.scalingOptions.scaleDownQuantity;
+            let desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
             if (desiredCount < group.scalingOptions.minDesired) {
                 desiredCount = group.scalingOptions.minDesired;
             }
-            if (desiredCount < group.scalingOptions.desiredCount) {
-                this.updateDesiredCount(desiredCount, group);
-                this.instanceGroupManager.setAutoScaleGracePeriod(group);
-            }
+            await this.updateDesiredCount(desiredCount, group);
+            await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else {
-            logger.info(`No autoscaling activity needed for group ${group.name} with ${count} instances.`);
+            logger.info(
+                `[autoScaler] No desired count adjustments needed for group ${group.name} with ${count} instances`,
+            );
         }
 
         return true;

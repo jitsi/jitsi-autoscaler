@@ -19,13 +19,13 @@ services:
     - REDIS_HOST=redis
     - PORT=8080
     - REDIS_PASSWORD=demopw
-    - ASAP_PUB_KEY_BASE_URL=https://d4dv7jmo5uq1d.cloudfront.net/server/dev
+    - ASAP_PUB_KEY_BASE_URL=null
     - ASAP_JWT_AUD=jitsi-autoscaler
     - ASAP_JWT_ACCEPTED_HOOK_ISS=jitsi-autoscaler-sidecar
     - GROUP_CONFIG_FILE=/config/groups.json
     - OCI_CONFIGURATION_FILE_PATH=/config/oci.config
-    - DEFAULT_INSTANCE_CONFIGURATION_ID=ocid1.instanceconfiguration.oc1.phx.aaaaaaaa4t4vmhgpyrasqtx6ws6ntqs4exizzjarqgkym25xhfbj6rr2cmka
-    - DEFAULT_COMPARTMENT_ID=ocid1.compartment.oc1..aaaaaaaakhr7wzxmpdmmsilwnsfrsv3hxvcg4s4mjbtjknvpjlz2f5d7m6eq
+    - DEFAULT_INSTANCE_CONFIGURATION_ID=ocid1.instanceconfiguration.oc1.example.configid
+    - DEFAULT_COMPARTMENT_ID=ocid1.compartment.oc1..examplecompartment
     - REDIS_TLS=false
    volumes:
     - $PWD/config:/config

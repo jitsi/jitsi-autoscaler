@@ -113,7 +113,7 @@ export default class OracleInstanceManager {
     }
 
     //TODO in the future, the list of ADs/FDs per region will be loaded once at startup time
-    async getAvailabilityDomains(compartmentId: string, region: string) {
+    async getAvailabilityDomains(compartmentId: string, region: string): Promise<string[]> {
         this.identityClient.regionId = region;
         const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse = await this.identityClient.listAvailabilityDomains(
             {

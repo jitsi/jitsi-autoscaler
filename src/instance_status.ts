@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import logger from './logger';
+import { Context } from './context';
 import { JibriTracker, JibriState, JibriStatus, JibriMetaData } from './jibri_tracker';
 
 const ShutdownTTL = 900;
@@ -33,7 +33,6 @@ export class InstanceStatus {
     private jibriTracker: JibriTracker;
 
     constructor(options: InstanceStatusOptions) {
-        //this.setPending = this.setPending.bind(this);
         this.redisClient = options.redisClient;
         this.jibriTracker = options.jibriTracker;
 
@@ -46,17 +45,17 @@ export class InstanceStatus {
         return `instance:${type}:${details.instanceId}`;
     }
 
-    async setShutdownStatus(details: InstanceDetails, status = 'shutdown'): Promise<boolean> {
+    async setShutdownStatus(ctx: Context, details: InstanceDetails, status = 'shutdown'): Promise<boolean> {
         const key = this.instanceKey(details);
-        logger.debug('Writing shutdown status', { key, status });
+        ctx.logger.debug('Writing shutdown status', { key, status });
         await this.redisClient.set(key, status, 'ex', ShutdownTTL);
         return true;
     }
 
-    async getShutdownStatus(details: InstanceDetails): Promise<boolean> {
+    async getShutdownStatus(ctx: Context, details: InstanceDetails): Promise<boolean> {
         const key = this.instanceKey(details);
         const res = await this.redisClient.get(key);
-        logger.debug('Read shutdown status', { key, res });
+        ctx.logger.debug('Read shutdown status', { key, res });
         if (res == 'shutdown') {
             return true;
         }
@@ -64,7 +63,7 @@ export class InstanceStatus {
     }
 
     // @TODO: handle stats like JibriTracker does
-    async stats(report: StatsReport): Promise<boolean> {
+    async stats(ctx: Context, report: StatsReport): Promise<boolean> {
         let statsResult = false;
         let key: string;
         let jibriState: JibriState;
@@ -78,12 +77,12 @@ export class InstanceStatus {
                     timestamp: report.timestamp,
                     metadata: <JibriMetaData>{ ...report.instance },
                 };
-                logger.debug('Tracking jibri state', { state: jibriState });
-                statsResult = await this.jibriTracker.track(jibriState);
+                ctx.logger.debug('Tracking jibri state', { state: jibriState });
+                statsResult = await this.jibriTracker.track(ctx, jibriState);
                 break;
             default:
                 key = this.instanceKey(report.instance, 'stats');
-                logger.debug('Writing instance stats', { key, stats: report.stats });
+                ctx.logger.debug('Writing instance stats', { key, stats: report.stats });
                 await this.redisClient.set(key, JSON.stringify(report.stats), 'ex', StatsTTL);
                 statsResult = true;
                 break;

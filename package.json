@@ -11,6 +11,7 @@
     "node": ">=10"
   },
   "dependencies": {
+    "@types/shortid": "0.0.29",
     "@types/sshpk": "^1.10.4",
     "dotenv": "^8.2.0",
     "envalid": "^6.0.2",
@@ -25,6 +26,7 @@
     "prom-client": "^12.0.0",
     "redlock": "^4.1.0",
     "sha256": "^0.2.0",
+    "shortid": "^2.2.15",
     "winston": "^3.3.3"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
 import { Logger } from 'winston';
+import { Context } from './context';
 import Redis from 'ioredis';
 
 export enum JibriStatusState {
@@ -53,15 +54,14 @@ export class JibriTracker {
     private provisioningTTL: number;
     private metricTTL: number;
 
-    constructor(logger: Logger, options: JibriTrackerOptions) {
-        this.logger = logger;
+    constructor(options: JibriTrackerOptions) {
         this.redisClient = options.redisClient;
         this.idleTTL = options.idleTTL;
         this.provisioningTTL = options.provisioningTTL;
         this.metricTTL = options.metricTTL;
     }
 
-    async track(state: JibriState): Promise<boolean> {
+    async track(ctx: Context, state: JibriState): Promise<boolean> {
         let group = 'default';
         // pull the group from metadata if provided
         if (state.metadata && state.metadata.group) {
@@ -77,6 +77,7 @@ export class JibriTracker {
         }
         const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', statusTTL);
         if (result !== 'OK') {
+            ctx.logger.error(`unable to set ${key}`);
             throw new Error(`unable to set ${key}`);
         }
 
@@ -103,6 +104,7 @@ export class JibriTracker {
                 this.metricTTL,
             );
             if (resultMetric !== 'OK') {
+                ctx.logger.error(`unable to set ${metricKey}`);
                 throw new Error(`unable to set ${metricKey}`);
             }
         }

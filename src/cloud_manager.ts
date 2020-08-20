@@ -1,9 +1,9 @@
 import OracleCloudManager from './oracle_instance_manager';
-import logger from './logger';
 import { InstanceStatus, InstanceDetails } from './instance_status';
 import OracleInstanceManager from './oracle_instance_manager';
 import { InstanceGroup } from './instance_group';
 import { JibriTracker } from './jibri_tracker';
+import { Context } from './context';
 
 export interface CloudManagerOptions {
     instanceStatus: InstanceStatus;
@@ -32,25 +32,25 @@ export default class CloudManager {
         this.scaleDown = this.scaleDown.bind(this);
     }
 
-    async scaleUp(group: InstanceGroup, groupCurrentCount: number, quantity: number): Promise<boolean> {
+    async scaleUp(ctx: Context, group: InstanceGroup, groupCurrentCount: number, quantity: number): Promise<boolean> {
         const groupName = group.name;
-        logger.info('Scaling up', { groupName, quantity });
+        ctx.logger.info('Scaling up', { groupName, quantity });
         // TODO: get the instance manager by cloud
         if (group.cloud == 'oracle') {
-            await this.oracleInstanceManager.launchInstances(group, groupCurrentCount, quantity);
+            await this.oracleInstanceManager.launchInstances(ctx, group, groupCurrentCount, quantity);
         }
         return true;
     }
 
-    async scaleDown(group: InstanceGroup, instances: Array<InstanceDetails>): Promise<boolean> {
+    async scaleDown(ctx: Context, group: InstanceGroup, instances: Array<InstanceDetails>): Promise<boolean> {
         const groupName = group.name;
-        logger.info('Scaling down', { groupName, instances });
+        ctx.logger.info('Scaling down', { groupName, instances });
         await Promise.all(
             instances.map((details) => {
-                return this.instanceStatus.setShutdownStatus(details);
+                return this.instanceStatus.setShutdownStatus(ctx, details);
             }),
         );
-        logger.info(`Finished scaling down all the instances in group ${group.name}`);
+        ctx.logger.info(`Finished scaling down all the instances in group ${group.name}`);
         return true;
     }
 }

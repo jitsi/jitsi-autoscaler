@@ -1,12 +1,10 @@
 import { JibriMetric, JibriTracker } from './jibri_tracker';
-
-import logger from './logger';
 import CloudManager from './cloud_manager';
 import Redlock from 'redlock';
 import Redis from 'ioredis';
-
 import InstanceGroupManager, { InstanceGroup, ScalingOptions } from './instance_group';
 import LockManager from './lock_manager';
+import { Context } from './context';
 
 export interface AutoscaleProcessorOptions {
     jibriTracker: JibriTracker;
@@ -37,44 +35,44 @@ export default class AutoscaleProcessor {
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
 
-    async processAutoscaling(): Promise<boolean> {
-        logger.debug('Starting to process autoscaling activities');
-        logger.debug('Obtaining request lock in redis');
+    async processAutoscaling(ctx: Context): Promise<boolean> {
+        ctx.logger.debug('Starting to process autoscaling activities');
+        ctx.logger.debug('Obtaining request lock in redis');
 
         let lock: Redlock.Lock = undefined;
         try {
-            lock = await this.lockManager.lockAutoscaleProcessing();
+            lock = await this.lockManager.lockAutoscaleProcessing(ctx);
         } catch (err) {
-            logger.error(`Error obtaining lock for processing`, { err });
+            ctx.logger.error(`Error obtaining lock for processing`, { err });
             return false;
         }
 
         try {
-            const instanceGroups: Array<InstanceGroup> = await this.instanceGroupManager.getAllInstanceGroups();
-            await Promise.all(instanceGroups.map(this.processAutoscalingByGroup));
-            logger.debug('Stopped to process autoscaling activities');
+            const instanceGroups: Array<InstanceGroup> = await this.instanceGroupManager.getAllInstanceGroups(ctx);
+            await Promise.all(instanceGroups.map((group) => this.processAutoscalingByGroup(ctx, group)));
+            ctx.logger.debug('Stopped to process autoscaling activities');
         } catch (err) {
-            logger.error(`Processing request ${err}`);
+            ctx.logger.error(`Processing request ${err}`);
         } finally {
             lock.unlock();
         }
         return true;
     }
 
-    async processAutoscalingByGroup(group: InstanceGroup): Promise<boolean> {
+    async processAutoscalingByGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
         const currentInventory = await this.jibriTracker.getCurrent(group.name);
         const count = currentInventory.length;
 
         if (!group.enableAutoScale) {
-            logger.info(`Autoscaling not enabled for group ${group.name}`);
+            ctx.logger.info(`Autoscaling not enabled for group ${group.name}`);
             return;
         }
         const autoscalingAllowed = await this.instanceGroupManager.allowAutoscaling(group.name);
         if (!autoscalingAllowed) {
-            logger.info(`Wait before allowing another autoscaling activity for group ${group.name}`);
+            ctx.logger.info(`Wait before allowing another autoscaling activity for group ${group.name}`);
             return;
         } else {
-            logger.info(`Evaluating scale computed metrics for group ${group.name}`);
+            ctx.logger.info(`Evaluating scale computed metrics for group ${group.name}`);
         }
 
         const maxPeriodCount = Math.max(
@@ -97,7 +95,7 @@ export default class AutoscaleProcessor {
             group.scalingOptions.scaleDownPeriodsCount,
         );
 
-        logger.info(
+        ctx.logger.info(
             `[autoScaler] Making desired count adjustments for ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
             { availableJibrisPerPeriodForScaleUp, availableJibrisPerPeriodForScaleDown },
         );
@@ -110,7 +108,7 @@ export default class AutoscaleProcessor {
             if (desiredCount > group.scalingOptions.maxDesired) {
                 desiredCount = group.scalingOptions.maxDesired;
             }
-            await this.updateDesiredCount(desiredCount, group);
+            await this.updateDesiredCount(ctx, desiredCount, group);
             await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else if (
             group.scalingOptions.desiredCount >= count &&
@@ -120,10 +118,10 @@ export default class AutoscaleProcessor {
             if (desiredCount < group.scalingOptions.minDesired) {
                 desiredCount = group.scalingOptions.minDesired;
             }
-            await this.updateDesiredCount(desiredCount, group);
+            await this.updateDesiredCount(ctx, desiredCount, group);
             await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else {
-            logger.info(
+            ctx.logger.info(
                 `[autoScaler] No desired count adjustments needed for group ${group.name} with ${count} instances`,
             );
         }
@@ -131,12 +129,12 @@ export default class AutoscaleProcessor {
         return true;
     }
 
-    private async updateDesiredCount(desiredCount: number, group: InstanceGroup) {
+    private async updateDesiredCount(ctx: Context, desiredCount: number, group: InstanceGroup) {
         if (desiredCount !== group.scalingOptions.desiredCount) {
             group.scalingOptions.desiredCount = desiredCount;
             const groupName = group.name;
-            logger.info('Updating desired count to', { groupName, desiredCount });
-            await this.instanceGroupManager.upsertInstanceGroup(group);
+            ctx.logger.info('Updating desired count to', { groupName, desiredCount });
+            await this.instanceGroupManager.upsertInstanceGroup(ctx, group);
         }
     }
 

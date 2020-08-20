@@ -57,6 +57,7 @@ const jibriTracker = new JibriTracker(logger, {
     redisClient,
     idleTTL: config.IdleTTL,
     metricTTL: config.MetricTTL,
+    provisioningTTL: config.ProvisioningTTL,
 });
 
 const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
@@ -66,6 +67,7 @@ const cloudManager = new CloudManager({
     isDryRun: config.DryRun,
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
+    jibriTracker: jibriTracker,
 });
 
 const lockManager: LockManager = new LockManager({
@@ -91,8 +93,6 @@ const autoscaleProcessor = new AutoscaleProcessor({
     redisClient,
 });
 
-pollForAutoscaling(autoscaleProcessor);
-
 const instanceLauncher = new InstanceLauncher({
     jibriTracker: jibriTracker,
     cloudManager: cloudManager,
@@ -100,7 +100,14 @@ const instanceLauncher = new InstanceLauncher({
     lockManager: lockManager,
     redisClient,
 });
-pollForLaunching(instanceLauncher);
+
+async function startPooling() {
+    logger.info('Start pooling..');
+
+    pollForAutoscaling(autoscaleProcessor);
+    pollForLaunching(instanceLauncher);
+}
+setTimeout(startPooling, config.InitialWaitForPooling);
 
 async function pollForAutoscaling(autoscaleProcessor: AutoscaleProcessor) {
     await autoscaleProcessor.processAutoscaling();

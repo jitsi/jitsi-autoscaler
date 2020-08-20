@@ -73,7 +73,7 @@ class Handlers {
         const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing();
         try {
             await this.instanceGroupManager.upsertInstanceGroup(instanceGroup);
-
+            this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
             res.status(200);
             res.send({ save: 'OK' });
         } finally {

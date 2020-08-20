@@ -1,10 +1,10 @@
 import { Logger } from 'winston';
-import Redlock from 'redlock';
 import Redis from 'ioredis';
 
 export enum JibriStatusState {
     Idle = 'IDLE',
     Busy = 'BUSY',
+    Provisioning = 'PROVISIONING',
 }
 
 export enum JibriHealthState {
@@ -43,33 +43,22 @@ export interface JibriTrackerOptions {
     redisClient: Redis.Redis;
     idleTTL: number;
     metricTTL: number;
+    provisioningTTL: number;
 }
 
 export class JibriTracker {
     private redisClient: Redis.Redis;
-    private pendingLock: Redlock;
     private logger: Logger;
     private idleTTL: number;
+    private provisioningTTL: number;
     private metricTTL: number;
 
     constructor(logger: Logger, options: JibriTrackerOptions) {
         this.logger = logger;
         this.redisClient = options.redisClient;
         this.idleTTL = options.idleTTL;
+        this.provisioningTTL = options.provisioningTTL;
         this.metricTTL = options.metricTTL;
-        this.pendingLock = new Redlock(
-            // TODO: you should have one client for each independent redis node or cluster
-            [this.redisClient],
-            {
-                driftFactor: 0.01, // time in ms
-                retryCount: 3,
-                retryDelay: 200, // time in ms
-                retryJitter: 200, // time in ms
-            },
-        );
-        this.pendingLock.on('clientError', (err) => {
-            this.logger.error('A pendingLock redis error has occurred:', err);
-        });
     }
 
     async track(state: JibriState): Promise<boolean> {
@@ -81,29 +70,41 @@ export class JibriTracker {
 
         // Store latest instance status
         const key = `instance:status:${group}:${state.jibriId}`;
-        const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', this.idleTTL);
+
+        let statusTTL = this.idleTTL;
+        if (state.status.busyStatus == JibriStatusState.Provisioning) {
+            statusTTL = this.provisioningTTL;
+        }
+        const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', statusTTL);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }
 
-        let metricTimestamp = Number(state.timestamp);
-        if (!metricTimestamp) {
-            metricTimestamp = Date.now();
-        }
+        if (state.status.busyStatus != JibriStatusState.Provisioning) {
+            let metricTimestamp = Number(state.timestamp);
+            if (!metricTimestamp) {
+                metricTimestamp = Date.now();
+            }
 
-        let metricValue = 0;
-        if (state.status.busyStatus == JibriStatusState.Idle) {
-            metricValue = 1;
-        }
-        const metricKey = `metric:available:${group}:${state.jibriId}:${metricTimestamp}`;
-        const metricObject: JibriMetric = {
-            jibriId: state.jibriId,
-            timestamp: metricTimestamp,
-            value: metricValue,
-        };
-        const resultMetric = await this.redisClient.set(metricKey, JSON.stringify(metricObject), 'ex', this.metricTTL);
-        if (resultMetric !== 'OK') {
-            throw new Error(`unable to set ${metricKey}`);
+            let metricValue = 0;
+            if (state.status.busyStatus == JibriStatusState.Idle) {
+                metricValue = 1;
+            }
+            const metricKey = `metric:available:${group}:${state.jibriId}:${metricTimestamp}`;
+            const metricObject: JibriMetric = {
+                jibriId: state.jibriId,
+                timestamp: metricTimestamp,
+                value: metricValue,
+            };
+            const resultMetric = await this.redisClient.set(
+                metricKey,
+                JSON.stringify(metricObject),
+                'ex',
+                this.metricTTL,
+            );
+            if (resultMetric !== 'OK') {
+                throw new Error(`unable to set ${metricKey}`);
+            }
         }
 
         return true;

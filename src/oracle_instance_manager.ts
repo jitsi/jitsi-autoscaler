@@ -3,6 +3,7 @@ import core = require('oci-core');
 import common = require('oci-common');
 import identity = require('oci-identity');
 import { InstanceGroup } from './instance_group';
+import { JibriHealthState, JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -18,6 +19,7 @@ export interface OracleInstanceManagerOptions {
     isDryRun: boolean;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
+    jibriTracker: JibriTracker;
 }
 
 export default class OracleInstanceManager {
@@ -25,9 +27,11 @@ export default class OracleInstanceManager {
     private provider: common.ConfigFileAuthenticationDetailsProvider;
     private identityClient: identity.IdentityClient;
     private computeManagementClient: core.ComputeManagementClient;
+    private jibriTracker: JibriTracker;
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
+        this.jibriTracker = options.jibriTracker;
         this.provider = new common.ConfigFileAuthenticationDetailsProvider(
             options.ociConfigurationFilePath,
             options.ociConfigurationProfile,
@@ -42,78 +46,98 @@ export default class OracleInstanceManager {
         this.getFaultDomains = this.getFaultDomains.bind(this);
     }
 
-    async launchInstances(group: InstanceGroup, groupCurrentCount: number, quantity: number): Promise<boolean> {
-        const groupName = group.name;
-        const groupInstanceConfigurationId = group.instanceConfigurationId;
-        logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${groupName}`);
+    async launchInstances(group: InstanceGroup, groupCurrentCount: number, quantity: number): Promise<void> {
+        logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
 
         this.computeManagementClient.regionId = group.region;
-
         const availabilityDomains: string[] = await this.getAvailabilityDomains(group.compartmentId, group.region);
 
+        const indexes: Array<number> = [];
         for (let i = 0; i < quantity; i++) {
-            logger.info(`[oracle] Gathering properties for launching instance ${i} in group ${groupName}`);
-
-            const adIndex: number = (groupCurrentCount + i + 1) % availabilityDomains.length;
-            const availabilityDomain = availabilityDomains[adIndex];
-            //TODO get instance count per ADs, so that FD can be distributed evenly
-            const faultDomains: string[] = await this.getFaultDomains(
-                group.compartmentId,
-                group.region,
-                availabilityDomain,
-            );
-            const fdIndex: number = (groupCurrentCount + i + 1) % faultDomains.length;
-            const faultDomain = faultDomains[fdIndex];
-            const displayName = groupName + '-' + makeRandomString(5);
-            const freeformTags = {
-                group: groupName,
-            };
-
-            const overwriteLaunchDetails: core.models.InstanceConfigurationLaunchInstanceDetails = {
-                    availabilityDomain: availabilityDomain,
-                    displayName: displayName,
-                    freeformTags: freeformTags,
-                },
-                overwriteComputeInstanceDetails: core.models.ComputeInstanceDetails = {
-                    launchDetails: overwriteLaunchDetails,
-                    instanceType: 'compute',
-                };
-
-            logger.info(`[oracle] Launching instance ${i} in group ${groupName} with properties`, {
-                groupName,
-                availabilityDomain,
-                faultDomain,
-                displayName,
-                groupInstanceConfigurationId,
-                overwriteComputeInstanceDetails,
-            });
-
-            if (this.isDryRun) {
-                logger.debug('[oracle] Dry run enabled, skipping the instance launch');
-                return;
-            }
-            this.computeManagementClient
-                .launchInstanceConfiguration({
-                    instanceConfigurationId: groupInstanceConfigurationId,
-                    instanceConfiguration: overwriteComputeInstanceDetails,
-                })
-                .then((launchResponse) => {
-                    logger.info(`[oracle] Got launch response for instance ${i} in group ${groupName}`, launchResponse);
-                    //TODO interpret/wait for launch final status?
-                })
-                .catch((launchFailedReason) => {
-                    logger.error(
-                        `[oracle] Failed launching instance  instance ${i} in group ${groupName}`,
-                        launchFailedReason,
-                    );
-                });
+            indexes.push(i);
         }
 
-        return true;
+        await Promise.all(
+            indexes.map((index) => {
+                this.launchInstance(index, group, groupCurrentCount, availabilityDomains);
+            }),
+        );
+        logger.info(`Finished launching all the instances in group ${group.name}`);
+    }
+
+    async launchInstance(
+        index: number,
+        group: InstanceGroup,
+        groupCurrentCount: number,
+        availabilityDomains: string[],
+    ): Promise<void> {
+        const groupName = group.name;
+        const groupInstanceConfigurationId = group.instanceConfigurationId;
+        logger.info(`[oracle] Gathering properties for launching instance ${index} in group ${groupName}`);
+
+        const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
+        const availabilityDomain = availabilityDomains[adIndex];
+        //TODO get instance count per ADs, so that FD can be distributed evenly
+        const faultDomains: string[] = await this.getFaultDomains(
+            group.compartmentId,
+            group.region,
+            availabilityDomain,
+        );
+        const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
+        const faultDomain = faultDomains[fdIndex];
+        const displayName = groupName + '-' + makeRandomString(5);
+        const freeformTags = {
+            group: groupName,
+        };
+
+        const overwriteLaunchDetails: core.models.InstanceConfigurationLaunchInstanceDetails = {
+                availabilityDomain: availabilityDomain,
+                displayName: displayName,
+                freeformTags: freeformTags,
+            },
+            overwriteComputeInstanceDetails: core.models.ComputeInstanceDetails = {
+                launchDetails: overwriteLaunchDetails,
+                instanceType: 'compute',
+            };
+
+        logger.info(`[oracle] Launching instance ${index} in group ${groupName} with properties`, {
+            groupName,
+            availabilityDomain,
+            faultDomain,
+            displayName,
+            groupInstanceConfigurationId,
+            overwriteComputeInstanceDetails,
+        });
+
+        if (this.isDryRun) {
+            logger.debug('[oracle] Dry run enabled, skipping the instance launch');
+            return;
+        }
+        try {
+            const launchResponse = await this.computeManagementClient.launchInstanceConfiguration({
+                instanceConfigurationId: groupInstanceConfigurationId,
+                instanceConfiguration: overwriteComputeInstanceDetails,
+            });
+            logger.info(`[oracle] Got launch response for instance ${index} in group ${groupName}`, launchResponse);
+            const state: JibriState = {
+                jibriId: launchResponse.instance.id,
+                status: {
+                    busyStatus: JibriStatusState.Provisioning,
+                    health: {
+                        healthStatus: JibriHealthState.Healthy,
+                    },
+                },
+                timestamp: Date.now(),
+                metadata: { group: groupName },
+            };
+            await this.jibriTracker.track(state);
+        } catch (err) {
+            logger.error(`[oracle] Failed launching instance ${index} in group ${groupName}`, err);
+        }
     }
 
     //TODO in the future, the list of ADs/FDs per region will be loaded once at startup time
-    async getAvailabilityDomains(compartmentId: string, region: string) {
+    async getAvailabilityDomains(compartmentId: string, region: string): Promise<string[]> {
         this.identityClient.regionId = region;
         const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse = await this.identityClient.listAvailabilityDomains(
             {

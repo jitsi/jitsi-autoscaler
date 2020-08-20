@@ -13,6 +13,7 @@ import InstanceGroupManager from './instance_group';
 import AutoscaleProcessor from './autoscaler';
 import InstanceLauncher from './instance_launcher';
 import LockManager from './lock_manager';
+import * as stats from './stats';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -123,6 +124,9 @@ const asapFetcher = new ASAPPubKeyFetcher(logger, config.AsapPubKeyBaseUrl, conf
 
 const h = new Handlers(jibriTracker, instanceStatus, instanceGroupManager, lockManager);
 
+const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
+app.use(loggedPaths, stats.middleware);
+stats.registerHandler(app, '/metrics');
 app.use(
     jwt({
         secret: asapFetcher.pubKeyCallback,
@@ -201,12 +205,6 @@ app.post('/groups/actions/reset', async (req, res, next) => {
         next(err);
     }
 });
-
-// async function pollForRequestUpdates() {
-//     await requestTracker.processUpdates(meetProcessor.updateProcessor);
-//     setTimeout(pollForRequestUpdates, 3000);
-// }
-// pollForRequestUpdates();
 
 app.listen(config.HTTPServerPort, () => {
     logger.info(`...listening on :${config.HTTPServerPort}`);

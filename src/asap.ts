@@ -18,7 +18,9 @@ class ASAPPubKeyFetcher {
         this.pubKeyCallback = this.pubKeyCallback.bind(this);
     }
 
+    /* eslint-disable */
     pubKeyCallback(req: Request, header: any, payload: any, done: (err: any, secret?: secretType) => void): void {
+        /* eslint-enable */
         if (!header.kid) {
             done(new Error('kid is required in header'), null);
             return;

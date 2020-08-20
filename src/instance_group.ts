@@ -50,7 +50,7 @@ export default class InstanceGroupManager {
 
     async init(): Promise<void> {
         logger.info('Initializing instance group manager...');
-        const result = await this.redisClient.scan(0, 'match', `${this.keyPrefix}*`);
+        const result = await this.redisClient.scan('0', 'match', `${this.keyPrefix}*`);
         if (result[1].length == 0) {
             logger.info('Storing instance groups into redis');
             await Promise.all(this.initialGroupList.map(this.upsertInstanceGroup));

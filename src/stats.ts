@@ -32,7 +32,10 @@ export function middleware(req: express.Request, res: express.Response, next: ex
         if (!statted) {
             statted = true;
             const delta = process.hrtime(start);
-            const uri = req.route.path.replace(':', '');
+            let uri = 'unknown';
+            if (req.route) {
+                uri = req.route.path.replace(':', '');
+            }
             requestDuration.observe({ method, uri }, delta[0] + delta[1] / 1e9);
 
             const code = res.statusCode;

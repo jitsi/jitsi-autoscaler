@@ -6,7 +6,7 @@ import Handlers from './handlers';
 import Redis from 'ioredis';
 import logger from './logger';
 import shortid from 'shortid';
-import { ASAPPubKeyFetcher, unauthErrMiddleware } from './asap';
+import { ASAPPubKeyFetcher } from './asap';
 import jwt from 'express-jwt';
 import { JibriTracker } from './jibri_tracker';
 import CloudManager from './cloud_manager';
@@ -138,7 +138,6 @@ const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use(loggedPaths, context.injectContext);
 app.use(loggedPaths, context.accessLogger);
-app.use(loggedPaths, unauthErrMiddleware);
 stats.registerHandler(app, '/metrics');
 app.use(
     jwt({
@@ -151,6 +150,23 @@ app.use(
         return !config.ProtectedApi;
     }),
 );
+// This is placed last in the middleware chain and is our default error handler.
+app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // If the headers have already been sent then we must use
+    // the built-in default error handler according to
+    // https://expressjs.com/en/guide/error-handling.html
+    if (res.headersSent) {
+        return next(err);
+    }
+
+    if (err.name === 'UnauthorizedError') {
+        req.context.logger.info(`unauthorized token ${err}`);
+        res.status(401).send('invalid token...');
+    } else {
+        req.context.logger.error(`internal error ${err}`);
+        res.status(500).send('internal server error');
+    }
+});
 
 if (config.ProtectedApi) {
     logger.debug('starting in protected api mode');

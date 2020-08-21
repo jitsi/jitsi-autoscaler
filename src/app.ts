@@ -95,6 +95,7 @@ const autoscaleProcessor = new AutoscaleProcessor({
 const instanceLauncher = new InstanceLauncher({
     jibriTracker: jibriTracker,
     cloudManager: cloudManager,
+    instanceStatus: instanceStatus,
     instanceGroupManager: instanceGroupManager,
     lockManager: lockManager,
     redisClient,
@@ -126,7 +127,7 @@ async function pollForLaunching(instanceLauncher: InstanceLauncher) {
         id: pollId,
     });
     const ctx = new context.Context(pollLogger, start, pollId);
-    await instanceLauncher.launchInstances(ctx);
+    await instanceLauncher.launchOrShutdownInstances(ctx);
     setTimeout(pollForLaunching.bind(null, instanceLauncher), config.AutoscalerInterval * 1000);
 }
 

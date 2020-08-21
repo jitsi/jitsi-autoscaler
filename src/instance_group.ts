@@ -46,12 +46,13 @@ export default class InstanceGroupManager {
         this.getAllInstanceGroups = this.getAllInstanceGroups.bind(this);
         this.upsertInstanceGroup = this.upsertInstanceGroup.bind(this);
         this.resetInstanceGroups = this.resetInstanceGroups.bind(this);
+        this.existsAtLeastOneGroup = this.existsAtLeastOneGroup.bind(this);
     }
 
     async init(): Promise<void> {
         logger.info('Initializing instance group manager...');
-        const result = await this.redisClient.scan('0', 'match', `${this.keyPrefix}*`);
-        if (result[1].length == 0) {
+        const existsAtLeastOneGroup = await this.existsAtLeastOneGroup();
+        if (!existsAtLeastOneGroup) {
             logger.info('Storing instance groups into redis');
             await Promise.all(this.initialGroupList.map(this.upsertInstanceGroup));
             logger.info('Stored instance groups into redis');
@@ -62,6 +63,22 @@ export default class InstanceGroupManager {
 
     getGroupKey(groupName: string): string {
         return this.keyPrefix + groupName;
+    }
+
+    async existsAtLeastOneGroup(): Promise<boolean> {
+        let cursor = '0';
+        do {
+            const result = await this.redisClient.scan(cursor, 'match', `${this.keyPrefix}*`);
+            cursor = result[0];
+            if (result[1].length > 0) {
+                const items = await this.redisClient.mget(...result[1]);
+                if (items.length > 0) {
+                    return true;
+                }
+            }
+        } while (cursor != '0');
+
+        return false;
     }
 
     async upsertInstanceGroup(group: InstanceGroup): Promise<void> {

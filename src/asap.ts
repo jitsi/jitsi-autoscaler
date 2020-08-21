@@ -1,7 +1,7 @@
 import got from 'got';
 import sha256 from 'sha256';
 import NodeCache from 'node-cache';
-import { Request, Response, NextFunction } from 'express';
+import { Request } from 'express';
 import { secretType } from 'express-jwt';
 
 export class ASAPPubKeyFetcher {
@@ -41,15 +41,6 @@ export class ASAPPubKeyFetcher {
                 done(err);
             });
     }
-}
-
-export function unauthErrMiddleware(err: Error, req: Request, res: Response, next: NextFunction): void {
-    if (err.name === 'UnauthorizedError') {
-        req.context.logger.info(`unauthorized token ${err}`);
-        res.status(401).send('invalid token...');
-    }
-    // @TODO: ensure that handler is not being called after this.
-    next();
 }
 
 async function fetchPublicKey(baseUrl: string, kid: string): Promise<string> {

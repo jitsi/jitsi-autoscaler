@@ -49,7 +49,7 @@ export default class InstanceGroupManager {
         this.existsAtLeastOneGroup = this.existsAtLeastOneGroup.bind(this);
     }
 
-    async init(ctx: Context): Promise<number> {
+    async init(ctx: Context): Promise<void> {
         ctx.logger.info('Initializing instance group manager...');
         const existsAtLeastOneGroup = await this.existsAtLeastOneGroup();
         if (!existsAtLeastOneGroup) {
@@ -57,7 +57,6 @@ export default class InstanceGroupManager {
             await Promise.all(this.initialGroupList.map((group) => this.upsertInstanceGroup(ctx, group)));
             ctx.logger.info('Stored instance groups into redis');
         }
-        return result[1].length;
     }
 
     getGroupKey(groupName: string): string {

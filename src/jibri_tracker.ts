@@ -1,6 +1,7 @@
 import { Logger } from 'winston';
 import { Context } from './context';
 import Redis from 'ioredis';
+import ShutdownManager from './shutdown_manager';
 
 export enum JibriStatusState {
     Idle = 'IDLE',
@@ -43,6 +44,7 @@ export interface JibriMetric {
 
 export interface JibriTrackerOptions {
     redisClient: Redis.Redis;
+    shutdownManager: ShutdownManager;
     idleTTL: number;
     metricTTL: number;
     provisioningTTL: number;
@@ -50,6 +52,7 @@ export interface JibriTrackerOptions {
 
 export class JibriTracker {
     private redisClient: Redis.Redis;
+    private shutdownManager: ShutdownManager;
     private logger: Logger;
     private idleTTL: number;
     private provisioningTTL: number;
@@ -57,6 +60,7 @@ export class JibriTracker {
 
     constructor(options: JibriTrackerOptions) {
         this.redisClient = options.redisClient;
+        this.shutdownManager = options.shutdownManager;
         this.idleTTL = options.idleTTL;
         this.provisioningTTL = options.provisioningTTL;
         this.metricTTL = options.metricTTL;
@@ -82,7 +86,10 @@ export class JibriTracker {
             throw new Error(`unable to set ${key}`);
         }
 
-        if (state.status.busyStatus != JibriStatusState.Provisioning) {
+        const isInstanceShuttingDown = (await this.filterOutInstancesShuttingDown(ctx, [state])).length == 0;
+
+        // Store metric, but only for running instances
+        if (state.status.busyStatus != JibriStatusState.Provisioning && !isInstanceShuttingDown) {
             let metricTimestamp = Number(state.timestamp);
             if (!metricTimestamp) {
                 metricTimestamp = Date.now();
@@ -212,6 +219,28 @@ export class JibriTracker {
         } while (cursor != '0');
         ctx.logger.debug(`jibri states: ${states}`, { group, states });
 
-        return states;
+        const statesExceptShutDown = await this.filterOutInstancesShuttingDown(ctx, states);
+        ctx.logger.debug(`jibri filtered states, with no shutdown instances: ${statesExceptShutDown}`, {
+            group,
+            statesExceptShutDown,
+        });
+
+        return statesExceptShutDown;
+    }
+
+    async filterOutInstancesShuttingDown(ctx: Context, states: Array<JibriState>): Promise<Array<JibriState>> {
+        const statesShutdownStatus: boolean[] = await Promise.all(
+            states.map((jibriState) => {
+                return (
+                    jibriState.shutdownStatus ||
+                    this.shutdownManager.getShutdownStatus(ctx, {
+                        instanceId: jibriState.jibriId,
+                        instanceType: 'jibri',
+                    })
+                );
+            }),
+        );
+
+        return states.filter((jibriState, index) => !statesShutdownStatus[index]);
     }
 }

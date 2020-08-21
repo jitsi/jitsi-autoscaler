@@ -36,23 +36,23 @@ export default class AutoscaleProcessor {
     }
 
     async processAutoscaling(ctx: Context): Promise<boolean> {
-        ctx.logger.debug('Starting to process autoscaling activities');
-        ctx.logger.debug('Obtaining request lock in redis');
+        ctx.logger.debug('[autoScaler] Starting to process autoscaling activities');
+        ctx.logger.debug('[autoScaler] Obtaining request lock in redis');
 
         let lock: Redlock.Lock = undefined;
         try {
             lock = await this.lockManager.lockAutoscaleProcessing(ctx);
         } catch (err) {
-            ctx.logger.error(`Error obtaining lock for processing`, { err });
+            ctx.logger.warn(`[autoScaler] Error obtaining lock for processing`, { err });
             return false;
         }
 
         try {
             const instanceGroups: Array<InstanceGroup> = await this.instanceGroupManager.getAllInstanceGroups(ctx);
             await Promise.all(instanceGroups.map((group) => this.processAutoscalingByGroup(ctx, group)));
-            ctx.logger.debug('Stopped to process autoscaling activities');
+            ctx.logger.debug('[autoScaler] Stopped to process autoscaling activities');
         } catch (err) {
-            ctx.logger.error(`Processing autoscaling ${err}`);
+            ctx.logger.error(`[autoScaler] Processing request ${err}`);
         } finally {
             lock.unlock();
         }
@@ -64,15 +64,15 @@ export default class AutoscaleProcessor {
         const count = currentInventory.length;
 
         if (!group.enableAutoScale) {
-            ctx.logger.info(`Autoscaling not enabled for group ${group.name}`);
+            ctx.logger.info(`[autoScaler] Autoscaling not enabled for group ${group.name}`);
             return;
         }
         const autoscalingAllowed = await this.instanceGroupManager.allowAutoscaling(group.name);
         if (!autoscalingAllowed) {
-            ctx.logger.info(`Wait before allowing another autoscaling activity for group ${group.name}`);
+            ctx.logger.info(`[autoScaler] Wait before allowing desired count adjustments for group ${group.name}`);
             return;
         } else {
-            ctx.logger.info(`Evaluating scale computed metrics for group ${group.name}`);
+            ctx.logger.info(`[autoScaler] Gathering metrics for desired count adjustments for group ${group.name}`);
         }
 
         const maxPeriodCount = Math.max(
@@ -99,7 +99,7 @@ export default class AutoscaleProcessor {
         );
 
         ctx.logger.info(
-            `[autoScaler] Making desired count adjustments for ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
+            `[autoScaler] Evaluating desired count adjustments for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
             { availableJibrisPerPeriodForScaleUp, availableJibrisPerPeriodForScaleDown },
         );
 

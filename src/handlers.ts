@@ -4,6 +4,7 @@ import { InstanceStatus, InstanceDetails, StatsReport } from './instance_status'
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import Redlock from 'redlock';
+import ShutdownManager from './shutdown_manager';
 
 interface SidecarResponse {
     shutdown: boolean;
@@ -12,12 +13,14 @@ interface SidecarResponse {
 class Handlers {
     private jibriTracker: JibriTracker;
     private instanceStatus: InstanceStatus;
+    private shutdownManager: ShutdownManager;
     private instanceGroupManager: InstanceGroupManager;
     private lockManager: LockManager;
 
     constructor(
         jibriTracker: JibriTracker,
         instanceStatus: InstanceStatus,
+        shutdownManager: ShutdownManager,
         instanceGroupManager: InstanceGroupManager,
         lockManager: LockManager,
     ) {
@@ -28,6 +31,7 @@ class Handlers {
         this.jibriTracker = jibriTracker;
         this.instanceStatus = instanceStatus;
         this.instanceGroupManager = instanceGroupManager;
+        this.shutdownManager = shutdownManager;
     }
 
     async jibriStateWebhook(req: Request, res: Response): Promise<void> {
@@ -47,7 +51,7 @@ class Handlers {
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
-        const shutdownStatus = await this.instanceStatus.getShutdownStatus(req.context, details);
+        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, details);
 
         const sendResponse: SidecarResponse = { shutdown: shutdownStatus };
 

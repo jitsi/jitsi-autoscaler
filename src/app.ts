@@ -16,6 +16,7 @@ import AutoscaleProcessor from './autoscaler';
 import InstanceLauncher from './instance_launcher';
 import LockManager from './lock_manager';
 import * as stats from './stats';
+import ShutdownManager from './shutdown_manager';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -47,8 +48,14 @@ if (config.RedisTLS) {
 
 const redisClient = new Redis(redisOptions);
 
+const shutdownManager = new ShutdownManager({
+    redisClient,
+    shutdownTTL: config.ShutDownTTL,
+});
+
 const jibriTracker = new JibriTracker({
     redisClient,
+    shutdownManager: shutdownManager,
     idleTTL: config.IdleTTL,
     metricTTL: config.MetricTTL,
     provisioningTTL: config.ProvisioningTTL,
@@ -57,7 +64,7 @@ const jibriTracker = new JibriTracker({
 const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
 
 const cloudManager = new CloudManager({
-    instanceStatus: instanceStatus,
+    shutdownManager: shutdownManager,
     isDryRun: config.DryRun,
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
@@ -126,13 +133,13 @@ async function pollForLaunching(instanceLauncher: InstanceLauncher) {
         id: pollId,
     });
     const ctx = new context.Context(pollLogger, start, pollId);
-    await instanceLauncher.launchInstances(ctx);
+    await instanceLauncher.launchOrShutdownInstances(ctx);
     setTimeout(pollForLaunching.bind(null, instanceLauncher), config.AutoscalerInterval * 1000);
 }
 
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
-const h = new Handlers(jibriTracker, instanceStatus, instanceGroupManager, lockManager);
+const h = new Handlers(jibriTracker, instanceStatus, shutdownManager, instanceGroupManager, lockManager);
 
 const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);

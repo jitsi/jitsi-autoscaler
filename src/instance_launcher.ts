@@ -29,62 +29,57 @@ export default class InstanceLauncher {
         this.lockManager = options.lockManager;
         this.redisClient = options.redisClient;
 
-        this.launchInstances = this.launchInstances.bind(this);
-        this.launchInstancesByGroup = this.launchInstancesByGroup.bind(this);
+        this.launchOrShutdownInstances = this.launchOrShutdownInstances.bind(this);
+        this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
     }
 
-    async launchInstances(ctx: Context): Promise<boolean> {
-        ctx.logger.debug('Starting to process instance launcher activities');
-        ctx.logger.debug('Obtaining request lock in redis');
+    async launchOrShutdownInstances(ctx: Context): Promise<boolean> {
+        ctx.logger.debug('[Launcher] Starting to process scaling activities');
+        ctx.logger.debug('[Launcher] Obtaining request lock in redis');
 
         let lock: Redlock.Lock = undefined;
         try {
             lock = await this.lockManager.lockScaleProcessing(ctx);
         } catch (err) {
-            ctx.logger.error(`Error obtaining lock for processing`, { err });
+            ctx.logger.warn(`[Launcher] Error obtaining lock for processing`, { err });
             return false;
         }
 
         try {
             const instanceGroups: Array<InstanceGroup> = await this.instanceGroupManager.getAllInstanceGroups(ctx);
-            await Promise.all(instanceGroups.map((group) => this.launchInstancesByGroup(ctx, group)));
-            ctx.logger.debug('Stopped to process scaling activities');
+            await Promise.all(instanceGroups.map((group) => this.launchOrShutdownInstancesByGroup(ctx, group)));
+            ctx.logger.debug('[Launcher] Stopped to process scaling activities');
         } catch (err) {
-            ctx.logger.error(`Processing launch instances ${err}`);
+            ctx.logger.error(`[Launcher] Processing launch instances ${err}`);
         } finally {
             lock.unlock();
         }
         return true;
     }
 
-    async launchInstancesByGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
+    async launchOrShutdownInstancesByGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
         const groupName = group.name;
         const desiredCount = group.scalingOptions.desiredCount;
         const currentInventory = await this.jibriTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;
 
         if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
-            ctx.logger.info('Will scale up to the desired count', { groupName, desiredCount, count });
+            ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });
 
             const actualScaleUpQuantity =
                 Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
             await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity);
         } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
-            const scalingAllowed = await this.instanceGroupManager.allowScaling(groupName);
-            if (!scalingAllowed) {
-                ctx.logger.info(`Wait before allowing another scale down for group ${groupName}`);
-                return;
-            }
-            ctx.logger.info('Will scale down to the desired count', { groupName, desiredCount, count });
+            ctx.logger.info('[Launcher] Will scale down to the desired count', { groupName, desiredCount, count });
 
             const actualScaleDownQuantity =
                 count - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
+
             const availableInstances = this.getAvailableJibris(currentInventory);
             const scaleDownInstances = availableInstances.slice(0, actualScaleDownQuantity);
             await this.cloudManager.scaleDown(ctx, group, scaleDownInstances);
-            await this.instanceGroupManager.setScaleGracePeriod(group);
         } else {
-            ctx.logger.info(`No scaling activity needed for group ${groupName} with ${count} instances.`);
+            ctx.logger.info(`[Launcher] No scaling activity needed for group ${groupName} with ${count} instances.`);
         }
 
         return true;

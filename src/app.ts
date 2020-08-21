@@ -80,14 +80,9 @@ const start = Date.now();
 const initId = shortid.generate();
 const initLogger = logger.child({ id: initId });
 const initCtx = new context.Context(initLogger, start, initId);
-instanceGroupManager
-    .init(initCtx)
-    .then((initCount) => {
-        logger.info(`initialized redis with ${initCount} instance groups`);
-    })
-    .catch((err) => {
-        logger.info('Failed initializing list of groups', { err });
-    });
+instanceGroupManager.init(initCtx).catch((err) => {
+    logger.info('Failed initializing list of groups', { err });
+});
 
 const autoscaleProcessor = new AutoscaleProcessor({
     jibriTracker: jibriTracker,

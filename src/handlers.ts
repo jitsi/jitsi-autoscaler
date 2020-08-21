@@ -41,13 +41,13 @@ class Handlers {
             return;
         }
 
-        await this.jibriTracker.track(status);
+        await this.jibriTracker.track(req.context, status);
         res.sendStatus(200);
     }
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
-        const shutdownStatus = await this.instanceStatus.getShutdownStatus(details);
+        const shutdownStatus = await this.instanceStatus.getShutdownStatus(req.context, details);
 
         const sendResponse: SidecarResponse = { shutdown: shutdownStatus };
 
@@ -57,7 +57,7 @@ class Handlers {
 
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        await this.instanceStatus.stats(report);
+        await this.instanceStatus.stats(req.context, report);
 
         res.status(200);
         res.send({ save: 'OK' });
@@ -70,9 +70,9 @@ class Handlers {
             res.send({ errors: ['The request param group name must match group name in the body'] });
             return;
         }
-        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing();
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
         try {
-            await this.instanceGroupManager.upsertInstanceGroup(instanceGroup);
+            await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
             this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
             res.status(200);
             res.send({ save: 'OK' });
@@ -82,16 +82,16 @@ class Handlers {
     }
 
     async getInstanceGroups(req: Request, res: Response): Promise<void> {
-        const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups();
+        const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(req.context);
 
         res.status(200);
         res.send({ instanceGroups: instanceGroups });
     }
 
     async deleteInstanceGroup(req: Request, res: Response): Promise<void> {
-        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing();
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
         try {
-            const instanceGroups = await this.instanceGroupManager.deleteInstanceGroup(req.params.name);
+            const instanceGroups = await this.instanceGroupManager.deleteInstanceGroup(req.context, req.params.name);
 
             res.status(200);
             res.send({ instanceGroups: instanceGroups });
@@ -101,9 +101,9 @@ class Handlers {
     }
 
     async resetInstanceGroups(req: Request, res: Response): Promise<void> {
-        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing();
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
         try {
-            await this.instanceGroupManager.resetInstanceGroups();
+            await this.instanceGroupManager.resetInstanceGroups(req.context);
 
             res.status(200);
             res.send({ reset: 'OK' });

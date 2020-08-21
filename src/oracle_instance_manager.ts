@@ -1,9 +1,9 @@
-import logger from './logger';
 import core = require('oci-core');
 import common = require('oci-common');
 import identity = require('oci-identity');
 import { InstanceGroup } from './instance_group';
 import { JibriHealthState, JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
+import { Context } from './context';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -46,8 +46,13 @@ export default class OracleInstanceManager {
         this.getFaultDomains = this.getFaultDomains.bind(this);
     }
 
-    async launchInstances(group: InstanceGroup, groupCurrentCount: number, quantity: number): Promise<void> {
-        logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
+    async launchInstances(
+        ctx: Context,
+        group: InstanceGroup,
+        groupCurrentCount: number,
+        quantity: number,
+    ): Promise<void> {
+        ctx.logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
 
         this.computeManagementClient.regionId = group.region;
         const availabilityDomains: string[] = await this.getAvailabilityDomains(group.compartmentId, group.region);
@@ -59,13 +64,14 @@ export default class OracleInstanceManager {
 
         await Promise.all(
             indexes.map((index) => {
-                this.launchInstance(index, group, groupCurrentCount, availabilityDomains);
+                this.launchInstance(ctx, index, group, groupCurrentCount, availabilityDomains);
             }),
         );
-        logger.info(`Finished launching all the instances in group ${group.name}`);
+        ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
     }
 
     async launchInstance(
+        ctx: Context,
         index: number,
         group: InstanceGroup,
         groupCurrentCount: number,
@@ -73,7 +79,7 @@ export default class OracleInstanceManager {
     ): Promise<void> {
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
-        logger.info(`[oracle] Gathering properties for launching instance ${index} in group ${groupName}`);
+        ctx.logger.info(`[oracle] Gathering properties for launching instance ${index} in group ${groupName}`);
 
         const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
         const availabilityDomain = availabilityDomains[adIndex];
@@ -100,7 +106,7 @@ export default class OracleInstanceManager {
                 instanceType: 'compute',
             };
 
-        logger.info(`[oracle] Launching instance ${index} in group ${groupName} with properties`, {
+        ctx.logger.info(`[oracle] Launching instance ${index} in group ${groupName} with properties`, {
             groupName,
             availabilityDomain,
             faultDomain,
@@ -110,7 +116,7 @@ export default class OracleInstanceManager {
         });
 
         if (this.isDryRun) {
-            logger.debug('[oracle] Dry run enabled, skipping the instance launch');
+            ctx.logger.debug('[oracle] Dry run enabled, skipping the instance launch');
             return;
         }
         try {
@@ -118,7 +124,7 @@ export default class OracleInstanceManager {
                 instanceConfigurationId: groupInstanceConfigurationId,
                 instanceConfiguration: overwriteComputeInstanceDetails,
             });
-            logger.info(`[oracle] Got launch response for instance ${index} in group ${groupName}`, launchResponse);
+            ctx.logger.info(`[oracle] Got launch response for instance ${index} in group ${groupName}`, launchResponse);
             const state: JibriState = {
                 jibriId: launchResponse.instance.id,
                 status: {
@@ -130,9 +136,9 @@ export default class OracleInstanceManager {
                 timestamp: Date.now(),
                 metadata: { group: groupName },
             };
-            await this.jibriTracker.track(state);
+            await this.jibriTracker.track(ctx, state);
         } catch (err) {
-            logger.error(`[oracle] Failed launching instance ${index} in group ${groupName}`, err);
+            ctx.logger.error(`[oracle] Failed launching instance ${index} in group ${groupName}`, err);
         }
     }
 

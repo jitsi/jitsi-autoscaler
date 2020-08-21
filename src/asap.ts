@@ -1,18 +1,15 @@
 import got from 'got';
 import sha256 from 'sha256';
 import NodeCache from 'node-cache';
-import { Request } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { secretType } from 'express-jwt';
-import { Logger } from 'winston';
 
-class ASAPPubKeyFetcher {
+export class ASAPPubKeyFetcher {
     private baseUrl: string;
     private ttl: number;
     private cache: NodeCache;
-    private logger: Logger;
 
-    constructor(logger: Logger, baseUrl: string, ttl: number) {
-        this.logger = logger;
+    constructor(baseUrl: string, ttl: number) {
         this.baseUrl = baseUrl;
         this.cache = new NodeCache({ stdTTL: ttl });
         this.pubKeyCallback = this.pubKeyCallback.bind(this);
@@ -29,21 +26,30 @@ class ASAPPubKeyFetcher {
         const pubKey: string = this.cache.get(header.kid);
 
         if (pubKey) {
-            this.logger.debug('using pub key from cache');
+            req.context.logger.debug('using pub key from cache');
             done(null, pubKey);
         }
 
-        this.logger.debug('fetching pub key from key server');
+        req.context.logger.debug('fetching pub key from key server');
         fetchPublicKey(this.baseUrl, header.kid)
             .then((pubKey) => {
                 this.cache.set(header.kid, pubKey);
                 done(null, pubKey);
             })
             .catch((err) => {
-                this.logger.error(`obtaining asap pub ${err}`);
+                req.context.logger.error(`obtaining asap pub ${err}`);
                 done(err);
             });
     }
+}
+
+export function unauthErrMiddleware(err: Error, req: Request, res: Response, next: NextFunction): void {
+    if (err.name === 'UnauthorizedError') {
+        req.context.logger.info(`unauthorized token ${err}`);
+        res.status(401).send('invalid token...');
+    }
+    // @TODO: ensure that handler is not being called after this.
+    next();
 }
 
 async function fetchPublicKey(baseUrl: string, kid: string): Promise<string> {
@@ -52,5 +58,3 @@ async function fetchPublicKey(baseUrl: string, kid: string): Promise<string> {
     const response = await got(reqUrl);
     return response.body;
 }
-
-export default ASAPPubKeyFetcher;

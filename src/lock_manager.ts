@@ -1,6 +1,7 @@
 import Redis from 'ioredis';
 import Redlock from 'redlock';
-import logger from './logger';
+import { Logger } from 'winston';
+import { Context } from './context';
 
 export interface LockManagerOptions {
     redisClient: Redis.Redis;
@@ -13,10 +14,12 @@ export default class LockManager {
     private groupProcessingLockManager: Redlock;
     private autoscalerProcessingLockTTL: number;
     private scalerProcessingLockTTL: number;
+    private logger: Logger;
     private static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
     private static readonly scalerProcessingLockKey = 'scalerLockKey';
 
-    constructor(options: LockManagerOptions) {
+    constructor(logger: Logger, options: LockManagerOptions) {
+        this.logger = logger;
         this.redisClient = options.redisClient;
         this.autoscalerProcessingLockTTL = options.autoscalerProcessingLockTTL;
         this.scalerProcessingLockTTL = options.scalerProcessingLockTTL;
@@ -32,27 +35,27 @@ export default class LockManager {
         );
 
         this.groupProcessingLockManager.on('clientError', (err) => {
-            logger.error('A redis error has occurred on the autoscalerLock:', err);
+            this.logger.error('A redis error has occurred on the autoscalerLock:', err);
         });
     }
 
-    async lockAutoscaleProcessing(): Promise<Redlock.Lock> {
-        logger.debug(`Obtaining lock ${LockManager.autoscalerProcessingLockKey}`);
+    async lockAutoscaleProcessing(ctx: Context): Promise<Redlock.Lock> {
+        ctx.logger.debug(`Obtaining lock ${LockManager.autoscalerProcessingLockKey}`);
         const lock = await this.groupProcessingLockManager.lock(
             LockManager.autoscalerProcessingLockKey,
             this.autoscalerProcessingLockTTL,
         );
-        logger.debug(`Lock obtained for ${LockManager.autoscalerProcessingLockKey}`);
+        ctx.logger.debug(`Lock obtained for ${LockManager.autoscalerProcessingLockKey}`);
         return lock;
     }
 
-    async lockScaleProcessing(): Promise<Redlock.Lock> {
-        logger.debug(`Obtaining lock ${LockManager.scalerProcessingLockKey}`);
+    async lockScaleProcessing(ctx: Context): Promise<Redlock.Lock> {
+        ctx.logger.debug(`Obtaining lock ${LockManager.scalerProcessingLockKey}`);
         const lock = await this.groupProcessingLockManager.lock(
             LockManager.scalerProcessingLockKey,
             this.scalerProcessingLockTTL,
         );
-        logger.debug(`Lock obtained for ${LockManager.scalerProcessingLockKey}`);
+        ctx.logger.debug(`Lock obtained for ${LockManager.scalerProcessingLockKey}`);
         return lock;
     }
 }

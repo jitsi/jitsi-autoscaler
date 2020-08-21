@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import logger from './logger';
+import { Context } from './context';
 
 export interface ScalingOptions {
     minDesired: number;
@@ -49,16 +49,15 @@ export default class InstanceGroupManager {
         this.existsAtLeastOneGroup = this.existsAtLeastOneGroup.bind(this);
     }
 
-    async init(): Promise<void> {
-        logger.info('Initializing instance group manager...');
+    async init(ctx: Context): Promise<number> {
+        ctx.logger.info('Initializing instance group manager...');
         const existsAtLeastOneGroup = await this.existsAtLeastOneGroup();
         if (!existsAtLeastOneGroup) {
-            logger.info('Storing instance groups into redis');
-            await Promise.all(this.initialGroupList.map(this.upsertInstanceGroup));
-            logger.info('Stored instance groups into redis');
+            ctx.logger.info('Storing instance groups into redis');
+            await Promise.all(this.initialGroupList.map((group) => this.upsertInstanceGroup(ctx, group)));
+            ctx.logger.info('Stored instance groups into redis');
         }
-
-        logger.info('Instance group manager initialized.');
+        return result[1].length;
     }
 
     getGroupKey(groupName: string): string {
@@ -81,8 +80,8 @@ export default class InstanceGroupManager {
         return false;
     }
 
-    async upsertInstanceGroup(group: InstanceGroup): Promise<void> {
-        logger.info(`Storing ${group.name}`);
+    async upsertInstanceGroup(ctx: Context, group: InstanceGroup): Promise<void> {
+        ctx.logger.info(`Storing ${group.name}`);
         const groupKey = this.getGroupKey(group.name);
         const result = await this.redisClient.set(groupKey, JSON.stringify(group));
         if (result !== 'OK') {
@@ -100,7 +99,7 @@ export default class InstanceGroupManager {
         }
     }
 
-    async getAllInstanceGroups(): Promise<Array<InstanceGroup>> {
+    async getAllInstanceGroups(ctx: Context): Promise<Array<InstanceGroup>> {
         let items: Array<string> = [];
         const instanceGroups: Array<InstanceGroup> = [];
 
@@ -116,27 +115,27 @@ export default class InstanceGroupManager {
                 });
             }
         } while (cursor != '0');
-        logger.debug(`jibri groups are`, { instanceGroups });
+        ctx.logger.debug(`jibri groups are`, { instanceGroups });
         return instanceGroups;
     }
 
-    async deleteInstanceGroup(groupName: string): Promise<void> {
-        logger.info(`Deleting group ${groupName}`);
+    async deleteInstanceGroup(ctx: Context, groupName: string): Promise<void> {
+        ctx.logger.info(`Deleting group ${groupName}`);
         const groupKey = this.getGroupKey(groupName);
         await this.redisClient.del(groupKey);
-        logger.info(`Group ${groupName} is deleted`);
+        ctx.logger.info(`Group ${groupName} is deleted`);
     }
 
-    async resetInstanceGroups(): Promise<void> {
-        logger.info('Resetting instance groups');
+    async resetInstanceGroups(ctx: Context): Promise<void> {
+        ctx.logger.info('Resetting instance groups');
 
-        logger.info('Deleting all instance groups');
-        const instanceGroups = await this.getAllInstanceGroups();
-        await Promise.all(instanceGroups.map((group) => this.deleteInstanceGroup(group.name)));
-        logger.info('Storing instance groups into redis');
-        await Promise.all(this.initialGroupList.map(this.upsertInstanceGroup));
+        ctx.logger.info('Deleting all instance groups');
+        const instanceGroups = await this.getAllInstanceGroups(ctx);
+        await Promise.all(instanceGroups.map((group) => this.deleteInstanceGroup(ctx, group.name)));
+        ctx.logger.info('Storing instance groups into redis');
+        await Promise.all(this.initialGroupList.map((group) => this.upsertInstanceGroup(ctx, group)));
 
-        logger.info('Instance groups are now reset');
+        ctx.logger.info('Instance groups are now reset');
     }
 
     async allowAutoscaling(group: string): Promise<boolean> {

@@ -32,6 +32,7 @@ export interface JibriState {
     status: JibriStatus;
     timestamp?: number;
     metadata: JibriMetaData;
+    shutdownStatus?: boolean;
 }
 
 export interface JibriMetric {

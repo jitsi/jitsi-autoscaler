@@ -17,6 +17,7 @@ export interface StatsReport {
     instance: InstanceDetails;
     timestamp?: number;
     stats: unknown;
+    shutdownStatus?: boolean;
 }
 
 export interface InstanceStatusOptions {
@@ -75,6 +76,7 @@ export class InstanceStatus {
                     jibriId: report.instance.instanceId,
                     status: jibriStats.status,
                     timestamp: report.timestamp,
+                    shutdownStatus: report.shutdownStatus,
                     metadata: <JibriMetaData>{ ...report.instance },
                 };
                 ctx.logger.debug('Tracking jibri state', { state: jibriState });

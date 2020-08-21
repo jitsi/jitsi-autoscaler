@@ -159,11 +159,17 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
         return next(err);
     }
 
+    let l = logger;
+
+    if (req.context && req.context.logger) {
+        l = req.context.logger;
+    }
+
     if (err.name === 'UnauthorizedError') {
-        req.context.logger.info(`unauthorized token ${err}`);
+        l.info(`unauthorized token ${err}`);
         res.status(401).send('invalid token...');
     } else {
-        req.context.logger.error(`internal error ${err}`);
+        l.error(`internal error ${err}`);
         res.status(500).send('internal server error');
     }
 });

@@ -52,7 +52,7 @@ export default class AutoscaleProcessor {
             await Promise.all(instanceGroups.map((group) => this.processAutoscalingByGroup(ctx, group)));
             ctx.logger.debug('Stopped to process autoscaling activities');
         } catch (err) {
-            ctx.logger.error(`Processing request ${err}`);
+            ctx.logger.error(`Processing autoscaling ${err}`);
         } finally {
             lock.unlock();
         }
@@ -60,7 +60,7 @@ export default class AutoscaleProcessor {
     }
 
     async processAutoscalingByGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
-        const currentInventory = await this.jibriTracker.getCurrent(group.name);
+        const currentInventory = await this.jibriTracker.getCurrent(ctx, group.name);
         const count = currentInventory.length;
 
         if (!group.enableAutoScale) {
@@ -80,17 +80,20 @@ export default class AutoscaleProcessor {
             group.scalingOptions.scaleDownPeriodsCount,
         );
         const metricInventoryPerPeriod: Array<Array<JibriMetric>> = await this.jibriTracker.getMetricInventoryPerPeriod(
+            ctx,
             group.name,
             maxPeriodCount,
             group.scalingOptions.scalePeriod,
         );
 
         const availableJibrisPerPeriodForScaleUp: Array<number> = await this.jibriTracker.getAvailableMetricPerPeriod(
+            ctx,
             metricInventoryPerPeriod,
             group.scalingOptions.scaleUpPeriodsCount,
         );
 
         const availableJibrisPerPeriodForScaleDown: Array<number> = await this.jibriTracker.getAvailableMetricPerPeriod(
+            ctx,
             metricInventoryPerPeriod,
             group.scalingOptions.scaleDownPeriodsCount,
         );

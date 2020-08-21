@@ -114,10 +114,11 @@ export class JibriTracker {
     }
 
     async getAvailableMetricPerPeriod(
+        ctx: Context,
         metricInventoryPerPeriod: Array<Array<JibriMetric>>,
         periodCount: number,
     ): Promise<Array<number>> {
-        this.logger.debug(`Getting available metric per period for  ${periodCount} periods`, {
+        ctx.logger.debug(`Getting available metric per period for  ${periodCount} periods`, {
             metricInventoryPerPeriod,
         });
 
@@ -127,6 +128,7 @@ export class JibriTracker {
     }
 
     async getMetricInventoryPerPeriod(
+        ctx: Context,
         group: string,
         periodsCount: number,
         periodDurationSeconds: number,
@@ -155,7 +157,7 @@ export class JibriTracker {
                 });
             }
         } while (cursor != '0');
-        this.logger.debug(`jibri metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });
+        ctx.logger.debug(`jibri metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });
 
         return metricPoints;
     }
@@ -193,7 +195,7 @@ export class JibriTracker {
         }
     }
 
-    async getCurrent(group: string): Promise<Array<JibriState>> {
+    async getCurrent(ctx: Context, group: string): Promise<Array<JibriState>> {
         const states: Array<JibriState> = [];
         let items: Array<string> = [];
 
@@ -208,7 +210,7 @@ export class JibriTracker {
                 });
             }
         } while (cursor != '0');
-        this.logger.debug(`jibri states: ${states}`, { group, states });
+        ctx.logger.debug(`jibri states: ${states}`, { group, states });
 
         return states;
     }

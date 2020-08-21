@@ -17,7 +17,7 @@ export interface InstanceLauncherOptions {
 
 export default class InstanceLauncher {
     private jibriTracker: JibriTracker;
-    private instaceGroupManager: InstanceGroupManager;
+    private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
     private redisClient: Redis.Redis;
     private lockManager: LockManager;
@@ -25,7 +25,7 @@ export default class InstanceLauncher {
     constructor(options: InstanceLauncherOptions) {
         this.jibriTracker = options.jibriTracker;
         this.cloudManager = options.cloudManager;
-        this.instaceGroupManager = options.instanceGroupManager;
+        this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
         this.redisClient = options.redisClient;
 
@@ -34,7 +34,7 @@ export default class InstanceLauncher {
     }
 
     async launchInstances(ctx: Context): Promise<boolean> {
-        ctx.logger.debug('Starting to process scaling activities');
+        ctx.logger.debug('Starting to process instance launcher activities');
         ctx.logger.debug('Obtaining request lock in redis');
 
         let lock: Redlock.Lock = undefined;
@@ -46,11 +46,11 @@ export default class InstanceLauncher {
         }
 
         try {
-            const instanceGroups: Array<InstanceGroup> = await this.instaceGroupManager.getAllInstanceGroups(ctx);
+            const instanceGroups: Array<InstanceGroup> = await this.instanceGroupManager.getAllInstanceGroups(ctx);
             await Promise.all(instanceGroups.map((group) => this.launchInstancesByGroup(ctx, group)));
             ctx.logger.debug('Stopped to process scaling activities');
         } catch (err) {
-            ctx.logger.error(`Processing request ${err}`);
+            ctx.logger.error(`Processing launch instances ${err}`);
         } finally {
             lock.unlock();
         }
@@ -60,7 +60,7 @@ export default class InstanceLauncher {
     async launchInstancesByGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
         const groupName = group.name;
         const desiredCount = group.scalingOptions.desiredCount;
-        const currentInventory = await this.jibriTracker.getCurrent(groupName);
+        const currentInventory = await this.jibriTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;
 
         if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
@@ -70,7 +70,7 @@ export default class InstanceLauncher {
                 Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
             await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity);
         } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
-            const scalingAllowed = await this.instaceGroupManager.allowScaling(groupName);
+            const scalingAllowed = await this.instanceGroupManager.allowScaling(groupName);
             if (!scalingAllowed) {
                 ctx.logger.info(`Wait before allowing another scale down for group ${groupName}`);
                 return;
@@ -82,7 +82,7 @@ export default class InstanceLauncher {
             const availableInstances = this.getAvailableJibris(currentInventory);
             const scaleDownInstances = availableInstances.slice(0, actualScaleDownQuantity);
             await this.cloudManager.scaleDown(ctx, group, scaleDownInstances);
-            await this.instaceGroupManager.setScaleGracePeriod(group);
+            await this.instanceGroupManager.setScaleGracePeriod(group);
         } else {
             ctx.logger.info(`No scaling activity needed for group ${groupName} with ${count} instances.`);
         }

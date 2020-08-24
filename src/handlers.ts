@@ -111,6 +111,21 @@ class Handlers {
             lock.unlock();
         }
     }
+
+    async rotateInstanceConfigurationOnGroups(req: Request, res: Response): Promise<void> {
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
+        try {
+            await this.instanceGroupManager.rotateInstanceConfigurationOnGroups(
+                req.context,
+                req.params.instanceConfigurationId,
+            );
+
+            res.status(200);
+            res.send({ reset: 'OK' });
+        } finally {
+            lock.unlock();
+        }
+    }
 }
 
 export default Handlers;

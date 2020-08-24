@@ -17,7 +17,9 @@
         "scaleDownThreshold": 2,
         "scalePeriod": 60,
         "scaleUpPeriodsCount": 2,
-        "scaleDownPeriodsCount": 4
+        "scaleDownPeriodsCount": 4,
+        "rotateQuantity": 2,
+        "rotateIntervalSec": 60
       },
       "cloud": "oracle"
     },
@@ -38,7 +40,9 @@
         "scaleDownThreshold": 2,
         "scalePeriod": 60,
         "scaleUpPeriodsCount": 2,
-        "scaleDownPeriodsCount": 4
+        "scaleDownPeriodsCount": 4,
+        "rotateQuantity": 2,
+        "rotateIntervalSec": 60
       },
       "cloud": "oracle"
     }

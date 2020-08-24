@@ -1,5 +1,8 @@
 import Redis from 'ioredis';
 import { Context } from './context';
+import { JibriTracker } from './jibri_tracker';
+import CloudManager from './cloud_manager';
+import { InstanceDetails } from './instance_status';
 
 export interface ScalingOptions {
     minDesired: number;
@@ -12,6 +15,8 @@ export interface ScalingOptions {
     scalePeriod: number;
     scaleUpPeriodsCount: number;
     scaleDownPeriodsCount: number;
+    rotateIntervalSec: number;
+    rotateQuantity: number;
 }
 
 export interface InstanceGroup {
@@ -29,16 +34,22 @@ export interface InstanceGroup {
 export interface InstanceGroupManagerOptions {
     redisClient: Redis.Redis;
     initialGroupList: Array<InstanceGroup>;
+    jibriTracker: JibriTracker;
+    cloudManager: CloudManager;
 }
 
 export default class InstanceGroupManager {
     private readonly keyPrefix = 'group:';
     private redisClient: Redis.Redis;
     private initialGroupList: Array<InstanceGroup>;
+    private jibriTracker: JibriTracker;
+    private cloudManager: CloudManager;
 
     constructor(options: InstanceGroupManagerOptions) {
         this.redisClient = options.redisClient;
         this.initialGroupList = options.initialGroupList;
+        this.jibriTracker = options.jibriTracker;
+        this.cloudManager = options.cloudManager;
 
         this.init = this.init.bind(this);
         this.getGroupKey = this.getGroupKey.bind(this);
@@ -135,6 +146,57 @@ export default class InstanceGroupManager {
         await Promise.all(this.initialGroupList.map((group) => this.upsertInstanceGroup(ctx, group)));
 
         ctx.logger.info('Instance groups are now reset');
+    }
+
+    async rotateInstanceConfigurationOnGroup(
+        ctx: Context,
+        group: InstanceGroup,
+        newInstanceConfigurationId: string,
+    ): Promise<void> {
+        ctx.logger.info(`Updating instance configuration for group ${group.name}`);
+
+        group.instanceConfigurationId = newInstanceConfigurationId;
+        await this.upsertInstanceGroup(ctx, group);
+        ctx.logger.info(`Instance configuration is updated for group ${group.name}`);
+
+        const currentInventory = await this.jibriTracker.getCurrent(ctx, group.name);
+        const currentJibris = currentInventory.map((response) => {
+            return {
+                instanceId: response.jibriId,
+                instanceType: 'jibri',
+                group: response.metadata.group,
+            };
+        });
+
+        await this.gradualScaleDown(ctx, group, currentJibris);
+    }
+
+    async gradualScaleDown(ctx: Context, group: InstanceGroup, currentJibris: InstanceDetails[]): Promise<void> {
+        ctx.logger.info(`Gradually scaling down instances from group ${group.name}`);
+        const jibris = currentJibris.splice(0, group.scalingOptions.rotateQuantity);
+        await this.cloudManager.scaleDown(ctx, group, jibris);
+
+        if (currentJibris.length != 0) {
+            setTimeout(
+                this.gradualScaleDown.bind(this, ctx, group, currentJibris),
+                group.scalingOptions.rotateIntervalSec * 1000,
+            );
+        } else {
+            ctx.logger.info(`Finished scaling down all the instances from group ${group.name}`);
+        }
+    }
+
+    async rotateInstanceConfigurationOnGroups(ctx: Context, instanceConfigurationId: string): Promise<void> {
+        ctx.logger.info(
+            `Starting instance configuration rotation on all the groups. New instance configuration id is ${instanceConfigurationId}`,
+        );
+
+        const instanceGroups = await this.getAllInstanceGroups(ctx);
+        await Promise.all(
+            instanceGroups.map((group) => this.rotateInstanceConfigurationOnGroup(ctx, group, instanceConfigurationId)),
+        );
+
+        ctx.logger.info('Instance configuration rotation completed for all the groups');
     }
 
     async allowAutoscaling(group: string): Promise<boolean> {

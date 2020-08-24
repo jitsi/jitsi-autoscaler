@@ -73,6 +73,8 @@ const lockManager: LockManager = new LockManager(logger, {
 const instanceGroupManager = new InstanceGroupManager({
     redisClient: redisClient,
     initialGroupList: config.GroupList,
+    jibriTracker: jibriTracker,
+    cloudManager: cloudManager,
 });
 
 logger.info('Initializing instance group manager...');
@@ -231,6 +233,14 @@ app.delete('/groups/:name', async (req, res, next) => {
 app.post('/groups/actions/reset', async (req, res, next) => {
     try {
         await h.resetInstanceGroups(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/groups/actions/rotate/:instanceConfigurationId', async (req, res, next) => {
+    try {
+        await h.rotateInstanceConfigurationOnGroups(req, res);
     } catch (err) {
         next(err);
     }

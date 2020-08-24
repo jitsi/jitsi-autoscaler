@@ -50,7 +50,7 @@ export default class CloudManager {
                 return this.instanceStatus.setShutdownStatus(ctx, details);
             }),
         );
-        ctx.logger.info(`Finished scaling down all the instances in group ${group.name}`);
+        ctx.logger.info(`Finished scaling down ${instances.length} instances from group ${group.name}`);
         return true;
     }
 }

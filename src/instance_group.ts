@@ -142,14 +142,6 @@ export default class InstanceGroupManager {
         return !(result !== null && result.length > 0);
     }
 
-    async allowScaling(group: string): Promise<boolean> {
-        const result = await this.redisClient.get(`scaleGracePeriod:${group}`);
-        return !(result !== null && result.length > 0);
-    }
-    async setScaleGracePeriod(group: InstanceGroup): Promise<boolean> {
-        return this.setGracePeriod(`scaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
-    }
-
     async setAutoScaleGracePeriod(group: InstanceGroup): Promise<boolean> {
         return this.setGracePeriod(`autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
     }

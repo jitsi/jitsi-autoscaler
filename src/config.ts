@@ -37,8 +37,9 @@ const env = envalid.cleanEnv(process.env, {
     DEFAULT_INSTANCE_CONFIGURATION_ID: envalid.str(),
     DEFAULT_COMPARTMENT_ID: envalid.str(),
     METRIC_TTL_SEC: envalid.num({ default: 900 }), // seconds
-    IDLE_TTL_SEC: envalid.num({ default: 90 }), // seconds
+    IDLE_TTL_SEC: envalid.num({ default: 150 }), // seconds, default to 2.5 minutes
     PROVISIONING_TTL_SEC: envalid.num({ default: 600 }), // seconds
+    SHUTDOWN_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
     AUTOSCALER_PROCESSING_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     OCI_CONFIGURATION_FILE_PATH: envalid.str(),
     OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),
@@ -76,6 +77,7 @@ export default {
     MetricTTL: env.METRIC_TTL_SEC,
     ProvisioningTTL: env.PROVISIONING_TTL_SEC,
     IdleTTL: env.IDLE_TTL_SEC,
+    ShutDownTTL: env.SHUTDOWN_TTL_SEC,
     AutoscalerProcessingLockTTL: env.AUTOSCALER_PROCESSING_LOCK_TTL_MS,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
     OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,

@@ -1,12 +1,13 @@
 import OracleCloudManager from './oracle_instance_manager';
-import { InstanceStatus, InstanceDetails } from './instance_status';
+import { InstanceDetails } from './instance_status';
 import OracleInstanceManager from './oracle_instance_manager';
 import { InstanceGroup } from './instance_group';
 import { JibriTracker } from './jibri_tracker';
 import { Context } from './context';
+import ShutdownManager from './shutdown_manager';
 
 export interface CloudManagerOptions {
-    instanceStatus: InstanceStatus;
+    shutdownManager: ShutdownManager;
     isDryRun: boolean;
     jibriTracker: JibriTracker;
     ociConfigurationFilePath: string;
@@ -15,7 +16,7 @@ export interface CloudManagerOptions {
 
 export default class CloudManager {
     private oracleInstanceManager: OracleInstanceManager;
-    private instanceStatus: InstanceStatus;
+    private shutdownManager: ShutdownManager;
     private isDryRun: boolean;
 
     constructor(options: CloudManagerOptions) {
@@ -26,7 +27,7 @@ export default class CloudManager {
             ociConfigurationProfile: options.ociConfigurationProfile,
             jibriTracker: options.jibriTracker,
         });
-        this.instanceStatus = options.instanceStatus;
+        this.shutdownManager = options.shutdownManager;
 
         this.scaleUp = this.scaleUp.bind(this);
         this.scaleDown = this.scaleDown.bind(this);
@@ -47,7 +48,7 @@ export default class CloudManager {
         ctx.logger.info('Scaling down', { groupName, instances });
         await Promise.all(
             instances.map((details) => {
-                return this.instanceStatus.setShutdownStatus(ctx, details);
+                return this.shutdownManager.setShutdownStatus(ctx, details);
             }),
         );
         ctx.logger.info(`Finished scaling down all the instances in group ${group.name}`);

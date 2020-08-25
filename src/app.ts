@@ -69,6 +69,7 @@ const cloudManager = new CloudManager({
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
     jibriTracker: jibriTracker,
+    instanceStatus: instanceStatus,
 });
 
 const lockManager: LockManager = new LockManager(logger, {
@@ -105,6 +106,7 @@ const instanceLauncher = new InstanceLauncher({
     instanceGroupManager: instanceGroupManager,
     lockManager: lockManager,
     redisClient,
+    shutdownManager,
 });
 
 async function startPooling() {
@@ -227,9 +229,25 @@ app.put('/groups/:name', async (req, res, next) => {
     }
 });
 
+app.put('/groups/desired-count/:name', async (req, res, next) => {
+    try {
+        await h.upsertDesiredCount(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 app.get('/groups', async (req, res, next) => {
     try {
         await h.getInstanceGroups(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/groups/:name', async (req, res, next) => {
+    try {
+        await h.getInstanceGroup(req, res);
     } catch (err) {
         next(err);
     }
@@ -246,6 +264,14 @@ app.delete('/groups/:name', async (req, res, next) => {
 app.post('/groups/actions/reset', async (req, res, next) => {
     try {
         await h.resetInstanceGroups(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/groups/actions/launch-protected/:name', async (req, res, next) => {
+    try {
+        await h.launchProtectedInstanceGroup(req, res);
     } catch (err) {
         next(err);
     }

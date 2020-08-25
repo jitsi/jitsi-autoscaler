@@ -4,6 +4,7 @@ import identity = require('oci-identity');
 import { InstanceGroup } from './instance_group';
 import { JibriHealthState, JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
 import { Context } from './context';
+import ShutdownManager from './shutdown_manager';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -20,6 +21,7 @@ export interface OracleInstanceManagerOptions {
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
     jibriTracker: JibriTracker;
+    shutdownManager: ShutdownManager;
 }
 
 export default class OracleInstanceManager {
@@ -28,6 +30,7 @@ export default class OracleInstanceManager {
     private identityClient: identity.IdentityClient;
     private computeManagementClient: core.ComputeManagementClient;
     private jibriTracker: JibriTracker;
+    private shutdownManager: ShutdownManager;
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
@@ -40,6 +43,7 @@ export default class OracleInstanceManager {
         this.computeManagementClient = new core.ComputeManagementClient({
             authenticationDetailsProvider: this.provider,
         });
+        this.shutdownManager = options.shutdownManager;
 
         this.launchInstances = this.launchInstances.bind(this);
         this.getAvailabilityDomains = this.getAvailabilityDomains.bind(this);
@@ -51,6 +55,7 @@ export default class OracleInstanceManager {
         group: InstanceGroup,
         groupCurrentCount: number,
         quantity: number,
+        isScaleDownProtected: boolean,
     ): Promise<void> {
         ctx.logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
 
@@ -64,7 +69,7 @@ export default class OracleInstanceManager {
 
         await Promise.all(
             indexes.map((index) => {
-                this.launchInstance(ctx, index, group, groupCurrentCount, availabilityDomains);
+                this.launchInstance(ctx, index, group, groupCurrentCount, availabilityDomains, isScaleDownProtected);
             }),
         );
         ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
@@ -76,6 +81,7 @@ export default class OracleInstanceManager {
         group: InstanceGroup,
         groupCurrentCount: number,
         availabilityDomains: string[],
+        isScaleDownProtected: boolean,
     ): Promise<void> {
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
@@ -137,6 +143,16 @@ export default class OracleInstanceManager {
                 metadata: { group: groupName },
             };
             await this.jibriTracker.track(ctx, state);
+            if (isScaleDownProtected) {
+                await this.shutdownManager.setScaleDownProtected(
+                    ctx,
+                    launchResponse.instance.id,
+                    group.protectedTTLSec,
+                );
+                ctx.logger.info(
+                    `[oracle] Instance ${launchResponse.instance.id} from group ${groupName} is in protected mode`,
+                );
+            }
         } catch (err) {
             ctx.logger.error(`[oracle] Failed launching instance ${index} in group ${groupName}`, err);
         }

@@ -6,6 +6,31 @@ import Redis from 'ioredis';
 import Redlock from 'redlock';
 import LockManager from './lock_manager';
 import { Context } from './context';
+import * as promClient from 'prom-client';
+
+const instancesCount = new promClient.Gauge({
+    name: 'autoscaling_instance_count',
+    help: 'Gauge for current instances',
+    labelNames: ['group'],
+});
+
+const instancesLaunched = new promClient.Gauge({
+    name: 'autoscaling_instance_launched',
+    help: 'Gauge for launched instances',
+    labelNames: ['group'],
+});
+
+const instancesDownscaled = new promClient.Gauge({
+    name: 'autoscaling_instance_downscaled',
+    help: 'Gauge for scaled down instances',
+    labelNames: ['group'],
+});
+
+const instanceErrors = new promClient.Gauge({
+    name: 'autoscaling_instance_errors',
+    help: 'Gauge for instance errors',
+    labelNames: ['group'],
+});
 
 export interface InstanceLauncherOptions {
     jibriTracker: JibriTracker;
@@ -63,23 +88,37 @@ export default class InstanceLauncher {
         const currentInventory = await this.jibriTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;
 
-        if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
-            ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });
+        // set stat for current count of instances
+        instancesCount.set({ group: group.name }, count);
+        try {
+            if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
+                ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });
 
-            const actualScaleUpQuantity =
-                Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
-            await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity);
-        } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
-            ctx.logger.info('[Launcher] Will scale down to the desired count', { groupName, desiredCount, count });
+                const actualScaleUpQuantity =
+                    Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
+                await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity);
 
-            const actualScaleDownQuantity =
-                count - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
+                // increment launched instance stats for the group
+                instancesLaunched.inc({ group: group.name }, actualScaleUpQuantity);
+            } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
+                ctx.logger.info('[Launcher] Will scale down to the desired count', { groupName, desiredCount, count });
 
-            const availableInstances = this.getAvailableJibris(currentInventory);
-            const scaleDownInstances = availableInstances.slice(0, actualScaleDownQuantity);
-            await this.cloudManager.scaleDown(ctx, group, scaleDownInstances);
-        } else {
-            ctx.logger.info(`[Launcher] No scaling activity needed for group ${groupName} with ${count} instances.`);
+                const actualScaleDownQuantity =
+                    count - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
+
+                const availableInstances = this.getAvailableJibris(currentInventory);
+                const scaleDownInstances = availableInstances.slice(0, actualScaleDownQuantity);
+                await this.cloudManager.scaleDown(ctx, group, scaleDownInstances);
+
+                instancesDownscaled.inc({ group: group.name }, actualScaleDownQuantity);
+            } else {
+                ctx.logger.info(
+                    `[Launcher] No scaling activity needed for group ${groupName} with ${count} instances.`,
+                );
+            }
+        } catch (err) {
+            instanceErrors.inc({ group: group.name });
+            throw err;
         }
 
         return true;

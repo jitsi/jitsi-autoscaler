@@ -5,6 +5,7 @@ import Redis from 'ioredis';
 import InstanceGroupManager, { InstanceGroup, ScalingOptions } from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
+import * as promClient from 'prom-client';
 
 export interface AutoscaleProcessorOptions {
     jibriTracker: JibriTracker;
@@ -13,6 +14,29 @@ export interface AutoscaleProcessorOptions {
     lockManager: LockManager;
     redisClient: Redis.Redis;
 }
+
+const groupsManaged = new promClient.Gauge({
+    name: 'autoscaling_groups_managed',
+    help: 'Gauge for groups currently being managed',
+});
+
+const groupDesired = new promClient.Gauge({
+    name: 'autoscaling_desired_count',
+    help: 'Gauge for desired count of instances',
+    labelNames: ['group'],
+});
+
+const groupMax = new promClient.Gauge({
+    name: 'autoscaling_maximum_count',
+    help: 'Gauge for maxmium count of instances',
+    labelNames: ['group'],
+});
+
+const groupMin = new promClient.Gauge({
+    name: 'autoscaling_minimum_count',
+    help: 'Gauge for minimum count of instances',
+    labelNames: ['group'],
+});
 
 export default class AutoscaleProcessor {
     private jibriTracker: JibriTracker;
@@ -49,6 +73,7 @@ export default class AutoscaleProcessor {
 
         try {
             const instanceGroups: Array<InstanceGroup> = await this.instanceGroupManager.getAllInstanceGroups(ctx);
+            groupsManaged.set(instanceGroups.length);
             await Promise.all(instanceGroups.map((group) => this.processAutoscalingByGroup(ctx, group)));
             ctx.logger.debug('[autoScaler] Stopped to process autoscaling activities');
         } catch (err) {
@@ -103,31 +128,40 @@ export default class AutoscaleProcessor {
             { availableJibrisPerPeriodForScaleUp, availableJibrisPerPeriodForScaleDown },
         );
 
+        // first check if we should scale up the group
+        let desiredCount = group.scalingOptions.desiredCount;
         if (
             group.scalingOptions.desiredCount <= count &&
             this.evalScaleUpConditionForAllPeriods(availableJibrisPerPeriodForScaleUp, count, group.scalingOptions)
         ) {
-            let desiredCount = group.scalingOptions.desiredCount + group.scalingOptions.scaleUpQuantity;
+            desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
             if (desiredCount > group.scalingOptions.maxDesired) {
                 desiredCount = group.scalingOptions.maxDesired;
             }
             await this.updateDesiredCount(ctx, desiredCount, group);
             await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else if (
-            group.scalingOptions.desiredCount >= count &&
+            desiredCount >= count &&
             this.evalScaleDownConditionForAllPeriods(availableJibrisPerPeriodForScaleDown, count, group.scalingOptions)
         ) {
-            let desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
+            // next check if we should scale down the group
+            desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
             if (desiredCount < group.scalingOptions.minDesired) {
                 desiredCount = group.scalingOptions.minDesired;
             }
             await this.updateDesiredCount(ctx, desiredCount, group);
             await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else {
+            // otherwise neither action is needed
             ctx.logger.info(
                 `[autoScaler] No desired count adjustments needed for group ${group.name} with ${count} instances`,
             );
         }
+
+        // set current min/max/desired values by group
+        groupDesired.set({ group: group.name }, desiredCount);
+        groupMin.set({ group: group.name }, group.scalingOptions.minDesired);
+        groupMax.set({ group: group.name }, group.scalingOptions.maxDesired);
 
         return true;
     }

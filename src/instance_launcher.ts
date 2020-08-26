@@ -8,20 +8,26 @@ import LockManager from './lock_manager';
 import { Context } from './context';
 import * as promClient from 'prom-client';
 
+const instancesCount = new promClient.Gauge({
+    name: 'autoscaling_instance_count',
+    help: 'Gauge for current instances',
+    labelNames: ['group'],
+});
+
 const instancesLaunched = new promClient.Gauge({
-    name: 'autoscaling_instances_launched',
+    name: 'autoscaling_instance_launched',
     help: 'Gauge for launched instances',
     labelNames: ['group'],
 });
 
 const instancesDownscaled = new promClient.Gauge({
-    name: 'autoscaling_instances_downscaled',
+    name: 'autoscaling_instance_downscaled',
     help: 'Gauge for scaled down instances',
     labelNames: ['group'],
 });
 
 const instanceErrors = new promClient.Gauge({
-    name: 'autoscaling_instances_errors',
+    name: 'autoscaling_instance_errors',
     help: 'Gauge for instance errors',
     labelNames: ['group'],
 });
@@ -82,6 +88,8 @@ export default class InstanceLauncher {
         const currentInventory = await this.jibriTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;
 
+        // set stat for current count of instances
+        instancesCount.set({ group: group.name }, count);
         try {
             if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
                 ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });

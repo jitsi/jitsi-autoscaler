@@ -136,6 +136,7 @@ export default class InstanceLauncher {
             instanceErrors.inc({ group: group.name });
             throw err;
         }
+
         return true;
     }
 

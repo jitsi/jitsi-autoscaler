@@ -17,6 +17,7 @@ export interface ScalingOptions {
 export interface InstanceGroup {
     id: string;
     name: string;
+    type: string;
     region: string;
     environment: string;
     compartmentId: string;

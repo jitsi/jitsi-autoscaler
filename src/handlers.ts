@@ -89,7 +89,7 @@ class Handlers {
 
     async upsertDesiredCount(req: Request, res: Response): Promise<void> {
         const request: InstanceGroupUpdateRequest = req.body;
-        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context, req.params.name);
         try {
             const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
             instanceGroup.scalingOptions.desiredCount = request.desiredCount;
@@ -109,7 +109,7 @@ class Handlers {
             res.send({ errors: ['The request param group name must match group name in the body'] });
             return;
         }
-        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context, instanceGroup.name);
         try {
             await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
             this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
@@ -135,7 +135,7 @@ class Handlers {
     }
 
     async deleteInstanceGroup(req: Request, res: Response): Promise<void> {
-        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context, req.params.name);
         try {
             const instanceGroups = await this.instanceGroupManager.deleteInstanceGroup(req.context, req.params.name);
 
@@ -147,22 +147,37 @@ class Handlers {
     }
 
     async resetInstanceGroups(req: Request, res: Response): Promise<void> {
-        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
-        try {
-            await this.instanceGroupManager.resetInstanceGroups(req.context);
+        req.context.logger.info('Resetting instance groups');
 
-            res.status(200);
-            res.send({ reset: 'OK' });
-        } finally {
-            lock.unlock();
-        }
+        req.context.logger.info('Deleting all instance groups');
+        const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(req.context);
+        await Promise.all(
+            instanceGroups.map(async (instanceGroup) => {
+                const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(
+                    req.context,
+                    instanceGroup.name,
+                );
+
+                try {
+                    await this.instanceGroupManager.deleteInstanceGroup(req.context, instanceGroup.name);
+                } finally {
+                    lock.unlock();
+                }
+            }),
+        );
+
+        await this.instanceGroupManager.init(req.context);
+        req.context.logger.info('Instance groups are now reset');
+
+        res.status(200);
+        res.send({ reset: 'OK' });
     }
 
     async launchProtectedInstanceGroup(req: Request, res: Response): Promise<void> {
-        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context);
+        const groupName = req.params.name;
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context, groupName);
         try {
             const requestBody = req.body;
-            const groupName = req.params.name;
             const scaleDownProtectedTTL = requestBody.scaleDownProtectedTTLSec;
             req.context.logger.info('Protecting instances from scaling down', {
                 groupName,

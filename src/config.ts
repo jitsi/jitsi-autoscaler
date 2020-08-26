@@ -31,6 +31,7 @@ const env = envalid.cleanEnv(process.env, {
     ASAP_JWT_AUD: envalid.str(),
     ASAP_JWT_ACCEPTED_HOOK_ISS: envalid.str(),
     AUTOSCALER_INTERVAL: envalid.num({ default: 30 }),
+    JOB_CREATION_LOCK_TTL_MS: envalid.num({ default: 30000 }), // ideally the same as autoscaler interval * 1000
     INITIAL_WAIT_FOR_POOLING_MS: envalid.num({ default: 120000 }),
     DRY_RUN: envalid.bool({ default: false }),
     GROUP_CONFIG_FILE: envalid.str(),
@@ -71,6 +72,7 @@ export default {
     AsapJwtAcceptedHookIss: env.ASAP_JWT_ACCEPTED_HOOK_ISS,
     // interval for autoscaling calculation, in seconds
     AutoscalerInterval: env.AUTOSCALER_INTERVAL,
+    JobCreationLockTTLMs: env.JOB_CREATION_LOCK_TTL_MS,
     InitialWaitForPooling: env.INITIAL_WAIT_FOR_POOLING_MS,
     GroupList: groupList,
     DryRun: env.DRY_RUN,

@@ -68,8 +68,23 @@ export default class OracleInstanceManager {
         }
 
         await Promise.all(
-            indexes.map((index) => {
-                this.launchInstance(ctx, index, group, groupCurrentCount, availabilityDomains, isScaleDownProtected);
+            indexes.map(async (index) => {
+                ctx.logger.info(
+                    `[oracle] Gathering properties for launching instance number ${index + 1} in group ${group.name}`,
+                );
+
+                const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
+                const availabilityDomain = availabilityDomains[adIndex];
+                //TODO get instance count per ADs, so that FD can be distributed evenly
+                const faultDomains: string[] = await this.getFaultDomains(
+                    group.compartmentId,
+                    group.region,
+                    availabilityDomain,
+                );
+                const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
+                const faultDomain = faultDomains[fdIndex];
+
+                await this.launchInstance(ctx, index, group, availabilityDomain, faultDomain, isScaleDownProtected);
             }),
         );
         ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
@@ -79,24 +94,13 @@ export default class OracleInstanceManager {
         ctx: Context,
         index: number,
         group: InstanceGroup,
-        groupCurrentCount: number,
-        availabilityDomains: string[],
+        availabilityDomain: string,
+        faultDomain: string,
         isScaleDownProtected: boolean,
     ): Promise<void> {
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
-        ctx.logger.info(`[oracle] Gathering properties for launching instance ${index} in group ${groupName}`);
 
-        const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
-        const availabilityDomain = availabilityDomains[adIndex];
-        //TODO get instance count per ADs, so that FD can be distributed evenly
-        const faultDomains: string[] = await this.getFaultDomains(
-            group.compartmentId,
-            group.region,
-            availabilityDomain,
-        );
-        const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
-        const faultDomain = faultDomains[fdIndex];
         const displayName = groupName + '-' + makeRandomString(5);
         const freeformTags = {
             group: groupName,
@@ -112,7 +116,7 @@ export default class OracleInstanceManager {
                 instanceType: 'compute',
             };
 
-        ctx.logger.info(`[oracle] Launching instance ${index} in group ${groupName} with properties`, {
+        ctx.logger.info(`[oracle] Launching instance number ${index + 1} in group ${groupName} with properties`, {
             groupName,
             availabilityDomain,
             faultDomain,
@@ -122,7 +126,7 @@ export default class OracleInstanceManager {
         });
 
         if (this.isDryRun) {
-            ctx.logger.debug('[oracle] Dry run enabled, skipping the instance launch');
+            ctx.logger.info(`[oracle] Dry run enabled, skipping the instance number ${index + 1} launch`);
             return;
         }
         try {
@@ -130,7 +134,10 @@ export default class OracleInstanceManager {
                 instanceConfigurationId: groupInstanceConfigurationId,
                 instanceConfiguration: overwriteComputeInstanceDetails,
             });
-            ctx.logger.info(`[oracle] Got launch response for instance ${index} in group ${groupName}`, launchResponse);
+            ctx.logger.info(
+                `[oracle] Got launch response for instance number ${index + 1} in group ${groupName}`,
+                launchResponse,
+            );
             const state: JibriState = {
                 jibriId: launchResponse.instance.id,
                 status: {
@@ -154,7 +161,7 @@ export default class OracleInstanceManager {
                 );
             }
         } catch (err) {
-            ctx.logger.error(`[oracle] Failed launching instance ${index} in group ${groupName}`, err);
+            ctx.logger.error(`[oracle] Failed launching instance number ${index + 1} in group ${groupName}`, err);
         }
     }
 

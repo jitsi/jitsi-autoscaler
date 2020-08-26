@@ -8,6 +8,7 @@ import ShutdownManager from './shutdown_manager';
 
 interface SidecarResponse {
     shutdown: boolean;
+    reconfigure: boolean;
 }
 
 class Handlers {
@@ -52,8 +53,10 @@ class Handlers {
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
         const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, details);
+        // TODO: implement reconfiguration checks
+        const reconfigureStatus = false;
 
-        const sendResponse: SidecarResponse = { shutdown: shutdownStatus };
+        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: reconfigureStatus };
 
         res.status(200);
         res.send(sendResponse);
@@ -65,6 +68,19 @@ class Handlers {
 
         res.status(200);
         res.send({ save: 'OK' });
+    }
+
+    async sidecarStatus(req: Request, res: Response): Promise<void> {
+        const report: StatsReport = req.body;
+        await this.instanceStatus.stats(req.context, report);
+        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance);
+        // TODO: implement reconfiguration checks
+        const reconfigureStatus = false;
+
+        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: reconfigureStatus };
+
+        res.status(200);
+        res.send(sendResponse);
     }
 
     async upsertInstanceGroup(req: Request, res: Response): Promise<void> {

@@ -211,6 +211,14 @@ app.post('/sidecar/stats', async (req, res, next) => {
     }
 });
 
+app.post('/sidecar/status', async (req, res, next) => {
+    try {
+        await h.sidecarStatus(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 app.put('/groups/:name', async (req, res, next) => {
     try {
         await h.upsertInstanceGroup(req, res);

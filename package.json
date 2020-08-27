@@ -11,8 +11,10 @@
     "node": ">=10"
   },
   "dependencies": {
+    "@types/redis": "^2.8.26",
     "@types/shortid": "0.0.29",
     "@types/sshpk": "^1.10.4",
+    "bee-queue": "^1.2.3",
     "dotenv": "^8.2.0",
     "envalid": "^6.0.2",
     "express": "^4.17.1",

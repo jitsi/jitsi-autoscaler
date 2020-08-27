@@ -32,23 +32,25 @@ export interface InstanceGroup {
 export interface InstanceGroupManagerOptions {
     redisClient: Redis.Redis;
     initialGroupList: Array<InstanceGroup>;
+    groupJobsCreationGracePeriod: number;
 }
 
 export default class InstanceGroupManager {
     private readonly keyPrefix = 'group:';
     private redisClient: Redis.Redis;
     private initialGroupList: Array<InstanceGroup>;
+    private processingIntervalSeconds: number;
 
     constructor(options: InstanceGroupManagerOptions) {
         this.redisClient = options.redisClient;
         this.initialGroupList = options.initialGroupList;
+        this.processingIntervalSeconds = options.groupJobsCreationGracePeriod;
 
         this.init = this.init.bind(this);
         this.getGroupKey = this.getGroupKey.bind(this);
         this.getInstanceGroup = this.getInstanceGroup.bind(this);
         this.getAllInstanceGroups = this.getAllInstanceGroups.bind(this);
         this.upsertInstanceGroup = this.upsertInstanceGroup.bind(this);
-        this.resetInstanceGroups = this.resetInstanceGroups.bind(this);
         this.existsAtLeastOneGroup = this.existsAtLeastOneGroup.bind(this);
     }
 
@@ -128,18 +130,6 @@ export default class InstanceGroupManager {
         ctx.logger.info(`Group ${groupName} is deleted`);
     }
 
-    async resetInstanceGroups(ctx: Context): Promise<void> {
-        ctx.logger.info('Resetting instance groups');
-
-        ctx.logger.info('Deleting all instance groups');
-        const instanceGroups = await this.getAllInstanceGroups(ctx);
-        await Promise.all(instanceGroups.map((group) => this.deleteInstanceGroup(ctx, group.name)));
-        ctx.logger.info('Storing instance groups into redis');
-        await Promise.all(this.initialGroupList.map((group) => this.upsertInstanceGroup(ctx, group)));
-
-        ctx.logger.info('Instance groups are now reset');
-    }
-
     async allowAutoscaling(group: string): Promise<boolean> {
         const result = await this.redisClient.get(`autoScaleGracePeriod:${group}`);
         return !(result !== null && result.length > 0);
@@ -156,6 +146,15 @@ export default class InstanceGroupManager {
     async isScaleDownProtected(group: string): Promise<boolean> {
         const result = await this.redisClient.get(`isScaleDownProtected:${group}`);
         return result !== null && result.length > 0;
+    }
+
+    async isGroupJobsCreationAllowed(): Promise<boolean> {
+        const result = await this.redisClient.get(`groupJobsCreationGracePeriod`);
+        return !(result !== null && result.length > 0);
+    }
+
+    async setGroupJobsCreationGracePeriod(): Promise<boolean> {
+        return this.setValue(`groupJobsCreationGracePeriod`, this.processingIntervalSeconds);
     }
 
     async setValue(key: string, ttl: number): Promise<boolean> {

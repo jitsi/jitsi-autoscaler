@@ -17,6 +17,7 @@ import InstanceLauncher from './instance_launcher';
 import LockManager from './lock_manager';
 import * as stats from './stats';
 import ShutdownManager from './shutdown_manager';
+import JobManager from './job_manager';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -74,13 +75,14 @@ const cloudManager = new CloudManager({
 
 const lockManager: LockManager = new LockManager(logger, {
     redisClient: redisClient,
+    jobCreationLockTTL: config.GroupJobsCreationLockTTLMs,
     autoscalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
-    scalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
 });
 
 const instanceGroupManager = new InstanceGroupManager({
     redisClient: redisClient,
     initialGroupList: config.GroupList,
+    groupJobsCreationGracePeriod: config.GroupJobsCreationGracePeriodSec,
 });
 
 logger.info('Initializing instance group manager...');
@@ -109,34 +111,35 @@ const instanceLauncher = new InstanceLauncher({
     shutdownManager,
 });
 
-async function startPooling() {
+// Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
+// Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
+const jobManager = new JobManager({
+    queueRedisOptions: JSON.parse(JSON.stringify(redisOptions)),
+    lockManager: lockManager,
+    instanceGroupManager: instanceGroupManager,
+    instanceLauncher: instanceLauncher,
+    autoscaler: autoscaleProcessor,
+    autoscalerProcessingTimeoutMilli: config.AutoscalerProcessingLockTTL,
+    launcherProcessingTimeoutMilli: config.AutoscalerProcessingLockTTL,
+});
+
+async function startProcessingGroups() {
     logger.info('Start pooling..');
 
-    pollForAutoscaling(autoscaleProcessor);
-    pollForLaunching(instanceLauncher);
+    await createGroupProcessingJobs();
 }
-setTimeout(startPooling, config.InitialWaitForPooling);
+logger.info(`Waiting ${config.InitialWaitForPooling}ms before starting to loop for group processing`);
+setTimeout(startProcessingGroups, config.InitialWaitForPooling);
 
-async function pollForAutoscaling(autoscaleProcessor: AutoscaleProcessor) {
+async function createGroupProcessingJobs() {
     const start = Date.now();
     const pollId = shortid.generate();
     const pollLogger = logger.child({
         id: pollId,
     });
     const ctx = new context.Context(pollLogger, start, pollId);
-    await autoscaleProcessor.processAutoscaling(ctx);
-    setTimeout(pollForAutoscaling.bind(null, autoscaleProcessor), config.AutoscalerInterval * 1000);
-}
-
-async function pollForLaunching(instanceLauncher: InstanceLauncher) {
-    const start = Date.now();
-    const pollId = shortid.generate();
-    const pollLogger = logger.child({
-        id: pollId,
-    });
-    const ctx = new context.Context(pollLogger, start, pollId);
-    await instanceLauncher.launchOrShutdownInstances(ctx);
-    setTimeout(pollForLaunching.bind(null, instanceLauncher), config.AutoscalerInterval * 1000);
+    await jobManager.createGroupProcessingJobs(ctx);
+    setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
 }
 
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);

@@ -1,9 +1,8 @@
 import { JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
 import CloudManager from './cloud_manager';
 import { InstanceDetails } from './instance_status';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager from './instance_group';
 import Redis from 'ioredis';
-import Redlock from 'redlock';
 import LockManager from './lock_manager';
 import { Context } from './context';
 import * as promClient from 'prom-client';
@@ -58,36 +57,16 @@ export default class InstanceLauncher {
         this.redisClient = options.redisClient;
         this.shutdownManager = options.shutdownManager;
 
-        this.launchOrShutdownInstances = this.launchOrShutdownInstances.bind(this);
         this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
     }
 
-    async launchOrShutdownInstances(ctx: Context): Promise<boolean> {
-        ctx.logger.debug('[Launcher] Starting to process scaling activities');
-        ctx.logger.debug('[Launcher] Obtaining request lock in redis');
-
-        let lock: Redlock.Lock = undefined;
-        try {
-            lock = await this.lockManager.lockScaleProcessing(ctx);
-        } catch (err) {
-            ctx.logger.warn(`[Launcher] Error obtaining lock for processing`, { err });
+    async launchOrShutdownInstancesByGroup(ctx: Context, groupName: string): Promise<boolean> {
+        const group = await this.instanceGroupManager.getInstanceGroup(groupName);
+        if (!group) {
+            ctx.logger.warn(`[Launcher] Failed to process group ${groupName} as it is not found `);
             return false;
         }
 
-        try {
-            const instanceGroups: Array<InstanceGroup> = await this.instanceGroupManager.getAllInstanceGroups(ctx);
-            await Promise.all(instanceGroups.map((group) => this.launchOrShutdownInstancesByGroup(ctx, group)));
-            ctx.logger.debug('[Launcher] Stopped to process scaling activities');
-        } catch (err) {
-            ctx.logger.error(`[Launcher] Processing launch instances ${err}`);
-        } finally {
-            lock.unlock();
-        }
-        return true;
-    }
-
-    async launchOrShutdownInstancesByGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
-        const groupName = group.name;
         const desiredCount = group.scalingOptions.desiredCount;
         const currentInventory = await this.jibriTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;

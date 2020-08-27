@@ -30,7 +30,9 @@ const env = envalid.cleanEnv(process.env, {
     ASAP_PUB_KEY_BASE_URL: envalid.str(),
     ASAP_JWT_AUD: envalid.str(),
     ASAP_JWT_ACCEPTED_HOOK_ISS: envalid.str(),
-    AUTOSCALER_INTERVAL: envalid.num({ default: 30 }),
+    GROUP_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 30 }), // with what interval this instance should try producing jobs for group processing
+    GROUP_JOBS_CREATION_GRACE_PERIOD_SEC: envalid.num({ default: 30 }), // jobs for group processing should be created once every JOB_CREATION_GRACE_PERIOD_SEC
+    GROUP_JOBS_CREATION_LOCK_TTL_MS: envalid.num({ default: 30000 }), // job creation lock ensures only one instance at a time can produce jobs
     INITIAL_WAIT_FOR_POOLING_MS: envalid.num({ default: 120000 }),
     DRY_RUN: envalid.bool({ default: false }),
     GROUP_CONFIG_FILE: envalid.str(),
@@ -70,7 +72,9 @@ export default {
     AsapJwtAcceptedAud: env.ASAP_JWT_AUD,
     AsapJwtAcceptedHookIss: env.ASAP_JWT_ACCEPTED_HOOK_ISS,
     // interval for autoscaling calculation, in seconds
-    AutoscalerInterval: env.AUTOSCALER_INTERVAL,
+    GroupJobsCreationIntervalSec: env.GROUP_JOBS_CREATION_INTERVAL_SEC,
+    GroupJobsCreationGracePeriodSec: env.GROUP_JOBS_CREATION_GRACE_PERIOD_SEC,
+    GroupJobsCreationLockTTLMs: env.GROUP_JOBS_CREATION_LOCK_TTL_MS,
     InitialWaitForPooling: env.INITIAL_WAIT_FOR_POOLING_MS,
     GroupList: groupList,
     DryRun: env.DRY_RUN,

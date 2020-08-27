@@ -75,14 +75,14 @@ const cloudManager = new CloudManager({
 
 const lockManager: LockManager = new LockManager(logger, {
     redisClient: redisClient,
-    jobCreationLockTTL: config.JobCreationLockTTLMs,
+    jobCreationLockTTL: config.GroupJobsCreationLockTTLMs,
     autoscalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
 });
 
 const instanceGroupManager = new InstanceGroupManager({
     redisClient: redisClient,
     initialGroupList: config.GroupList,
-    processingIntervalSeconds: config.AutoscalerInterval,
+    groupJobsCreationGracePeriod: config.GroupJobsCreationGracePeriodSec,
 });
 
 logger.info('Initializing instance group manager...');
@@ -139,7 +139,7 @@ async function createGroupProcessingJobs() {
     });
     const ctx = new context.Context(pollLogger, start, pollId);
     await jobManager.createGroupProcessingJobs(ctx);
-    setTimeout(createGroupProcessingJobs, config.AutoscalerInterval * 1000);
+    setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
 }
 
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);

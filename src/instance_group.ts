@@ -32,7 +32,7 @@ export interface InstanceGroup {
 export interface InstanceGroupManagerOptions {
     redisClient: Redis.Redis;
     initialGroupList: Array<InstanceGroup>;
-    processingIntervalSeconds: number;
+    groupJobsCreationGracePeriod: number;
 }
 
 export default class InstanceGroupManager {
@@ -44,7 +44,7 @@ export default class InstanceGroupManager {
     constructor(options: InstanceGroupManagerOptions) {
         this.redisClient = options.redisClient;
         this.initialGroupList = options.initialGroupList;
-        this.processingIntervalSeconds = options.processingIntervalSeconds;
+        this.processingIntervalSeconds = options.groupJobsCreationGracePeriod;
 
         this.init = this.init.bind(this);
         this.getGroupKey = this.getGroupKey.bind(this);

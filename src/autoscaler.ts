@@ -170,8 +170,6 @@ export default class AutoscaleProcessor {
         groupDesired.set({ group: group.name }, desiredCount);
         groupMin.set({ group: group.name }, group.scalingOptions.minDesired);
         groupMax.set({ group: group.name }, group.scalingOptions.maxDesired);
-
-        return true;
     }
 
     private async updateDesiredCount(ctx: Context, desiredCount: number, group: InstanceGroup) {

@@ -2,11 +2,14 @@
   "groupEntries": [
     {
       "name": "lonely-us-phoenix-1-JibriGroup1",
+      "type": "jibri",
       "region": "us-phoenix-1",
+      "environment": "lonely",
       "compartmentId": "",
       "instanceConfigurationId": "",
       "enableAutoScale": true,
       "gracePeriodTTLSec": 480,
+      "protectedTTLSec": 600,
       "scalingOptions": {
         "minDesired": 1,
         "maxDesired": 2,
@@ -23,11 +26,14 @@
     },
     {
       "name": "lonely-us-phoenix-1-JibriGroup2",
+      "type": "jibri",
       "region": "us-phoenix-1",
+      "environment": "lonely",
       "compartmentId": "",
       "instanceConfigurationId": "",
       "enableAutoScale": false,
       "gracePeriodTTLSec": 480,
+      "protectedTTLSec": 600,
       "scalingOptions": {
         "minDesired": 1,
         "maxDesired": 2,

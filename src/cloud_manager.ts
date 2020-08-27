@@ -1,5 +1,5 @@
 import OracleCloudManager from './oracle_instance_manager';
-import { InstanceDetails } from './instance_status';
+import { InstanceDetails, InstanceStatus } from './instance_status';
 import OracleInstanceManager from './oracle_instance_manager';
 import { InstanceGroup } from './instance_group';
 import { JibriTracker } from './jibri_tracker';
@@ -7,6 +7,7 @@ import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 
 export interface CloudManagerOptions {
+    instanceStatus: InstanceStatus;
     shutdownManager: ShutdownManager;
     isDryRun: boolean;
     jibriTracker: JibriTracker;
@@ -26,6 +27,7 @@ export default class CloudManager {
             ociConfigurationFilePath: options.ociConfigurationFilePath,
             ociConfigurationProfile: options.ociConfigurationProfile,
             jibriTracker: options.jibriTracker,
+            shutdownManager: options.shutdownManager,
         });
         this.shutdownManager = options.shutdownManager;
 
@@ -33,12 +35,24 @@ export default class CloudManager {
         this.scaleDown = this.scaleDown.bind(this);
     }
 
-    async scaleUp(ctx: Context, group: InstanceGroup, groupCurrentCount: number, quantity: number): Promise<boolean> {
+    async scaleUp(
+        ctx: Context,
+        group: InstanceGroup,
+        groupCurrentCount: number,
+        quantity: number,
+        isScaleDownProtected: boolean,
+    ): Promise<boolean> {
         const groupName = group.name;
         ctx.logger.info('Scaling up', { groupName, quantity });
         // TODO: get the instance manager by cloud
         if (group.cloud == 'oracle') {
-            await this.oracleInstanceManager.launchInstances(ctx, group, groupCurrentCount, quantity);
+            await this.oracleInstanceManager.launchInstances(
+                ctx,
+                group,
+                groupCurrentCount,
+                quantity,
+                isScaleDownProtected,
+            );
         }
         return true;
     }

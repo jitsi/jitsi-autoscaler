@@ -7,6 +7,7 @@ import Redlock from 'redlock';
 import LockManager from './lock_manager';
 import { Context } from './context';
 import * as promClient from 'prom-client';
+import ShutdownManager from './shutdown_manager';
 
 const instancesCount = new promClient.Gauge({
     name: 'autoscaling_instance_count',
@@ -38,6 +39,7 @@ export interface InstanceLauncherOptions {
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
     redisClient: Redis.Redis;
+    shutdownManager: ShutdownManager;
 }
 
 export default class InstanceLauncher {
@@ -46,6 +48,7 @@ export default class InstanceLauncher {
     private cloudManager: CloudManager;
     private redisClient: Redis.Redis;
     private lockManager: LockManager;
+    private shutdownManager: ShutdownManager;
 
     constructor(options: InstanceLauncherOptions) {
         this.jibriTracker = options.jibriTracker;
@@ -53,6 +56,7 @@ export default class InstanceLauncher {
         this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
         this.redisClient = options.redisClient;
+        this.shutdownManager = options.shutdownManager;
 
         this.launchOrShutdownInstances = this.launchOrShutdownInstances.bind(this);
         this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
@@ -96,7 +100,8 @@ export default class InstanceLauncher {
 
                 const actualScaleUpQuantity =
                     Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
-                await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity);
+                const scaleDownProtected = await this.instanceGroupManager.isScaleDownProtected(group.name);
+                await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity, scaleDownProtected);
 
                 // increment launched instance stats for the group
                 instancesLaunched.inc({ group: group.name }, actualScaleUpQuantity);
@@ -107,7 +112,18 @@ export default class InstanceLauncher {
                     count - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
 
                 const availableInstances = this.getAvailableJibris(currentInventory);
-                const scaleDownInstances = availableInstances.slice(0, actualScaleDownQuantity);
+                ctx.logger.info('[Launcher] Available instances for scale down', {
+                    groupName,
+                    availableInstances,
+                });
+
+                const unprotectedInstances = await this.filterOutProtectedInstances(ctx, availableInstances);
+                ctx.logger.info('[Launcher] Available instances for scale down that are not in protected mode', {
+                    groupName,
+                    unprotectedInstances,
+                });
+
+                const scaleDownInstances = unprotectedInstances.slice(0, actualScaleDownQuantity);
                 await this.cloudManager.scaleDown(ctx, group, scaleDownInstances);
 
                 instancesDownscaled.inc({ group: group.name }, actualScaleDownQuantity);
@@ -122,6 +138,19 @@ export default class InstanceLauncher {
         }
 
         return true;
+    }
+
+    async filterOutProtectedInstances(
+        ctx: Context,
+        instanceDetails: Array<InstanceDetails>,
+    ): Promise<Array<InstanceDetails>> {
+        const protectedInstances: boolean[] = await Promise.all(
+            instanceDetails.map((instance) => {
+                return this.shutdownManager.isScaleDownProtected(ctx, instance.instanceId);
+            }),
+        );
+
+        return instanceDetails.filter((instances, index) => !protectedInstances[index]);
     }
 
     getAvailableJibris(states: Array<JibriState>): Array<InstanceDetails> {

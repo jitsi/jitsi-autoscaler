@@ -17,11 +17,14 @@ export interface ScalingOptions {
 export interface InstanceGroup {
     id: string;
     name: string;
+    type: string;
     region: string;
+    environment: string;
     compartmentId: string;
     instanceConfigurationId: string;
     enableAutoScale: boolean;
     gracePeriodTTLSec: number;
+    protectedTTLSec: number;
     scalingOptions: ScalingOptions;
     cloud: string;
 }
@@ -143,10 +146,19 @@ export default class InstanceGroupManager {
     }
 
     async setAutoScaleGracePeriod(group: InstanceGroup): Promise<boolean> {
-        return this.setGracePeriod(`autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
+        return this.setValue(`autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
     }
 
-    async setGracePeriod(key: string, ttl: number): Promise<boolean> {
+    async setScaleDownProtected(group: InstanceGroup): Promise<boolean> {
+        return this.setValue(`isScaleDownProtected:${group.name}`, group.protectedTTLSec);
+    }
+
+    async isScaleDownProtected(group: string): Promise<boolean> {
+        const result = await this.redisClient.get(`isScaleDownProtected:${group}`);
+        return result !== null && result.length > 0;
+    }
+
+    async setValue(key: string, ttl: number): Promise<boolean> {
         const result = await this.redisClient.set(key, JSON.stringify(false), 'ex', ttl);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);

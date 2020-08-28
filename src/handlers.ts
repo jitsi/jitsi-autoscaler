@@ -148,26 +148,38 @@ class Handlers {
 
     async resetInstanceGroups(req: Request, res: Response): Promise<void> {
         req.context.logger.info('Resetting instance groups');
+        const ctx = req.context;
 
-        req.context.logger.info('Deleting all instance groups');
-        const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(req.context);
+        const initialGroups = this.instanceGroupManager.getInitialGroups();
+        const currentGroupsMap = await this.instanceGroupManager.getAllInstanceGroupsAsMap(req.context);
         await Promise.all(
-            instanceGroups.map(async (instanceGroup) => {
+            initialGroups.map(async (initialGroup) => {
                 const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(
                     req.context,
-                    instanceGroup.name,
+                    initialGroup.name,
                 );
 
                 try {
-                    await this.instanceGroupManager.deleteInstanceGroup(req.context, instanceGroup.name);
+                    if (currentGroupsMap.has(initialGroup.name)) {
+                        const currentGroup = currentGroupsMap.get(initialGroup.name);
+                        const resetGroup: InstanceGroup = JSON.parse(JSON.stringify(initialGroup));
+                        resetGroup.scalingOptions.desiredCount = currentGroup.scalingOptions.desiredCount;
+                        ctx.logger.info(
+                            `Group ${initialGroup.name} already exists in redis, applying the config over it, without overwriting desired count.`,
+                        );
+                        await this.instanceGroupManager.upsertInstanceGroup(ctx, resetGroup);
+                    } else {
+                        ctx.logger.info(
+                            `Group ${initialGroup.name} from config does not exist yet in redis. Creating it.`,
+                        );
+                        await this.instanceGroupManager.upsertInstanceGroup(ctx, initialGroup);
+                    }
                 } finally {
                     lock.unlock();
                 }
             }),
         );
-
-        await this.instanceGroupManager.init(req.context);
-        req.context.logger.info('Instance groups are now reset');
+        ctx.logger.info('Instance groups are now reset');
 
         res.status(200);
         res.send({ reset: 'OK' });

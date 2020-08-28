@@ -2,6 +2,13 @@ import Redis from 'ioredis';
 import { Context } from './context';
 import { JibriTracker, JibriState, JibriStatus, JibriMetaData } from './jibri_tracker';
 
+/* eslint-disable */
+    function isEmpty(obj: any) {
+    /* eslint-enable */
+    for (const i in obj) return false;
+    return true;
+}
+
 const StatsTTL = 900;
 
 export interface InstanceDetails {
@@ -17,6 +24,9 @@ export interface StatsReport {
     timestamp?: number;
     stats: unknown;
     shutdownStatus?: boolean;
+    shutdownError?: boolean;
+    reconfigureError?: boolean;
+    statsError?: boolean;
 }
 
 export interface InstanceStatusOptions {
@@ -48,25 +58,34 @@ export class InstanceStatus {
         let key: string;
         let jibriState: JibriState;
         let jibriStats: JibriStats;
-        switch (report.instance.instanceType) {
-            case 'jibri':
-                jibriStats = <JibriStats>report.stats;
-                jibriState = {
-                    jibriId: report.instance.instanceId,
-                    status: jibriStats.status,
-                    timestamp: report.timestamp,
-                    shutdownStatus: report.shutdownStatus,
-                    metadata: <JibriMetaData>{ ...report.instance },
-                };
-                ctx.logger.debug('Tracking jibri state', { state: jibriState });
-                statsResult = await this.jibriTracker.track(ctx, jibriState);
-                break;
-            default:
-                key = this.instanceKey(report.instance, 'stats');
-                ctx.logger.debug('Writing instance stats', { key, stats: report.stats });
-                await this.redisClient.set(key, JSON.stringify(report.stats), 'ex', StatsTTL);
-                statsResult = true;
-                break;
+        if (isEmpty(report.stats) || report.statsError) {
+            // empty stats report, so error
+            ctx.logger.error('Empty stats report, not processing', { report });
+            // TODO: increment stats report error counter
+        } else {
+            switch (report.instance.instanceType) {
+                case 'jibri':
+                    jibriStats = <JibriStats>report.stats;
+                    jibriState = {
+                        jibriId: report.instance.instanceId,
+                        status: jibriStats.status,
+                        timestamp: report.timestamp,
+                        shutdownStatus: report.shutdownStatus,
+                        shutdownError: report.shutdownError,
+                        reconfigureError: report.reconfigureError,
+                        statsError: report.statsError,
+                        metadata: <JibriMetaData>{ ...report.instance },
+                    };
+                    ctx.logger.debug('Tracking jibri state', { state: jibriState });
+                    statsResult = await this.jibriTracker.track(ctx, jibriState);
+                    break;
+                default:
+                    key = this.instanceKey(report.instance, 'stats');
+                    ctx.logger.debug('Writing instance stats', { key, stats: report.stats });
+                    await this.redisClient.set(key, JSON.stringify(report.stats), 'ex', StatsTTL);
+                    statsResult = true;
+                    break;
+            }
         }
         return statsResult;
     }

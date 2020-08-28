@@ -64,6 +64,10 @@ export default class InstanceGroupManager {
         }
     }
 
+    getInitialGroups(): Array<InstanceGroup> {
+        return this.initialGroupList;
+    }
+
     getGroupKey(groupName: string): string {
         return this.keyPrefix + groupName;
     }
@@ -101,6 +105,14 @@ export default class InstanceGroupManager {
         } else {
             throw new Error(`unable to get group by name ${groupName}`);
         }
+    }
+
+    async getAllInstanceGroupsAsMap(ctx: Context): Promise<Map<string, InstanceGroup>> {
+        const groups = await this.getAllInstanceGroups(ctx);
+        return groups.reduce((map: Map<string, InstanceGroup>, group: InstanceGroup) => {
+            map.set(group.name, group);
+            return map;
+        }, new Map<string, InstanceGroup>());
     }
 
     async getAllInstanceGroups(ctx: Context): Promise<Array<InstanceGroup>> {

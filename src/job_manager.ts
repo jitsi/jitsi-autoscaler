@@ -103,7 +103,7 @@ export default class JobManager {
                     );
                     return done(null, result);
                 })
-                .catch((error: any) => {
+                .catch((error) => {
                     ctx.logger.info(
                         `[QueueProcessor] Error processing job ${queueName}:${job.id} for group ${jobData.groupName}: ${error}`,
                         {

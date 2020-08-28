@@ -34,6 +34,9 @@ export interface JibriState {
     timestamp?: number;
     metadata: JibriMetaData;
     shutdownStatus?: boolean;
+    reconfigureError?: boolean;
+    shutdownError?: boolean;
+    statsError?: boolean;
 }
 
 export interface JibriMetric {

@@ -1,7 +1,7 @@
 import { JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
 import CloudManager from './cloud_manager';
 import { InstanceDetails } from './instance_status';
-import InstanceGroupManager from './instance_group';
+import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import Redis from 'ioredis';
 import LockManager from './lock_manager';
 import { Context } from './context';
@@ -87,25 +87,10 @@ export default class InstanceLauncher {
             } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
                 ctx.logger.info('[Launcher] Will scale down to the desired count', { groupName, desiredCount, count });
 
-                const actualScaleDownQuantity =
-                    count - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
+                const listOfInstancesForScaleDown = await this.getInstancesForScaleDown(ctx, currentInventory, group);
+                await this.cloudManager.scaleDown(ctx, group, listOfInstancesForScaleDown);
 
-                const availableInstances = this.getAvailableJibris(currentInventory);
-                ctx.logger.info('[Launcher] Available instances for scale down', {
-                    groupName,
-                    availableInstances,
-                });
-
-                const unprotectedInstances = await this.filterOutProtectedInstances(ctx, availableInstances);
-                ctx.logger.info('[Launcher] Available instances for scale down that are not in protected mode', {
-                    groupName,
-                    unprotectedInstances,
-                });
-
-                const scaleDownInstances = unprotectedInstances.slice(0, actualScaleDownQuantity);
-                await this.cloudManager.scaleDown(ctx, group, scaleDownInstances);
-
-                instancesDownscaled.inc({ group: group.name }, actualScaleDownQuantity);
+                instancesDownscaled.inc({ group: group.name }, listOfInstancesForScaleDown.length);
             } else {
                 ctx.logger.info(
                     `[Launcher] No scaling activity needed for group ${groupName} with ${count} instances.`,
@@ -119,30 +104,71 @@ export default class InstanceLauncher {
         return true;
     }
 
-    async filterOutProtectedInstances(
+    async getInstancesForScaleDown(
         ctx: Context,
-        instanceDetails: Array<InstanceDetails>,
+        currentInventory: Array<JibriState>,
+        group: InstanceGroup,
     ): Promise<Array<InstanceDetails>> {
+        const desiredScaleDownQuantity =
+            currentInventory.length - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
+
+        const unprotectedInstances = await this.filterOutProtectedInstances(ctx, currentInventory);
+        const availableInstances = this.getAvailableJibris(unprotectedInstances);
+        let listOfInstancesForScaleDown = availableInstances;
+        const actualScaleDownQuantity = listOfInstancesForScaleDown.length;
+        if (actualScaleDownQuantity < desiredScaleDownQuantity) {
+            const groupName = group.name;
+            ctx.logger.info(
+                '[Launcher] Nr of available instances for scale down is less then the desired scale down quantity',
+                {
+                    groupName,
+                    actualScaleDownQuantity,
+                    desiredScaleDownQuantity,
+                },
+            );
+
+            const unavailableJibris = this.getUnavailableJibris(unprotectedInstances);
+            listOfInstancesForScaleDown = availableInstances.concat(
+                unavailableJibris.slice(
+                    0,
+                    Math.min(unavailableJibris.length, desiredScaleDownQuantity - actualScaleDownQuantity),
+                ),
+            );
+        }
+        return listOfInstancesForScaleDown;
+    }
+
+    async filterOutProtectedInstances(ctx: Context, instanceDetails: Array<JibriState>): Promise<Array<JibriState>> {
         const protectedInstances: boolean[] = await Promise.all(
             instanceDetails.map((instance) => {
-                return this.shutdownManager.isScaleDownProtected(ctx, instance.instanceId);
+                return this.shutdownManager.isScaleDownProtected(ctx, instance.jibriId);
             }),
         );
 
         return instanceDetails.filter((instances, index) => !protectedInstances[index]);
     }
 
-    getAvailableJibris(states: Array<JibriState>): Array<InstanceDetails> {
-        return states
-            .filter((response) => {
-                return response.status.busyStatus == JibriStatusState.Idle;
-            })
-            .map((response) => {
-                return {
-                    instanceId: response.jibriId,
-                    instanceType: 'jibri',
-                    group: response.metadata.group,
-                };
-            });
+    getAvailableJibris(jibriStates: Array<JibriState>): Array<InstanceDetails> {
+        const states = jibriStates.filter((jibriState) => {
+            return jibriState.status.busyStatus == JibriStatusState.Idle;
+        });
+        return this.mapToInstanceDetails(states);
+    }
+
+    getUnavailableJibris(jibriStates: Array<JibriState>): Array<InstanceDetails> {
+        const states = jibriStates.filter((jibriState) => {
+            return jibriState.status.busyStatus != JibriStatusState.Idle;
+        });
+        return this.mapToInstanceDetails(states);
+    }
+
+    mapToInstanceDetails(states: Array<JibriState>): Array<InstanceDetails> {
+        return states.map((response) => {
+            return {
+                instanceId: response.jibriId,
+                instanceType: 'jibri',
+                group: response.metadata.group,
+            };
+        });
     }
 }

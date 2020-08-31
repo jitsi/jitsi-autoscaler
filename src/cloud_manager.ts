@@ -15,6 +15,12 @@ export interface CloudManagerOptions {
     ociConfigurationProfile: string;
 }
 
+export interface CloudInstance {
+    instanceId: string;
+    displayName: string;
+    cloudStatus: string;
+}
+
 export default class CloudManager {
     private oracleInstanceManager: OracleInstanceManager;
     private shutdownManager: ShutdownManager;
@@ -67,5 +73,16 @@ export default class CloudManager {
         );
         ctx.logger.info(`Finished scaling down all the instances in group ${group.name}`);
         return true;
+    }
+
+    async getInstances(ctx: Context, group: InstanceGroup): Promise<Array<CloudInstance>> {
+        const oracleInstances = await this.oracleInstanceManager.getInstances(ctx, group);
+        return oracleInstances.map((resourceSummary) => {
+            return {
+                instanceId: resourceSummary.identifier,
+                displayName: resourceSummary.displayName,
+                cloudStatus: resourceSummary.lifecycleState,
+            };
+        });
     }
 }

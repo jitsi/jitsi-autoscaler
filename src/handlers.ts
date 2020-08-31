@@ -5,6 +5,7 @@ import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import Redlock from 'redlock';
 import ShutdownManager from './shutdown_manager';
+import GroupReportGenerator from './group_report';
 
 interface SidecarResponse {
     shutdown: boolean;
@@ -15,28 +16,33 @@ interface InstanceGroupUpdateRequest {
     desiredCount: number;
 }
 
+interface HandlersOptions {
+    jibriTracker: JibriTracker;
+    instanceStatus: InstanceStatus;
+    shutdownManager: ShutdownManager;
+    instanceGroupManager: InstanceGroupManager;
+    groupReportGenerator: GroupReportGenerator;
+    lockManager: LockManager;
+}
+
 class Handlers {
     private jibriTracker: JibriTracker;
     private instanceStatus: InstanceStatus;
     private shutdownManager: ShutdownManager;
     private instanceGroupManager: InstanceGroupManager;
+    private groupReportGenerator: GroupReportGenerator;
     private lockManager: LockManager;
 
-    constructor(
-        jibriTracker: JibriTracker,
-        instanceStatus: InstanceStatus,
-        shutdownManager: ShutdownManager,
-        instanceGroupManager: InstanceGroupManager,
-        lockManager: LockManager,
-    ) {
+    constructor(options: HandlersOptions) {
         this.jibriStateWebhook = this.jibriStateWebhook.bind(this);
         this.sidecarPoll = this.sidecarPoll.bind(this);
 
-        this.lockManager = lockManager;
-        this.jibriTracker = jibriTracker;
-        this.instanceStatus = instanceStatus;
-        this.instanceGroupManager = instanceGroupManager;
-        this.shutdownManager = shutdownManager;
+        this.lockManager = options.lockManager;
+        this.jibriTracker = options.jibriTracker;
+        this.instanceStatus = options.instanceStatus;
+        this.instanceGroupManager = options.instanceGroupManager;
+        this.shutdownManager = options.shutdownManager;
+        this.groupReportGenerator = options.groupReportGenerator;
     }
 
     async jibriStateWebhook(req: Request, res: Response): Promise<void> {
@@ -148,6 +154,15 @@ class Handlers {
         } finally {
             lock.unlock();
         }
+    }
+
+    async getGroupReport(req: Request, res: Response): Promise<void> {
+        const groupName = req.params.name;
+        const ctx = req.context;
+        const groupReport = await this.groupReportGenerator.generateReport(ctx, groupName);
+
+        res.status(200);
+        res.send({ groupReport });
     }
 
     async resetInstanceGroups(req: Request, res: Response): Promise<void> {

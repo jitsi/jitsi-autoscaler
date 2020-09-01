@@ -20,6 +20,7 @@ import * as stats from './stats';
 import ShutdownManager from './shutdown_manager';
 import JobManager from './job_manager';
 import GroupReportGenerator from './group_report';
+import { ClientOpts } from 'redis';
 import { body, param, validationResult } from 'express-validator';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
@@ -42,13 +43,24 @@ const redisOptions = <Redis.RedisOptions>{
     host: config.RedisHost,
     port: config.RedisPort,
 };
+const redisQueueOptions = <ClientOpts>{
+    host: config.RedisHost,
+    port: config.RedisPort,
+};
 
 if (config.RedisPassword) {
     redisOptions.password = config.RedisPassword;
+    redisQueueOptions.password = config.RedisPassword;
 }
 
 if (config.RedisTLS) {
     redisOptions.tls = {};
+    redisQueueOptions.tls = {};
+}
+
+if (config.RedisDb) {
+    redisOptions.db = config.RedisDb;
+    redisQueueOptions.db = config.RedisDb;
 }
 
 const redisClient = new Redis(redisOptions);
@@ -125,7 +137,7 @@ const groupReportGenerator = new GroupReportGenerator({
 // Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
-    queueRedisOptions: JSON.parse(JSON.stringify(redisOptions)),
+    queueRedisOptions: redisQueueOptions,
     lockManager: lockManager,
     instanceGroupManager: instanceGroupManager,
     instanceLauncher: instanceLauncher,

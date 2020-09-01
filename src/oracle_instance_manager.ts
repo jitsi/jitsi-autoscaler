@@ -5,6 +5,8 @@ import { InstanceGroup } from './instance_group';
 import { JibriHealthState, JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
+import { ResourceSearchClient } from 'oci-resourcesearch';
+import * as resourceSearch from 'oci-resourcesearch';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -166,7 +168,7 @@ export default class OracleInstanceManager {
     }
 
     //TODO in the future, the list of ADs/FDs per region will be loaded once at startup time
-    async getAvailabilityDomains(compartmentId: string, region: string): Promise<string[]> {
+    private async getAvailabilityDomains(compartmentId: string, region: string): Promise<string[]> {
         this.identityClient.regionId = region;
         const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse = await this.identityClient.listAvailabilityDomains(
             {
@@ -190,7 +192,11 @@ export default class OracleInstanceManager {
             });
     }
 
-    async getFaultDomains(compartmentId: string, region: string, availabilityDomain: string): Promise<string[]> {
+    private async getFaultDomains(
+        compartmentId: string,
+        region: string,
+        availabilityDomain: string,
+    ): Promise<string[]> {
         this.identityClient.regionId = region;
         const faultDomainsResponse: identity.responses.ListFaultDomainsResponse = await this.identityClient.listFaultDomains(
             {
@@ -201,5 +207,40 @@ export default class OracleInstanceManager {
         return faultDomainsResponse.items.map((fdResponse) => {
             return fdResponse.name;
         });
+    }
+
+    async getInstances(ctx: Context, group: InstanceGroup): Promise<Array<resourceSearch.models.ResourceSummary>> {
+        const instances: Array<resourceSearch.models.ResourceSummary> = [];
+
+        const resourceSearchClient = new ResourceSearchClient({
+            authenticationDetailsProvider: this.provider,
+        });
+        resourceSearchClient.regionId = group.region;
+
+        const structuredSearch: resourceSearch.models.StructuredSearchDetails = {
+            query: `query instance resources where (freeformTags.key = 'group' && freeformTags.value = '${group.name}')`,
+            type: 'Structured',
+            matchingContextType: resourceSearch.models.SearchDetails.MatchingContextType.NONE,
+        };
+
+        const structuredSearchRequest: resourceSearch.requests.SearchResourcesRequest = {
+            searchDetails: structuredSearch,
+        };
+        const searchResourcesResponse: resourceSearch.responses.SearchResourcesResponse = await resourceSearchClient.searchResources(
+            structuredSearchRequest,
+        );
+        if (
+            searchResourcesResponse.resourceSummaryCollection &&
+            searchResourcesResponse.resourceSummaryCollection.items
+        ) {
+            for (let i = 0; i < searchResourcesResponse.resourceSummaryCollection.items.length; i++) {
+                const resourceSummary: resourceSearch.models.ResourceSummary =
+                    searchResourcesResponse.resourceSummaryCollection.items[i];
+                ctx.logger.debug('Found instance in oracle', { resourceSummary });
+                instances.push(resourceSummary);
+            }
+        }
+
+        return instances;
     }
 }

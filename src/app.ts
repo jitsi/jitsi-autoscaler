@@ -18,6 +18,7 @@ import LockManager from './lock_manager';
 import * as stats from './stats';
 import ShutdownManager from './shutdown_manager';
 import JobManager from './job_manager';
+import GroupReportGenerator from './group_report';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -111,6 +112,13 @@ const instanceLauncher = new InstanceLauncher({
     shutdownManager,
 });
 
+const groupReportGenerator = new GroupReportGenerator({
+    jibriTracker: jibriTracker,
+    instanceGroupManager: instanceGroupManager,
+    cloudManager: cloudManager,
+    shutdownManager: shutdownManager,
+});
+
 // Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
@@ -144,7 +152,14 @@ async function createGroupProcessingJobs() {
 
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
-const h = new Handlers(jibriTracker, instanceStatus, shutdownManager, instanceGroupManager, lockManager);
+const h = new Handlers({
+    jibriTracker: jibriTracker,
+    instanceStatus: instanceStatus,
+    instanceGroupManager: instanceGroupManager,
+    shutdownManager: shutdownManager,
+    groupReportGenerator: groupReportGenerator,
+    lockManager: lockManager,
+});
 
 const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
@@ -235,6 +250,14 @@ app.put('/groups/:name', async (req, res, next) => {
 app.put('/groups/desired-count/:name', async (req, res, next) => {
     try {
         await h.upsertDesiredCount(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/groups/:name/report', async (req, res, next) => {
+    try {
+        await h.getGroupReport(req, res);
     } catch (err) {
         next(err);
     }

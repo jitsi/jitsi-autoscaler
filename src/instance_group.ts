@@ -103,7 +103,7 @@ export default class InstanceGroupManager {
         if (result !== null && result.length > 0) {
             return JSON.parse(result);
         } else {
-            throw new Error(`unable to get group by name ${groupName}`);
+            return null;
         }
     }
 

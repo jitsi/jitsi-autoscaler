@@ -20,6 +20,7 @@
     "express": "^4.17.1",
     "express-jwt": "^6.0.0",
     "express-unless": "^0.5.0",
+    "express-validator": "^6.6.1",
     "got": "^11.5.1",
     "ioredis": "^4.17.3",
     "jsonwebtoken": "^8.5.1",

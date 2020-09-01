@@ -102,11 +102,16 @@ class Handlers {
         const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context, req.params.name);
         try {
             const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
-            instanceGroup.scalingOptions.desiredCount = request.desiredCount;
-            await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
-            this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
-            res.status(200);
-            res.send({ save: 'OK' });
+            if (instanceGroup) {
+                instanceGroup.scalingOptions.desiredCount = request.desiredCount;
+                await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
+                this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
+                res.status(200);
+                res.send({ save: 'OK' });
+            } else {
+                res.status(404);
+                res.send();
+            }
         } finally {
             lock.unlock();
         }
@@ -140,8 +145,13 @@ class Handlers {
     async getInstanceGroup(req: Request, res: Response): Promise<void> {
         const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
 
-        res.status(200);
-        res.send({ instanceGroup });
+        if (instanceGroup) {
+            res.status(200);
+            res.send({ instanceGroup });
+        } else {
+            res.status(404);
+            res.send();
+        }
     }
 
     async deleteInstanceGroup(req: Request, res: Response): Promise<void> {
@@ -216,23 +226,27 @@ class Handlers {
             });
 
             const group = await this.instanceGroupManager.getInstanceGroup(groupName);
+            if (group) {
+                if (requestBody.instanceConfigurationId != null) {
+                    group.instanceConfigurationId = requestBody.instanceConfigurationId;
+                }
+                group.scalingOptions.desiredCount = group.scalingOptions.desiredCount + requestBody.count;
+                group.protectedTTLSec = requestBody.scaleDownProtectedTTLSec;
 
-            if (requestBody.instanceConfigurationId != null) {
-                group.instanceConfigurationId = requestBody.instanceConfigurationId;
+                await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
+                await this.instanceGroupManager.setScaleDownProtected(group);
+
+                req.context.logger.info(
+                    `Newly launched instances in group ${groupName} will be protected for ${scaleDownProtectedTTL} seconds`,
+                );
+
+                res.status(200);
+                res.send({ launch: 'OK' });
+            } else {
+                res.status(404);
+                res.send();
             }
-            group.scalingOptions.desiredCount = group.scalingOptions.desiredCount + requestBody.count;
-            group.protectedTTLSec = requestBody.scaleDownProtectedTTLSec;
-
-            await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
-            await this.instanceGroupManager.setAutoScaleGracePeriod(group);
-            await this.instanceGroupManager.setScaleDownProtected(group);
-
-            req.context.logger.info(
-                `Newly launched instances in group ${groupName} will be protected for ${scaleDownProtectedTTL} seconds`,
-            );
-
-            res.status(200);
-            res.send({ reset: 'OK' });
         } finally {
             lock.unlock();
         }

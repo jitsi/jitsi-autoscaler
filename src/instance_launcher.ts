@@ -67,6 +67,11 @@ export default class InstanceLauncher {
             return false;
         }
 
+        if (!group.enableLaunch) {
+            ctx.logger.info(`[Launcher] Scaling not enabled for group ${group.name}`);
+            return false;
+        }
+
         const desiredCount = group.scalingOptions.desiredCount;
         const currentInventory = await this.jibriTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;

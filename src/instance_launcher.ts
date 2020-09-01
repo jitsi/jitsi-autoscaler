@@ -14,6 +14,12 @@ const instancesCount = new promClient.Gauge({
     labelNames: ['group'],
 });
 
+const runningInstancesCount = new promClient.Gauge({
+    name: 'autoscaling_instance_running',
+    help: 'Gauge for current instances',
+    labelNames: ['group'],
+});
+
 const instancesLaunched = new promClient.Gauge({
     name: 'autoscaling_instance_launched',
     help: 'Gauge for launched instances',
@@ -78,6 +84,7 @@ export default class InstanceLauncher {
 
         // set stat for current count of instances
         instancesCount.set({ group: group.name }, count);
+        runningInstancesCount.set({ group: group.name }, this.countNonProvisioningInstances(ctx, currentInventory));
         try {
             if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
                 ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });
@@ -175,5 +182,15 @@ export default class InstanceLauncher {
                 group: response.metadata.group,
             };
         });
+    }
+
+    countNonProvisioningInstances(ctx: Context, states: Array<JibriState>): number {
+        let count = 0;
+        states.forEach((jibriState) => {
+            if (jibriState.status.busyStatus != JibriStatusState.Provisioning) {
+                count++;
+            }
+        });
+        return count;
     }
 }

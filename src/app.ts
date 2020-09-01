@@ -3,6 +3,7 @@ import config from './config';
 import express from 'express';
 import * as context from './context';
 import Handlers from './handlers';
+import Validator from './validator';
 import Redis from 'ioredis';
 import logger from './logger';
 import shortid from 'shortid';
@@ -19,6 +20,7 @@ import * as stats from './stats';
 import ShutdownManager from './shutdown_manager';
 import JobManager from './job_manager';
 import GroupReportGenerator from './group_report';
+import { body, param, validationResult } from 'express-validator';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -27,6 +29,7 @@ import GroupReportGenerator from './group_report';
 
 const app = express();
 app.use(bodyParser.json());
+app.use(express.json());
 
 // TODO: unittesting
 // TODO: readme updates and docker compose allthethings
@@ -161,6 +164,7 @@ const h = new Handlers({
     lockManager: lockManager,
 });
 
+const validator = new Validator(jibriTracker);
 const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use(loggedPaths, context.injectContext);
@@ -239,21 +243,45 @@ app.post('/sidecar/status', async (req, res, next) => {
     }
 });
 
-app.put('/groups/:name', async (req, res, next) => {
-    try {
-        await h.upsertInstanceGroup(req, res);
-    } catch (err) {
-        next(err);
-    }
-});
+app.put(
+    '/groups/:name',
+    body('scalingOptions.minDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions.maxDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions.desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions').custom((value) => {
+        if (!validator.groupHasValidDesiredValues(value.minDesired, value.maxDesired, value.desiredCount)) {
+            throw new Error('Desired count must be between min and max; min cannot be grater than max');
+        }
+        return true;
+    }),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.upsertInstanceGroup(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
 
-app.put('/groups/desired-count/:name', async (req, res, next) => {
-    try {
-        await h.upsertDesiredCount(req, res);
-    } catch (err) {
-        next(err);
-    }
-});
+app.put(
+    '/groups/:name/desired-count',
+    body('desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.upsertDesiredCount(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
 
 app.get('/groups/:name/report', async (req, res, next) => {
     try {
@@ -279,13 +307,26 @@ app.get('/groups/:name', async (req, res, next) => {
     }
 });
 
-app.delete('/groups/:name', async (req, res, next) => {
-    try {
-        await h.deleteInstanceGroup(req, res);
-    } catch (err) {
-        next(err);
-    }
-});
+app.delete(
+    '/groups/:name',
+    param('name').custom(async (value) => {
+        if (await validator.groupHasActiveInstances(initCtx, value)) {
+            throw new Error('This group has active instances');
+        }
+        return true;
+    }),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.deleteInstanceGroup(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
 
 app.post('/groups/actions/reset', async (req, res, next) => {
     try {
@@ -295,13 +336,21 @@ app.post('/groups/actions/reset', async (req, res, next) => {
     }
 });
 
-app.post('/groups/actions/launch-protected/:name', async (req, res, next) => {
-    try {
-        await h.launchProtectedInstanceGroup(req, res);
-    } catch (err) {
-        next(err);
-    }
-});
+app.post(
+    '/groups/:name/actions/launch-protected',
+    body('count').isInt({ min: 0 }).withMessage('Value must be positive'),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.launchProtectedInstanceGroup(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
 
 app.listen(config.HTTPServerPort, () => {
     logger.info(`...listening on :${config.HTTPServerPort}`);

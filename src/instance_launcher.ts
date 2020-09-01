@@ -126,7 +126,7 @@ export default class InstanceLauncher {
 
         const unprotectedInstances = await this.filterOutProtectedInstances(ctx, currentInventory);
         const availableInstances = this.getAvailableJibris(unprotectedInstances);
-        let listOfInstancesForScaleDown = availableInstances;
+        let listOfInstancesForScaleDown = availableInstances.slice(0, desiredScaleDownQuantity);
         const actualScaleDownQuantity = listOfInstancesForScaleDown.length;
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {
             const groupName = group.name;

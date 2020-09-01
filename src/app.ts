@@ -161,7 +161,7 @@ const h = new Handlers({
     lockManager: lockManager,
 });
 
-const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*', 'test/*'];
+const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use(loggedPaths, context.injectContext);
 app.use(loggedPaths, context.accessLogger);

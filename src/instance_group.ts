@@ -23,6 +23,7 @@ export interface InstanceGroup {
     compartmentId: string;
     instanceConfigurationId: string;
     enableAutoScale: boolean;
+    enableLaunch: boolean;
     gracePeriodTTLSec: number;
     protectedTTLSec: number;
     scalingOptions: ScalingOptions;

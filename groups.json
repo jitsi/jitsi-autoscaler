@@ -8,6 +8,7 @@
       "compartmentId": "",
       "instanceConfigurationId": "",
       "enableAutoScale": true,
+      "enableLaunch": true,
       "gracePeriodTTLSec": 480,
       "protectedTTLSec": 600,
       "scalingOptions": {
@@ -32,6 +33,7 @@
       "compartmentId": "",
       "instanceConfigurationId": "",
       "enableAutoScale": false,
+      "enableLaunch": false,
       "gracePeriodTTLSec": 480,
       "protectedTTLSec": 600,
       "scalingOptions": {

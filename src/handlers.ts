@@ -16,6 +16,11 @@ interface InstanceGroupUpdateRequest {
     desiredCount: number;
 }
 
+interface InstanceGroupScalingActivitiesRequest {
+    enableAutoScale?: boolean;
+    enableLaunch?: boolean;
+}
+
 interface HandlersOptions {
     jibriTracker: JibriTracker;
     instanceStatus: InstanceStatus;
@@ -106,6 +111,30 @@ class Handlers {
                 instanceGroup.scalingOptions.desiredCount = request.desiredCount;
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
+                res.status(200);
+                res.send({ save: 'OK' });
+            } else {
+                res.status(404);
+                res.send();
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    async updateScalingActivities(req: Request, res: Response): Promise<void> {
+        const scalingActivitiesRequest: InstanceGroupScalingActivitiesRequest = req.body;
+        const lock: Redlock.Lock = await this.lockManager.lockAutoscaleProcessing(req.context, req.params.name);
+        try {
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+            if (instanceGroup) {
+                if (scalingActivitiesRequest.enableAutoScale != null) {
+                    instanceGroup.enableAutoScale = scalingActivitiesRequest.enableAutoScale;
+                }
+                if (scalingActivitiesRequest.enableLaunch != null) {
+                    instanceGroup.enableLaunch = scalingActivitiesRequest.enableLaunch;
+                }
+                await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 res.status(200);
                 res.send({ save: 'OK' });
             } else {

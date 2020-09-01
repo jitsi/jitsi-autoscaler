@@ -283,6 +283,14 @@ app.put(
     },
 );
 
+app.put('/groups/:name/scaling-activities', async (req, res, next) => {
+    try {
+        await h.updateScalingActivities(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 app.get('/groups/:name/report', async (req, res, next) => {
     try {
         await h.getGroupReport(req, res);

@@ -6,6 +6,12 @@ import { JibriTracker } from './jibri_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 
+export interface CloudRetryStrategy {
+    maxTimeInSeconds: number;
+    maxDelayInSeconds: number;
+    retryableStatusCodes: Array<number>;
+}
+
 export interface CloudManagerOptions {
     instanceStatus: InstanceStatus;
     shutdownManager: ShutdownManager;
@@ -75,8 +81,12 @@ export default class CloudManager {
         return true;
     }
 
-    async getInstances(ctx: Context, group: InstanceGroup): Promise<Array<CloudInstance>> {
-        const oracleInstances = await this.oracleInstanceManager.getInstances(ctx, group);
+    async getInstances(
+        ctx: Context,
+        group: InstanceGroup,
+        cloudRetryStrategy: CloudRetryStrategy,
+    ): Promise<Array<CloudInstance>> {
+        const oracleInstances = await this.oracleInstanceManager.getInstances(ctx, group, cloudRetryStrategy);
         return oracleInstances.map((resourceSummary) => {
             return {
                 instanceId: resourceSummary.identifier,

@@ -7,6 +7,7 @@ import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import { ResourceSearchClient } from 'oci-resourcesearch';
 import * as resourceSearch from 'oci-resourcesearch';
+import { CloudRetryStrategy } from './cloud_manager';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -178,11 +179,7 @@ export default class OracleInstanceManager {
         return availabilityDomainsResponse.items
             .filter((adResponse) => {
                 if (region.toString() == 'eu-frankfurt-1') {
-                    if (adResponse.name.endsWith('1') || adResponse.name.endsWith('2')) {
-                        return true;
-                    } else {
-                        return false;
-                    }
+                    return adResponse.name.endsWith('1') || adResponse.name.endsWith('2');
                 } else {
                     return true;
                 }
@@ -209,18 +206,35 @@ export default class OracleInstanceManager {
         });
     }
 
-    async getInstances(ctx: Context, group: InstanceGroup): Promise<Array<resourceSearch.models.ResourceSummary>> {
+    async getInstances(
+        ctx: Context,
+        group: InstanceGroup,
+        cloudRetryStrategy: CloudRetryStrategy,
+    ): Promise<Array<resourceSearch.models.ResourceSummary>> {
         const instances: Array<resourceSearch.models.ResourceSummary> = [];
 
         const resourceSearchClient = new ResourceSearchClient({
             authenticationDetailsProvider: this.provider,
         });
+        resourceSearchClient.clientConfiguration = {
+            retryConfiguration: {
+                terminationStrategy: new common.MaxTimeTerminationStrategy(cloudRetryStrategy.maxTimeInSeconds),
+                delayStrategy: new common.ExponentialBackoffDelayStrategy(cloudRetryStrategy.maxDelayInSeconds),
+                retryCondition: (response) => {
+                    return (
+                        cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
+                            return response.statusCode === retryableStatusCode;
+                        }).length > 0
+                    );
+                },
+            },
+        };
         resourceSearchClient.regionId = group.region;
 
         const structuredSearch: resourceSearch.models.StructuredSearchDetails = {
             query: `query instance resources where (freeformTags.key = 'group' && freeformTags.value = '${group.name}')`,
             type: 'Structured',
-            matchingContextType: resourceSearch.models.SearchDetails.MatchingContextType.NONE,
+            matchingContextType: resourceSearch.models.SearchDetails.MatchingContextType.None,
         };
 
         const structuredSearchRequest: resourceSearch.requests.SearchResourcesRequest = {

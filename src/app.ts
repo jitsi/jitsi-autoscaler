@@ -132,6 +132,11 @@ const groupReportGenerator = new GroupReportGenerator({
     instanceGroupManager: instanceGroupManager,
     cloudManager: cloudManager,
     shutdownManager: shutdownManager,
+    reportExtCallRetryStrategy: {
+        maxTimeInSeconds: config.ReportExtCallMaxTimeInSeconds,
+        maxDelayInSeconds: config.ReportExtCallMaxDelayInSeconds,
+        retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
+    },
 });
 
 // Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)

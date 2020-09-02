@@ -46,6 +46,9 @@ const env = envalid.cleanEnv(process.env, {
     AUTOSCALER_PROCESSING_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     OCI_CONFIGURATION_FILE_PATH: envalid.str(),
     OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),
+    REPORT_EXT_CALL_MAX_TIME_IN_SECONDS: envalid.num({ default: 60 }),
+    REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS: envalid.num({ default: 30 }),
+    REPORT_EXT_CALL_RETRYABLE_STATUS_CODES: envalid.str({ default: '429 409' }), // Retry on Too Many Requests, Conflict
 });
 
 const groupsJsonRaw: string = fs.readFileSync(env.GROUP_CONFIG_FILE, { encoding: 'utf-8' });
@@ -87,4 +90,11 @@ export default {
     AutoscalerProcessingLockTTL: env.AUTOSCALER_PROCESSING_LOCK_TTL_MS,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
     OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,
+    ReportExtCallMaxTimeInSeconds: env.REPORT_EXT_CALL_MAX_TIME_IN_SECONDS,
+    ReportExtCallMaxDelayInSeconds: env.REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS,
+    ReportExtCallRetryableStatusCodes: env.REPORT_EXT_CALL_RETRYABLE_STATUS_CODES.split(' ').map(
+        (statusCodeAsString) => {
+            return Number(statusCodeAsString);
+        },
+    ),
 };

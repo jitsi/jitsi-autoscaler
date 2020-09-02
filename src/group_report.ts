@@ -1,7 +1,7 @@
 import { JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
 import { Context } from './context';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
-import CloudManager, { CloudInstance } from './cloud_manager';
+import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
 import ShutdownManager from './shutdown_manager';
 
 export interface InstanceReport {
@@ -32,6 +32,7 @@ export interface GroupReportGeneratorOptions {
     instanceGroupManager: InstanceGroupManager;
     cloudManager: CloudManager;
     shutdownManager: ShutdownManager;
+    reportExtCallRetryStrategy: CloudRetryStrategy;
 }
 
 export default class GroupReportGenerator {
@@ -39,12 +40,14 @@ export default class GroupReportGenerator {
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
     private shutdownManager: ShutdownManager;
+    private reportExtCallRetryStrategy: CloudRetryStrategy;
 
     constructor(options: GroupReportGeneratorOptions) {
         this.jibriTracker = options.jibriTracker;
         this.instanceGroupManager = options.instanceGroupManager;
         this.cloudManager = options.cloudManager;
         this.shutdownManager = options.shutdownManager;
+        this.reportExtCallRetryStrategy = options.reportExtCallRetryStrategy;
 
         this.generateReport = this.generateReport.bind(this);
     }
@@ -72,7 +75,7 @@ export default class GroupReportGenerator {
         // Get the list of instances from redis and from the cloud manager
         const jibriStates = await this.jibriTracker.getCurrent(ctx, groupName);
         groupReport.count = jibriStates.length;
-        const cloudInstances = await this.cloudManager.getInstances(ctx, group);
+        const cloudInstances = await this.cloudManager.getInstances(ctx, group, this.reportExtCallRetryStrategy);
         groupReport.cloudCount = cloudInstances.length;
         this.getInstanceReportsMap(jibriStates, cloudInstances).forEach((instanceReport) => {
             groupReport.instances.push(instanceReport);

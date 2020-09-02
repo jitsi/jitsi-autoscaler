@@ -62,10 +62,10 @@ export default class GroupReportGenerator {
             groupName: groupName,
             desiredCount: group.scalingOptions.desiredCount,
             count: 0,
+            cloudCount: 0,
             provisioningCount: 0,
             availableCount: 0,
             busyCount: 0,
-            cloudCount: 0,
             unTrackedCount: 0,
             shuttingDownCount: 0,
             scaleDownProtectedCount: 0,
@@ -85,13 +85,19 @@ export default class GroupReportGenerator {
         await this.addShutdownProtectedStatus(ctx, groupReport.instances);
 
         groupReport.instances.forEach((instanceReport) => {
+            if (instanceReport.cloudStatus === 'Provisioning' || instanceReport.cloudStatus === 'Running') {
+                groupReport.cloudCount++;
+            }
             if (instanceReport.isShuttingDown) {
                 groupReport.shuttingDownCount++;
             }
             if (instanceReport.isScaleDownProtected) {
                 groupReport.scaleDownProtectedCount++;
             }
-            if (instanceReport.scaleStatus == 'unknown') {
+            if (
+                instanceReport.scaleStatus == 'unknown' &&
+                (instanceReport.cloudStatus === 'Provisioning' || instanceReport.cloudStatus === 'Running')
+            ) {
                 groupReport.unTrackedCount++;
             }
             if (instanceReport.scaleStatus == JibriStatusState.Provisioning) {

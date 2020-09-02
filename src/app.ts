@@ -22,6 +22,7 @@ import JobManager from './job_manager';
 import GroupReportGenerator from './group_report';
 import { ClientOpts } from 'redis';
 import { body, param, validationResult } from 'express-validator';
+import SanityLoop from './sanity_loop';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -99,6 +100,7 @@ const instanceGroupManager = new InstanceGroupManager({
     redisClient: redisClient,
     initialGroupList: config.GroupList,
     groupJobsCreationGracePeriod: config.GroupJobsCreationGracePeriodSec,
+    sanityJobsCreationGracePeriod: config.SanityJobsCreationGracePeriodSec,
 });
 
 logger.info('Initializing instance group manager...');
@@ -139,6 +141,10 @@ const groupReportGenerator = new GroupReportGenerator({
     },
 });
 
+const sanityLoop = new SanityLoop({
+    groupReportGenerator: groupReportGenerator,
+});
+
 // Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
@@ -147,14 +153,17 @@ const jobManager = new JobManager({
     instanceGroupManager: instanceGroupManager,
     instanceLauncher: instanceLauncher,
     autoscaler: autoscaleProcessor,
+    sanityLoop: sanityLoop,
     autoscalerProcessingTimeoutMilli: config.AutoscalerProcessingLockTTL,
     launcherProcessingTimeoutMilli: config.AutoscalerProcessingLockTTL,
+    sanityLoopProcessingTimeoutMilli: config.SanityLoopProcessingTimoutMs,
 });
 
 async function startProcessingGroups() {
     logger.info('Start pooling..');
 
     await createGroupProcessingJobs();
+    await createSanityProcessingJobs();
 }
 logger.info(`Waiting ${config.InitialWaitForPooling}ms before starting to loop for group processing`);
 setTimeout(startProcessingGroups, config.InitialWaitForPooling);
@@ -168,6 +177,17 @@ async function createGroupProcessingJobs() {
     const ctx = new context.Context(pollLogger, start, pollId);
     await jobManager.createGroupProcessingJobs(ctx);
     setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
+}
+
+async function createSanityProcessingJobs() {
+    const start = Date.now();
+    const pollId = shortid.generate();
+    const pollLogger = logger.child({
+        id: pollId,
+    });
+    const ctx = new context.Context(pollLogger, start, pollId);
+    await jobManager.createSanityProcessingJobs(ctx);
+    setTimeout(createSanityProcessingJobs, config.SanityJobsCreationIntervalSec * 1000);
 }
 
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);

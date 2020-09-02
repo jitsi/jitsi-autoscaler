@@ -6,10 +6,17 @@ import { JibriTracker } from './jibri_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 
+export interface CloudRetryStrategy {
+    maxTimeInSeconds: number;
+    maxDelayInSeconds: number;
+    retryableStatusCodes: Array<number>;
+}
+
 export interface CloudManagerOptions {
     instanceStatus: InstanceStatus;
     shutdownManager: ShutdownManager;
     isDryRun: boolean;
+    cloudRetryStrategy: CloudRetryStrategy;
     jibriTracker: JibriTracker;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
@@ -30,6 +37,7 @@ export default class CloudManager {
         this.isDryRun = options.isDryRun;
         this.oracleInstanceManager = new OracleCloudManager({
             isDryRun: options.isDryRun,
+            cloudRetryStrategy: options.cloudRetryStrategy,
             ociConfigurationFilePath: options.ociConfigurationFilePath,
             ociConfigurationProfile: options.ociConfigurationProfile,
             jibriTracker: options.jibriTracker,

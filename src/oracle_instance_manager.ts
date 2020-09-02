@@ -7,6 +7,7 @@ import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import { ResourceSearchClient } from 'oci-resourcesearch';
 import * as resourceSearch from 'oci-resourcesearch';
+import { CloudRetryStrategy } from './cloud_manager';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -20,6 +21,7 @@ function makeRandomString(length: number) {
 
 export interface OracleInstanceManagerOptions {
     isDryRun: boolean;
+    cloudRetryStrategy: CloudRetryStrategy;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
     jibriTracker: JibriTracker;
@@ -28,23 +30,29 @@ export interface OracleInstanceManagerOptions {
 
 export default class OracleInstanceManager {
     private isDryRun: boolean;
+    private ociRetryConfiguration: common.RetryConfiguration;
     private provider: common.ConfigFileAuthenticationDetailsProvider;
-    private identityClient: identity.IdentityClient;
-    private computeManagementClient: core.ComputeManagementClient;
     private jibriTracker: JibriTracker;
     private shutdownManager: ShutdownManager;
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
+        this.ociRetryConfiguration = {
+            terminationStrategy: new common.MaxTimeTerminationStrategy(options.cloudRetryStrategy.maxTimeInSeconds),
+            delayStrategy: new common.ExponentialBackoffDelayStrategy(options.cloudRetryStrategy.maxDelayInSeconds),
+            retryCondition: (response) => {
+                return (
+                    options.cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
+                        return response.statusCode === retryableStatusCode;
+                    }).length > 0
+                );
+            },
+        };
         this.jibriTracker = options.jibriTracker;
         this.provider = new common.ConfigFileAuthenticationDetailsProvider(
             options.ociConfigurationFilePath,
             options.ociConfigurationProfile,
         );
-        this.identityClient = new identity.IdentityClient({ authenticationDetailsProvider: this.provider });
-        this.computeManagementClient = new core.ComputeManagementClient({
-            authenticationDetailsProvider: this.provider,
-        });
         this.shutdownManager = options.shutdownManager;
 
         this.launchInstances = this.launchInstances.bind(this);
@@ -61,7 +69,6 @@ export default class OracleInstanceManager {
     ): Promise<void> {
         ctx.logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
 
-        this.computeManagementClient.regionId = group.region;
         const availabilityDomains: string[] = await this.getAvailabilityDomains(group.compartmentId, group.region);
 
         const indexes: Array<number> = [];
@@ -100,6 +107,14 @@ export default class OracleInstanceManager {
         faultDomain: string,
         isScaleDownProtected: boolean,
     ): Promise<void> {
+        const computeManagementClient = new core.ComputeManagementClient({
+            authenticationDetailsProvider: this.provider,
+        });
+        computeManagementClient.clientConfiguration = {
+            retryConfiguration: this.ociRetryConfiguration,
+        };
+        computeManagementClient.regionId = group.region;
+
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
 
@@ -132,7 +147,7 @@ export default class OracleInstanceManager {
             return;
         }
         try {
-            const launchResponse = await this.computeManagementClient.launchInstanceConfiguration({
+            const launchResponse = await computeManagementClient.launchInstanceConfiguration({
                 instanceConfigurationId: groupInstanceConfigurationId,
                 instanceConfiguration: overwriteComputeInstanceDetails,
             });
@@ -169,8 +184,13 @@ export default class OracleInstanceManager {
 
     //TODO in the future, the list of ADs/FDs per region will be loaded once at startup time
     private async getAvailabilityDomains(compartmentId: string, region: string): Promise<string[]> {
-        this.identityClient.regionId = region;
-        const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse = await this.identityClient.listAvailabilityDomains(
+        const identityClient = new identity.IdentityClient({ authenticationDetailsProvider: this.provider });
+        identityClient.clientConfiguration = {
+            retryConfiguration: this.ociRetryConfiguration,
+        };
+        identityClient.regionId = region;
+
+        const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse = await identityClient.listAvailabilityDomains(
             {
                 compartmentId: compartmentId,
             },
@@ -178,11 +198,7 @@ export default class OracleInstanceManager {
         return availabilityDomainsResponse.items
             .filter((adResponse) => {
                 if (region.toString() == 'eu-frankfurt-1') {
-                    if (adResponse.name.endsWith('1') || adResponse.name.endsWith('2')) {
-                        return true;
-                    } else {
-                        return false;
-                    }
+                    return adResponse.name.endsWith('1') || adResponse.name.endsWith('2');
                 } else {
                     return true;
                 }
@@ -197,8 +213,13 @@ export default class OracleInstanceManager {
         region: string,
         availabilityDomain: string,
     ): Promise<string[]> {
-        this.identityClient.regionId = region;
-        const faultDomainsResponse: identity.responses.ListFaultDomainsResponse = await this.identityClient.listFaultDomains(
+        const identityClient = new identity.IdentityClient({ authenticationDetailsProvider: this.provider });
+        identityClient.clientConfiguration = {
+            retryConfiguration: this.ociRetryConfiguration,
+        };
+        identityClient.regionId = region;
+
+        const faultDomainsResponse: identity.responses.ListFaultDomainsResponse = await identityClient.listFaultDomains(
             {
                 compartmentId: compartmentId,
                 availabilityDomain: availabilityDomain,
@@ -215,12 +236,15 @@ export default class OracleInstanceManager {
         const resourceSearchClient = new ResourceSearchClient({
             authenticationDetailsProvider: this.provider,
         });
+        resourceSearchClient.clientConfiguration = {
+            retryConfiguration: this.ociRetryConfiguration,
+        };
         resourceSearchClient.regionId = group.region;
 
         const structuredSearch: resourceSearch.models.StructuredSearchDetails = {
             query: `query instance resources where (freeformTags.key = 'group' && freeformTags.value = '${group.name}')`,
             type: 'Structured',
-            matchingContextType: resourceSearch.models.SearchDetails.MatchingContextType.NONE,
+            matchingContextType: resourceSearch.models.SearchDetails.MatchingContextType.None,
         };
 
         const structuredSearchRequest: resourceSearch.requests.SearchResourcesRequest = {

@@ -83,6 +83,11 @@ const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
 const cloudManager = new CloudManager({
     shutdownManager: shutdownManager,
     isDryRun: config.DryRun,
+    cloudRetryStrategy: {
+        maxTimeInSeconds: config.ExtCallMaxTimeInSeconds,
+        maxDelayInSeconds: config.ExtCallMaxDelayInSeconds,
+        retryableStatusCodes: config.ExtCallRetryableStatusCodes,
+    },
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
     jibriTracker: jibriTracker,

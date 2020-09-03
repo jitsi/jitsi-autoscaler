@@ -8,6 +8,7 @@ import ShutdownManager from './shutdown_manager';
 import { ResourceSearchClient } from 'oci-resourcesearch';
 import * as resourceSearch from 'oci-resourcesearch';
 import { CloudRetryStrategy } from './cloud_manager';
+import Audit from './audit';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -25,6 +26,7 @@ export interface OracleInstanceManagerOptions {
     ociConfigurationProfile: string;
     jibriTracker: JibriTracker;
     shutdownManager: ShutdownManager;
+    audit: Audit;
 }
 
 export default class OracleInstanceManager {
@@ -34,6 +36,7 @@ export default class OracleInstanceManager {
     private computeManagementClient: core.ComputeManagementClient;
     private jibriTracker: JibriTracker;
     private shutdownManager: ShutdownManager;
+    private audit: Audit;
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
@@ -47,6 +50,7 @@ export default class OracleInstanceManager {
             authenticationDetailsProvider: this.provider,
         });
         this.shutdownManager = options.shutdownManager;
+        this.audit = options.audit;
 
         this.launchInstances = this.launchInstances.bind(this);
         this.getAvailabilityDomains = this.getAvailabilityDomains.bind(this);
@@ -141,6 +145,7 @@ export default class OracleInstanceManager {
                 `[oracle] Got launch response for instance number ${index + 1} in group ${groupName}`,
                 launchResponse,
             );
+            await this.audit.saveLaunchEvent(groupName, launchResponse.instance.id);
             const state: JibriState = {
                 jibriId: launchResponse.instance.id,
                 status: {

@@ -1,19 +1,23 @@
 import Redis from 'ioredis';
 import { Context } from './context';
 import { InstanceDetails } from './instance_status';
+import Audit from './audit';
 
 export interface ShutdownManagerOptions {
     redisClient: Redis.Redis;
     shutdownTTL: number;
+    audit: Audit;
 }
 
 export default class ShutdownManager {
     private redisClient: Redis.Redis;
     private shutdownTTL: number;
+    private audit: Audit;
 
     constructor(options: ShutdownManagerOptions) {
         this.redisClient = options.redisClient;
         this.shutdownTTL = options.shutdownTTL;
+        this.audit = options.audit;
     }
 
     shutDownKey(instanceId: string): string {
@@ -28,6 +32,7 @@ export default class ShutdownManager {
         const key = this.shutDownKey(details.instanceId);
         ctx.logger.debug('Writing shutdown status', { key, status });
         await this.redisClient.set(key, status, 'ex', this.shutdownTTL);
+        await this.audit.saveShutdownEvent(details.group, details.instanceId);
         return true;
     }
 

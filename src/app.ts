@@ -20,6 +20,7 @@ import * as stats from './stats';
 import ShutdownManager from './shutdown_manager';
 import JobManager from './job_manager';
 import GroupReportGenerator from './group_report';
+import Audit from './audit';
 import { ClientOpts } from 'redis';
 import { body, param, validationResult } from 'express-validator';
 import SanityLoop from './sanity_loop';
@@ -66,14 +67,21 @@ if (config.RedisDb) {
 
 const redisClient = new Redis(redisOptions);
 
+const audit = new Audit({
+    redisClient: redisClient,
+    auditTTL: config.AuditTTL,
+});
+
 const shutdownManager = new ShutdownManager({
     redisClient,
     shutdownTTL: config.ShutDownTTL,
+    audit: audit,
 });
 
 const jibriTracker = new JibriTracker({
     redisClient,
     shutdownManager: shutdownManager,
+    audit: audit,
     idleTTL: config.IdleTTL,
     metricTTL: config.MetricTTL,
     provisioningTTL: config.ProvisioningTTL,
@@ -88,6 +96,7 @@ const cloudManager = new CloudManager({
     ociConfigurationProfile: config.OciConfigurationProfile,
     jibriTracker: jibriTracker,
     instanceStatus: instanceStatus,
+    audit: audit,
 });
 
 const lockManager: LockManager = new LockManager(logger, {
@@ -199,6 +208,7 @@ const h = new Handlers({
     shutdownManager: shutdownManager,
     groupReportGenerator: groupReportGenerator,
     lockManager: lockManager,
+    audit: audit,
 });
 
 const validator = new Validator(jibriTracker);
@@ -331,6 +341,14 @@ app.put('/groups/:name/scaling-activities', async (req, res, next) => {
 app.get('/groups/:name/report', async (req, res, next) => {
     try {
         await h.getGroupReport(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/groups/:name/audit', async (req, res, next) => {
+    try {
+        await h.getGroupAudit(req, res);
     } catch (err) {
         next(err);
     }

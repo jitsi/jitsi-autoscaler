@@ -6,6 +6,7 @@ import LockManager from './lock_manager';
 import Redlock from 'redlock';
 import ShutdownManager from './shutdown_manager';
 import GroupReportGenerator from './group_report';
+import Audit from './audit';
 
 interface SidecarResponse {
     shutdown: boolean;
@@ -23,6 +24,7 @@ interface InstanceGroupScalingActivitiesRequest {
 
 interface HandlersOptions {
     jibriTracker: JibriTracker;
+    audit: Audit;
     instanceStatus: InstanceStatus;
     shutdownManager: ShutdownManager;
     instanceGroupManager: InstanceGroupManager;
@@ -37,6 +39,7 @@ class Handlers {
     private instanceGroupManager: InstanceGroupManager;
     private groupReportGenerator: GroupReportGenerator;
     private lockManager: LockManager;
+    private audit: Audit;
 
     constructor(options: HandlersOptions) {
         this.jibriStateWebhook = this.jibriStateWebhook.bind(this);
@@ -48,6 +51,7 @@ class Handlers {
         this.instanceGroupManager = options.instanceGroupManager;
         this.shutdownManager = options.shutdownManager;
         this.groupReportGenerator = options.groupReportGenerator;
+        this.audit = options.audit;
     }
 
     async jibriStateWebhook(req: Request, res: Response): Promise<void> {
@@ -202,6 +206,15 @@ class Handlers {
 
         res.status(200);
         res.send({ groupReport });
+    }
+
+    async getGroupAudit(req: Request, res: Response): Promise<void> {
+        const groupName = req.params.name;
+        const ctx = req.context;
+        const audit = await this.audit.generateAudit(ctx, groupName);
+
+        res.status(200);
+        res.send({ audit });
     }
 
     async resetInstanceGroups(req: Request, res: Response): Promise<void> {

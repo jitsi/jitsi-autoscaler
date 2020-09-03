@@ -79,7 +79,7 @@ export default class GroupReportGenerator {
         const jibriStates = await this.jibriTracker.getCurrent(ctx, groupName);
         groupReport.count = jibriStates.length;
         const cloudInstances = await this.cloudManager.getInstances(ctx, group, this.reportExtCallRetryStrategy);
-        groupReport.cloudCount = cloudInstances.length;
+
         this.getInstanceReportsMap(jibriStates, cloudInstances).forEach((instanceReport) => {
             groupReport.instances.push(instanceReport);
         });

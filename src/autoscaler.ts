@@ -56,7 +56,7 @@ export default class AutoscaleProcessor {
     async processAutoscalingByGroup(ctx: Context, groupName: string): Promise<boolean> {
         let lock: Redlock.Lock = undefined;
         try {
-            lock = await this.lockManager.lockAutoscaleProcessing(ctx, groupName);
+            lock = await this.lockManager.lockGroup(ctx, groupName);
         } catch (err) {
             ctx.logger.warn(`[AutoScaler] Error obtaining lock for processing`, { err });
             return false;

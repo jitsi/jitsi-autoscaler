@@ -5,24 +5,23 @@ import { Context } from './context';
 
 export interface LockManagerOptions {
     redisClient: Redis.Redis;
-    autoscalerProcessingLockTTL: number;
+    groupLockTTLMs: number;
     jobCreationLockTTL: number;
 }
 
 export default class LockManager {
     private redisClient: Redis.Redis;
     private groupProcessingLockManager: Redlock;
-    private autoscalerProcessingLockTTL: number;
+    private groupLockTTLMs: number;
     private jobCreationLockTTL: number;
     private logger: Logger;
-    private static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
-    private static readonly scalerProcessingLockKey = 'scalerLockKey';
+    private static readonly groupLockKey = 'groupLockKey';
     private static readonly groupJobsCreationLockKey = 'groupJobsCreationLockKey';
 
     constructor(logger: Logger, options: LockManagerOptions) {
         this.logger = logger;
         this.redisClient = options.redisClient;
-        this.autoscalerProcessingLockTTL = options.autoscalerProcessingLockTTL;
+        this.groupLockTTLMs = options.groupLockTTLMs;
         this.jobCreationLockTTL = options.jobCreationLockTTL;
         this.groupProcessingLockManager = new Redlock(
             // TODO: you should have one client for each independent redis node or cluster
@@ -40,13 +39,13 @@ export default class LockManager {
         });
     }
 
-    async lockAutoscaleProcessing(ctx: Context, group: string): Promise<Redlock.Lock> {
-        ctx.logger.debug(`Obtaining lock ${LockManager.autoscalerProcessingLockKey}`);
+    async lockGroup(ctx: Context, group: string): Promise<Redlock.Lock> {
+        ctx.logger.debug(`Obtaining lock ${LockManager.groupLockKey}`);
         const lock = await this.groupProcessingLockManager.lock(
-            `${LockManager.autoscalerProcessingLockKey}:${group}`,
-            this.autoscalerProcessingLockTTL,
+            `${LockManager.groupLockKey}:${group}`,
+            this.groupLockTTLMs,
         );
-        ctx.logger.debug(`Lock obtained for ${LockManager.autoscalerProcessingLockKey}`);
+        ctx.logger.debug(`Lock obtained for ${LockManager.groupLockKey}`);
         return lock;
     }
 

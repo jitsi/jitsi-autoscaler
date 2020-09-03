@@ -92,8 +92,8 @@ const cloudManager = new CloudManager({
 
 const lockManager: LockManager = new LockManager(logger, {
     redisClient: redisClient,
-    jobCreationLockTTL: config.GroupJobsCreationLockTTLMs,
-    autoscalerProcessingLockTTL: config.AutoscalerProcessingLockTTL,
+    jobCreationLockTTL: config.JobsCreationLockTTLMs,
+    groupLockTTLMs: config.GroupLockTTLMs,
 });
 
 const instanceGroupManager = new InstanceGroupManager({
@@ -154,9 +154,9 @@ const jobManager = new JobManager({
     instanceLauncher: instanceLauncher,
     autoscaler: autoscaleProcessor,
     sanityLoop: sanityLoop,
-    autoscalerProcessingTimeoutMilli: config.AutoscalerProcessingLockTTL,
-    launcherProcessingTimeoutMilli: config.AutoscalerProcessingLockTTL,
-    sanityLoopProcessingTimeoutMilli: config.SanityLoopProcessingTimoutMs,
+    autoscalerProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
+    launcherProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
+    sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,
 });
 
 async function startProcessingGroups() {

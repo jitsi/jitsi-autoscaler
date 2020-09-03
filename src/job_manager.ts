@@ -18,9 +18,9 @@ export interface JobManagerOptions {
     instanceLauncher: InstanceLauncher;
     autoscaler: AutoscaleProcessor;
     sanityLoop: SanityLoop;
-    autoscalerProcessingTimeoutMilli: number;
-    launcherProcessingTimeoutMilli: number;
-    sanityLoopProcessingTimeoutMilli: number;
+    autoscalerProcessingTimeoutMs: number;
+    launcherProcessingTimeoutMs: number;
+    sanityLoopProcessingTimeoutMs: number;
 }
 
 const groupsManaged = new promClient.Gauge({
@@ -48,9 +48,9 @@ export default class JobManager {
     private autoscaler: AutoscaleProcessor;
     private sanityLoop: SanityLoop;
     private jobQueue: Queue;
-    private autoscalerProcessingTimeoutMilli: number;
-    private launcherProcessingTimeoutMilli: number;
-    private sanityLoopProcessingTimeoutMilli: number;
+    private autoscalerProcessingTimeoutMs: number;
+    private launcherProcessingTimeoutMs: number;
+    private sanityLoopProcessingTimeoutMs: number;
 
     constructor(options: JobManagerOptions) {
         this.lockManager = options.lockManager;
@@ -58,9 +58,9 @@ export default class JobManager {
         this.instanceLauncher = options.instanceLauncher;
         this.autoscaler = options.autoscaler;
         this.sanityLoop = options.sanityLoop;
-        this.autoscalerProcessingTimeoutMilli = options.autoscalerProcessingTimeoutMilli;
-        this.launcherProcessingTimeoutMilli = options.launcherProcessingTimeoutMilli;
-        this.sanityLoopProcessingTimeoutMilli = options.sanityLoopProcessingTimeoutMilli;
+        this.autoscalerProcessingTimeoutMs = options.autoscalerProcessingTimeoutMs;
+        this.launcherProcessingTimeoutMs = options.launcherProcessingTimeoutMs;
+        this.sanityLoopProcessingTimeoutMs = options.sanityLoopProcessingTimeoutMs;
 
         this.jobQueue = this.createQueue(JobManager.jobQueueName, options.queueRedisOptions);
     }
@@ -169,7 +169,7 @@ export default class JobManager {
                 instanceGroups,
                 this.jobQueue,
                 JobType.Sanity,
-                this.sanityLoopProcessingTimeoutMilli,
+                this.sanityLoopProcessingTimeoutMs,
             );
 
             await this.instanceGroupManager.setSanityJobsCreationGracePeriod();
@@ -207,14 +207,14 @@ export default class JobManager {
                 instanceGroups,
                 this.jobQueue,
                 JobType.Autoscale,
-                this.autoscalerProcessingTimeoutMilli,
+                this.autoscalerProcessingTimeoutMs,
             );
             await this.createJobs(
                 ctx,
                 instanceGroups,
                 this.jobQueue,
                 JobType.Launch,
-                this.launcherProcessingTimeoutMilli,
+                this.launcherProcessingTimeoutMs,
             );
 
             await this.instanceGroupManager.setGroupJobsCreationGracePeriod();

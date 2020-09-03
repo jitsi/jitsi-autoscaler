@@ -9,7 +9,7 @@ const requestsInFlight = new promClient.Gauge({
     labelNames: ['method'],
 });
 
-const requestsTotal = new promClient.Counter({
+const requestsTotalCounter = new promClient.Counter({
     name: 'http_server_requests_total',
     help: 'Counter for total requests',
     labelNames: ['method', 'code', 'uri'],
@@ -39,7 +39,7 @@ export function middleware(req: express.Request, res: express.Response, next: ex
             requestDuration.observe({ method, uri }, delta[0] + delta[1] / 1e9);
 
             const code = res.statusCode;
-            requestsTotal.inc({ method, code, uri });
+            requestsTotalCounter.inc({ method, code, uri });
             requestsInFlight.dec({ method });
         }
     };

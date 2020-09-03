@@ -65,9 +65,9 @@ export default class AutoscaleProcessor {
         try {
             const group = await this.instanceGroupManager.getInstanceGroup(groupName);
             if (!group) {
-                ctx.logger.warn(`[AutoScaler] Failed to process group ${groupName} as it is not found `);
-                return false;
+                throw new Error(`Group ${groupName} not found, failed to process autoscaling`);
             }
+
             if (!group.enableAutoScale) {
                 ctx.logger.info(`[AutoScaler] Autoscaling not enabled for group ${group.name}`);
                 return false;
@@ -114,9 +114,6 @@ export default class AutoscaleProcessor {
                 availableJibrisPerPeriodForScaleUp,
                 availableJibrisPerPeriodForScaleDown,
             );
-        } catch (err) {
-            ctx.logger.error(`[AutoScaler] Error processing desired count adjustments for group ${groupName} ${err}`);
-            throw err;
         } finally {
             lock.unlock();
         }

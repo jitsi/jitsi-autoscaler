@@ -20,19 +20,19 @@ const runningInstancesCount = new promClient.Gauge({
     labelNames: ['group'],
 });
 
-const instancesLaunched = new promClient.Gauge({
+const instancesLaunchedCounter = new promClient.Counter({
     name: 'autoscaling_instance_launched',
     help: 'Gauge for launched instances',
     labelNames: ['group'],
 });
 
-const instancesDownscaled = new promClient.Gauge({
+const instancesDownscaledCounter = new promClient.Counter({
     name: 'autoscaling_instance_downscaled',
     help: 'Gauge for scaled down instances',
     labelNames: ['group'],
 });
 
-const instanceErrors = new promClient.Gauge({
+const instanceErrorsCounter = new promClient.Counter({
     name: 'autoscaling_instance_errors',
     help: 'Gauge for instance errors',
     labelNames: ['group'],
@@ -69,8 +69,7 @@ export default class InstanceLauncher {
     async launchOrShutdownInstancesByGroup(ctx: Context, groupName: string): Promise<boolean> {
         const group = await this.instanceGroupManager.getInstanceGroup(groupName);
         if (!group) {
-            ctx.logger.warn(`[Launcher] Failed to process group ${groupName} as it is not found `);
-            return false;
+            throw new Error(`Group ${groupName} not found, failed to make launch decisions.`);
         }
 
         if (!group.enableLaunch) {
@@ -95,21 +94,21 @@ export default class InstanceLauncher {
                 await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity, scaleDownProtected);
 
                 // increment launched instance stats for the group
-                instancesLaunched.inc({ group: group.name }, actualScaleUpQuantity);
+                instancesLaunchedCounter.inc({ group: group.name }, actualScaleUpQuantity);
             } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
                 ctx.logger.info('[Launcher] Will scale down to the desired count', { groupName, desiredCount, count });
 
                 const listOfInstancesForScaleDown = await this.getInstancesForScaleDown(ctx, currentInventory, group);
                 await this.cloudManager.scaleDown(ctx, group, listOfInstancesForScaleDown);
 
-                instancesDownscaled.inc({ group: group.name }, listOfInstancesForScaleDown.length);
+                instancesDownscaledCounter.inc({ group: group.name }, listOfInstancesForScaleDown.length);
             } else {
                 ctx.logger.info(
                     `[Launcher] No scaling activity needed for group ${groupName} with ${count} instances.`,
                 );
             }
         } catch (err) {
-            instanceErrors.inc({ group: group.name });
+            instanceErrorsCounter.inc({ group: group.name });
             throw err;
         }
 

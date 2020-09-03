@@ -28,6 +28,40 @@ const groupsManaged = new promClient.Gauge({
     help: 'Gauge for groups currently being managed',
 });
 
+const jobCreateSuccessCounter = new promClient.Counter({
+    name: 'job_create_success_count',
+    help: 'Counter for jobs created successfully',
+    labelNames: ['group', 'type'],
+});
+
+const jobCreateFailureCounter = new promClient.Counter({
+    name: 'job_create_failure_count',
+    help: 'Counter for jobs failed to create',
+    labelNames: ['group', 'type'],
+});
+
+const jobProcessSuccessCounter = new promClient.Counter({
+    name: 'job_process_success_count',
+    help: 'Counter for jobs processed successfully',
+    labelNames: ['group', 'type'],
+});
+
+const jobProcessFailureCounter = new promClient.Counter({
+    name: 'job_process_failure_count',
+    help: 'Counter for jobs processing failures',
+    labelNames: ['group', 'type'],
+});
+
+const queueErrorCounter = new promClient.Counter({
+    name: 'queue_error_count',
+    help: 'Counter for queue errors',
+});
+
+const queueStalledCounter = new promClient.Counter({
+    name: 'queue_stalled_count',
+    help: 'Counter for stalled job events',
+});
+
 export enum JobType {
     Autoscale = 'AUTOSCALE',
     Launch = 'LAUNCH',
@@ -73,15 +107,19 @@ export default class JobManager {
         });
         newQueue.on('error', (err) => {
             logger.error(`[QueueProcessor] A queue error happened in queue ${queueName}: ${err.message}`, { err });
+            queueErrorCounter.inc();
         });
         newQueue.on('failed', (job, err) => {
             logger.error(
                 `[QueueProcessor] Failed processing job ${job.data.type}:${job.id} with error message ${err.message}`,
                 { err },
             );
+            const jobData: JobData = job.data;
+            jobProcessFailureCounter.inc({ group: jobData.groupName, type: jobData.type });
         });
         newQueue.on('stalled', (jobId) => {
             logger.error(`[QueueProcessor] Stalled job ${jobId}; will be reprocessed`);
+            queueStalledCounter.inc();
         });
 
         newQueue.process((job: Job, done: DoneCallback<boolean>) => {
@@ -100,10 +138,14 @@ export default class JobManager {
                     this.processJob(job, (ctx, group) => this.sanityLoop.reportUntrackedInstances(ctx, group), done);
                     break;
                 default:
-                    logger.warn(`[QueueProcessor] Unknown job type ${job.data.type}:${job.id}`);
+                    this.processJob(job, () => this.handleUnknownJobType(), done);
             }
         });
         return newQueue;
+    }
+
+    async handleUnknownJobType(): Promise<boolean> {
+        throw new Error('Unkown job type');
     }
 
     processJob(
@@ -127,6 +169,7 @@ export default class JobManager {
                 ctx.logger.info(
                     `[QueueProcessor] Done processing job ${jobData.type}:${job.id} for group ${jobData.groupName}`,
                 );
+                jobProcessSuccessCounter.inc({ group: jobData.groupName, type: jobData.type });
                 return done(null, result);
             })
             .catch((error) => {
@@ -137,6 +180,8 @@ export default class JobManager {
                         jobData: jobData,
                     },
                 );
+                // we don't increase the jobProcessFailureCounter here,
+                // as we increase it on the queue failed event, where we can catch timeout errors
                 return done(error, false);
             });
     }
@@ -175,6 +220,7 @@ export default class JobManager {
             await this.instanceGroupManager.setSanityJobsCreationGracePeriod();
         } catch (err) {
             ctx.logger.error(`[JobManager] Error while creating sanity jobs for group ${err}`);
+            jobCreateFailureCounter.inc({ type: JobType.Sanity });
         } finally {
             lock.unlock();
         }
@@ -209,17 +255,12 @@ export default class JobManager {
                 JobType.Autoscale,
                 this.autoscalerProcessingTimeoutMs,
             );
-            await this.createJobs(
-                ctx,
-                instanceGroups,
-                this.jobQueue,
-                JobType.Launch,
-                this.launcherProcessingTimeoutMs,
-            );
+            await this.createJobs(ctx, instanceGroups, this.jobQueue, JobType.Launch, this.launcherProcessingTimeoutMs);
 
             await this.instanceGroupManager.setGroupJobsCreationGracePeriod();
         } catch (err) {
             ctx.logger.error(`[JobManager] Error while creating jobs for group ${err}`);
+            jobCreateFailureCounter.inc();
         } finally {
             lock.unlock();
         }
@@ -246,11 +287,13 @@ export default class JobManager {
                 .save()
                 .then((job) => {
                     ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
+                    jobCreateSuccessCounter.inc({ group: jobData.groupName, type: jobData.type });
                 })
                 .catch((error) => {
                     ctx.logger.info(
                         `[JobManager] Error while creating ${jobType} job for group ${instanceGroup.name}: ${error}`,
                     );
+                    jobCreateFailureCounter.inc({ group: jobData.groupName, type: jobData.type });
                 });
         });
     }

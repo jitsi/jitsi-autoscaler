@@ -54,8 +54,11 @@ export default class GroupReportGenerator {
 
     async generateReport(ctx: Context, groupName: string): Promise<GroupReport> {
         const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(groupName);
+        if (!group) {
+            throw new Error(`Group ${groupName} not found, failed to generate report`);
+        }
         if (group.type != 'jibri') {
-            throw new Error('Only jibri groups are supported');
+            throw new Error('Only jibri groups are supported for report generation');
         }
 
         const groupReport: GroupReport = {

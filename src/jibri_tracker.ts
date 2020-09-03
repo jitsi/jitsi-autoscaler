@@ -1,7 +1,7 @@
-import { Logger } from 'winston';
 import { Context } from './context';
 import Redis from 'ioredis';
 import ShutdownManager from './shutdown_manager';
+import Audit from './audit';
 
 export enum JibriStatusState {
     Idle = 'IDLE',
@@ -48,6 +48,7 @@ export interface JibriMetric {
 export interface JibriTrackerOptions {
     redisClient: Redis.Redis;
     shutdownManager: ShutdownManager;
+    audit: Audit;
     idleTTL: number;
     metricTTL: number;
     provisioningTTL: number;
@@ -56,7 +57,7 @@ export interface JibriTrackerOptions {
 export class JibriTracker {
     private redisClient: Redis.Redis;
     private shutdownManager: ShutdownManager;
-    private logger: Logger;
+    private audit: Audit;
     private idleTTL: number;
     private provisioningTTL: number;
     private metricTTL: number;
@@ -64,6 +65,7 @@ export class JibriTracker {
     constructor(options: JibriTrackerOptions) {
         this.redisClient = options.redisClient;
         this.shutdownManager = options.shutdownManager;
+        this.audit = options.audit;
         this.idleTTL = options.idleTTL;
         this.provisioningTTL = options.provisioningTTL;
         this.metricTTL = options.metricTTL;
@@ -120,6 +122,8 @@ export class JibriTracker {
             }
         }
 
+        //monitor latest status
+        await this.audit.saveLatestStatus(group, state.jibriId, state);
         return true;
     }
 

@@ -5,6 +5,7 @@ import { InstanceGroup } from './instance_group';
 import { JibriTracker } from './jibri_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
+import Audit from './audit';
 
 export interface CloudRetryStrategy {
     maxTimeInSeconds: number;
@@ -19,6 +20,7 @@ export interface CloudManagerOptions {
     jibriTracker: JibriTracker;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
+    audit: Audit;
 }
 
 export interface CloudInstance {
@@ -30,6 +32,7 @@ export interface CloudInstance {
 export default class CloudManager {
     private oracleInstanceManager: OracleInstanceManager;
     private shutdownManager: ShutdownManager;
+    private audit: Audit;
     private isDryRun: boolean;
 
     constructor(options: CloudManagerOptions) {
@@ -40,8 +43,10 @@ export default class CloudManager {
             ociConfigurationProfile: options.ociConfigurationProfile,
             jibriTracker: options.jibriTracker,
             shutdownManager: options.shutdownManager,
+            audit: options.audit,
         });
         this.shutdownManager = options.shutdownManager;
+        this.audit = options.audit;
 
         this.scaleUp = this.scaleUp.bind(this);
         this.scaleDown = this.scaleDown.bind(this);

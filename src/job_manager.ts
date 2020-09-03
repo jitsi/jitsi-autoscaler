@@ -209,13 +209,7 @@ export default class JobManager {
                 JobType.Autoscale,
                 this.autoscalerProcessingTimeoutMs,
             );
-            await this.createJobs(
-                ctx,
-                instanceGroups,
-                this.jobQueue,
-                JobType.Launch,
-                this.launcherProcessingTimeoutMs,
-            );
+            await this.createJobs(ctx, instanceGroups, this.jobQueue, JobType.Launch, this.launcherProcessingTimeoutMs);
 
             await this.instanceGroupManager.setGroupJobsCreationGracePeriod();
         } catch (err) {

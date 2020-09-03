@@ -34,6 +34,7 @@ export interface InstanceGroupManagerOptions {
     redisClient: Redis.Redis;
     initialGroupList: Array<InstanceGroup>;
     groupJobsCreationGracePeriod: number;
+    sanityJobsCreationGracePeriod: number;
 }
 
 export default class InstanceGroupManager {
@@ -41,11 +42,13 @@ export default class InstanceGroupManager {
     private redisClient: Redis.Redis;
     private initialGroupList: Array<InstanceGroup>;
     private processingIntervalSeconds: number;
+    private sanityJobsIntervalSeconds: number;
 
     constructor(options: InstanceGroupManagerOptions) {
         this.redisClient = options.redisClient;
         this.initialGroupList = options.initialGroupList;
         this.processingIntervalSeconds = options.groupJobsCreationGracePeriod;
+        this.sanityJobsIntervalSeconds = options.sanityJobsCreationGracePeriod;
 
         this.init = this.init.bind(this);
         this.getGroupKey = this.getGroupKey.bind(this);
@@ -168,6 +171,15 @@ export default class InstanceGroupManager {
 
     async setGroupJobsCreationGracePeriod(): Promise<boolean> {
         return this.setValue(`groupJobsCreationGracePeriod`, this.processingIntervalSeconds);
+    }
+
+    async isSanityJobsCreationAllowed(): Promise<boolean> {
+        const result = await this.redisClient.get(`sanityJobsCreationGracePeriod`);
+        return !(result !== null && result.length > 0);
+    }
+
+    async setSanityJobsCreationGracePeriod(): Promise<boolean> {
+        return this.setValue(`sanityJobsCreationGracePeriod`, this.sanityJobsIntervalSeconds);
     }
 
     async setValue(key: string, ttl: number): Promise<boolean> {

@@ -87,12 +87,16 @@ export default class CloudManager {
         cloudRetryStrategy: CloudRetryStrategy,
     ): Promise<Array<CloudInstance>> {
         const oracleInstances = await this.oracleInstanceManager.getInstances(ctx, group, cloudRetryStrategy);
-        return oracleInstances.map((resourceSummary) => {
-            return {
-                instanceId: resourceSummary.identifier,
-                displayName: resourceSummary.displayName,
-                cloudStatus: resourceSummary.lifecycleState,
-            };
-        });
+        return oracleInstances
+            .map((resourceSummary) => {
+                return {
+                    instanceId: resourceSummary.identifier,
+                    displayName: resourceSummary.displayName,
+                    cloudStatus: resourceSummary.lifecycleState,
+                };
+            })
+            .filter(function (instance) {
+                return instance.cloudStatus !== 'Terminated';
+            });
     }
 }

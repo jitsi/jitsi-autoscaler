@@ -80,6 +80,11 @@ const queueStalledCounter = new promClient.Counter({
     help: 'Counter for stalled job events',
 });
 
+const queueWaiting = new promClient.Gauge({
+    name: 'queue_waiting',
+    help: 'Gauge for current jobs waiting to be processed',
+});
+
 export interface JobData {
     groupName: string;
     type: JobType;
@@ -269,6 +274,10 @@ export default class JobManager {
                 this.autoscalerProcessingTimeoutMs,
             );
             await this.createJobs(ctx, instanceGroups, this.jobQueue, JobType.Launch, this.launcherProcessingTimeoutMs);
+
+            // populate some queue health metrics
+            const healthCheckResult = await this.jobQueue.checkHealth();
+            queueWaiting.set(healthCheckResult.waiting);
 
             await this.instanceGroupManager.setGroupJobsCreationGracePeriod();
         } catch (err) {

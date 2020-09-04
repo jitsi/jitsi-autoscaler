@@ -211,7 +211,7 @@ const h = new Handlers({
     audit: audit,
 });
 
-const validator = new Validator(jibriTracker);
+const validator = new Validator({ jibriTracker, instanceGroupManager });
 const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use(loggedPaths, context.injectContext);
@@ -317,6 +317,12 @@ app.put(
 app.put(
     '/groups/:name/desired-count',
     body('desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('desiredCount').custom(async (value, { req }) => {
+        if (!(await validator.groupHasValidDesiredCount(req.params.name, value))) {
+            throw new Error('Desired count must be between min and max; min cannot be grater than max');
+        }
+        return true;
+    }),
     async (req, res, next) => {
         try {
             const errors = validationResult(req);
@@ -402,6 +408,12 @@ app.post('/groups/actions/reset', async (req, res, next) => {
 app.post(
     '/groups/:name/actions/launch-protected',
     body('count').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('count').custom(async (value, { req }) => {
+        if (!(await validator.canLaunchInstances(req.params.name, value))) {
+            throw new Error(`Max desired value must be increased first if you want to launch ${value} new instances.`);
+        }
+        return true;
+    }),
     async (req, res, next) => {
         try {
             const errors = validationResult(req);

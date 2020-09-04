@@ -270,7 +270,7 @@ class Handlers {
                     group.instanceConfigurationId = requestBody.instanceConfigurationId;
                 }
                 group.scalingOptions.desiredCount = group.scalingOptions.desiredCount + requestBody.count;
-                group.protectedTTLSec = requestBody.scaleDownProtectedTTLSec;
+                group.protectedTTLSec = requestBody.protectedTTLSec;
 
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
                 await this.instanceGroupManager.setAutoScaleGracePeriod(group);

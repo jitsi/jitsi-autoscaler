@@ -21,19 +21,19 @@ const runningInstancesCount = new promClient.Gauge({
 });
 
 const instancesLaunchedCounter = new promClient.Counter({
-    name: 'autoscaling_instance_launched',
+    name: 'autoscaling_instance_launched_total',
     help: 'Gauge for launched instances',
     labelNames: ['group'],
 });
 
 const instancesDownscaledCounter = new promClient.Counter({
-    name: 'autoscaling_instance_downscaled',
+    name: 'autoscaling_instance_downscaled_total',
     help: 'Gauge for scaled down instances',
     labelNames: ['group'],
 });
 
 const instanceErrorsCounter = new promClient.Counter({
-    name: 'autoscaling_instance_errors',
+    name: 'autoscaling_instance_errors_total',
     help: 'Gauge for instance errors',
     labelNames: ['group'],
 });

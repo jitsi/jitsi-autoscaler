@@ -23,50 +23,62 @@ export interface JobManagerOptions {
     sanityLoopProcessingTimeoutMs: number;
 }
 
-const groupsManaged = new promClient.Gauge({
-    name: 'autoscaling_groups_managed',
-    help: 'Gauge for groups currently being managed',
-});
-
-const jobCreateSuccessCounter = new promClient.Counter({
-    name: 'job_create_success_count',
-    help: 'Counter for jobs created successfully',
-    labelNames: ['group', 'type'],
-});
-
-const jobCreateFailureCounter = new promClient.Counter({
-    name: 'job_create_failure_count',
-    help: 'Counter for jobs failed to create',
-    labelNames: ['group', 'type'],
-});
-
-const jobProcessSuccessCounter = new promClient.Counter({
-    name: 'job_process_success_count',
-    help: 'Counter for jobs processed successfully',
-    labelNames: ['group', 'type'],
-});
-
-const jobProcessFailureCounter = new promClient.Counter({
-    name: 'job_process_failure_count',
-    help: 'Counter for jobs processing failures',
-    labelNames: ['group', 'type'],
-});
-
-const queueErrorCounter = new promClient.Counter({
-    name: 'queue_error_count',
-    help: 'Counter for queue errors',
-});
-
-const queueStalledCounter = new promClient.Counter({
-    name: 'queue_stalled_count',
-    help: 'Counter for stalled job events',
-});
-
 export enum JobType {
     Autoscale = 'AUTOSCALE',
     Launch = 'LAUNCH',
     Sanity = 'SANITY',
 }
+
+const groupsManaged = new promClient.Gauge({
+    name: 'autoscaling_groups_managed',
+    help: 'Gauge for groups currently being managed',
+});
+
+const jobCreateFailureCounter = new promClient.Counter({
+    name: 'job_create_failure_total',
+    help: 'Counter for jobs failed to create',
+    labelNames: ['type'],
+});
+jobCreateFailureCounter.labels(JobType.Autoscale).inc(0);
+jobCreateFailureCounter.labels(JobType.Launch).inc(0);
+jobCreateFailureCounter.labels(JobType.Sanity).inc(0);
+
+const jobCreateTotalCounter = new promClient.Counter({
+    name: 'job_create_total',
+    help: 'Counter for total job create operations',
+    labelNames: ['type'],
+});
+jobCreateTotalCounter.labels(JobType.Autoscale).inc(0);
+jobCreateTotalCounter.labels(JobType.Launch).inc(0);
+jobCreateTotalCounter.labels(JobType.Sanity).inc(0);
+
+const jobProcessFailureCounter = new promClient.Counter({
+    name: 'job_process_failure_total',
+    help: 'Counter for jobs processing failures',
+    labelNames: ['type'],
+});
+jobProcessFailureCounter.labels(JobType.Autoscale).inc(0);
+jobProcessFailureCounter.labels(JobType.Launch).inc(0);
+jobProcessFailureCounter.labels(JobType.Sanity).inc(0);
+
+const jobProcessTotalCounter = new promClient.Counter({
+    name: 'job_process_total',
+    help: 'Counter for total jobs processed',
+    labelNames: ['type'],
+});
+jobProcessTotalCounter.labels(JobType.Autoscale).inc(0);
+jobProcessTotalCounter.labels(JobType.Launch).inc(0);
+jobProcessTotalCounter.labels(JobType.Sanity).inc(0);
+
+const queueErrorCounter = new promClient.Counter({
+    name: 'queue_error_total',
+    help: 'Counter for queue errors',
+});
+
+const queueStalledCounter = new promClient.Counter({
+    name: 'queue_stalled_total',
+    help: 'Counter for stalled job events',
+});
 
 export interface JobData {
     groupName: string;
@@ -115,7 +127,8 @@ export default class JobManager {
                 { err },
             );
             const jobData: JobData = job.data;
-            jobProcessFailureCounter.inc({ group: jobData.groupName, type: jobData.type });
+            jobProcessTotalCounter.inc({ type: jobData.type });
+            jobProcessFailureCounter.inc({ type: jobData.type });
         });
         newQueue.on('stalled', (jobId) => {
             logger.error(`[QueueProcessor] Stalled job ${jobId}; will be reprocessed`);
@@ -169,7 +182,7 @@ export default class JobManager {
                 ctx.logger.info(
                     `[QueueProcessor] Done processing job ${jobData.type}:${job.id} for group ${jobData.groupName}`,
                 );
-                jobProcessSuccessCounter.inc({ group: jobData.groupName, type: jobData.type });
+                jobProcessTotalCounter.inc({ type: jobData.type });
                 return done(null, result);
             })
             .catch((error) => {
@@ -280,6 +293,8 @@ export default class JobManager {
                 groupName: instanceGroup.name,
                 type: jobType,
             };
+
+            jobCreateTotalCounter.inc({ type: jobData.type });
             const newJob = jobQueue.createJob(jobData);
             newJob
                 .timeout(processingTimeoutMillis)
@@ -287,13 +302,12 @@ export default class JobManager {
                 .save()
                 .then((job) => {
                     ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
-                    jobCreateSuccessCounter.inc({ group: jobData.groupName, type: jobData.type });
                 })
                 .catch((error) => {
                     ctx.logger.info(
                         `[JobManager] Error while creating ${jobType} job for group ${instanceGroup.name}: ${error}`,
                     );
-                    jobCreateFailureCounter.inc({ group: jobData.groupName, type: jobData.type });
+                    jobCreateFailureCounter.inc({ type: jobData.type });
                 });
         });
     }

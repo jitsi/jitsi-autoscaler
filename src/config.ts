@@ -37,7 +37,7 @@ const env = envalid.cleanEnv(process.env, {
     DEFAULT_INSTANCE_CONFIGURATION_ID: envalid.str(),
     DEFAULT_COMPARTMENT_ID: envalid.str(),
     METRIC_TTL_SEC: envalid.num({ default: 900 }), // seconds
-    IDLE_TTL_SEC: envalid.num({ default: 150 }), // seconds, default to 2.5 minutes
+    IDLE_TTL_SEC: envalid.num({ default: 300 }), // seconds, default to 5 minutes
     PROVISIONING_TTL_SEC: envalid.num({ default: 600 }), // seconds
     SHUTDOWN_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
     AUDIT_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day

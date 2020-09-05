@@ -79,7 +79,7 @@ export default {
     AsapPubKeyTTL: env.ASAP_PUB_KEY_TTL,
     AsapPubKeyBaseUrl: env.ASAP_PUB_KEY_BASE_URL,
     AsapJwtAcceptedAud: env.ASAP_JWT_AUD,
-    AsapJwtAcceptedHookIss: env.ASAP_JWT_ACCEPTED_HOOK_ISS,
+    AsapJwtAcceptedHookIss: env.ASAP_JWT_ACCEPTED_HOOK_ISS.split(','),
     GroupList: groupList,
     InitialWaitForPooling: env.INITIAL_WAIT_FOR_POOLING_MS,
     DryRun: env.DRY_RUN,

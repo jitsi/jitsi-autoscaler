@@ -108,3 +108,4 @@ dist
 
 # custom
 config/*
+scripts/docker-build.sh

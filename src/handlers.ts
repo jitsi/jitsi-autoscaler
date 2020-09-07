@@ -24,6 +24,16 @@ export interface InstanceGroupDesiredValuesRequest {
     desiredCount?: number;
 }
 
+interface InstanceGroupScalingOptionsRequest {
+    scaleUpQuantity?: number;
+    scaleDownQuantity?: number;
+    scaleUpThreshold?: number;
+    scaleDownThreshold?: number;
+    scalePeriod?: number;
+    scaleUpPeriodsCount?: number;
+    scaleDownPeriodsCount?: number;
+}
+
 interface HandlersOptions {
     jibriTracker: JibriTracker;
     audit: Audit;
@@ -293,6 +303,45 @@ class Handlers {
 
                 res.status(200);
                 res.send({ launch: 'OK' });
+            } else {
+                res.status(404);
+                res.send();
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    async updateScalingOptions(req: Request, res: Response): Promise<void> {
+        const scalingOptionsRequest: InstanceGroupScalingOptionsRequest = req.body;
+        const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+            if (instanceGroup) {
+                if (scalingOptionsRequest.scaleUpQuantity != null) {
+                    instanceGroup.scalingOptions.scaleUpQuantity = scalingOptionsRequest.scaleUpQuantity;
+                }
+                if (scalingOptionsRequest.scaleDownQuantity != null) {
+                    instanceGroup.scalingOptions.scaleDownQuantity = scalingOptionsRequest.scaleDownQuantity;
+                }
+                if (scalingOptionsRequest.scaleUpThreshold != null) {
+                    instanceGroup.scalingOptions.scaleUpThreshold = scalingOptionsRequest.scaleUpThreshold;
+                }
+                if (scalingOptionsRequest.scaleDownThreshold != null) {
+                    instanceGroup.scalingOptions.scaleDownThreshold = scalingOptionsRequest.scaleDownThreshold;
+                }
+                if (scalingOptionsRequest.scalePeriod != null) {
+                    instanceGroup.scalingOptions.scalePeriod = scalingOptionsRequest.scalePeriod;
+                }
+                if (scalingOptionsRequest.scaleUpPeriodsCount != null) {
+                    instanceGroup.scalingOptions.scaleUpPeriodsCount = scalingOptionsRequest.scaleUpPeriodsCount;
+                }
+                if (scalingOptionsRequest.scaleDownPeriodsCount != null) {
+                    instanceGroup.scalingOptions.scaleDownPeriodsCount = scalingOptionsRequest.scaleDownPeriodsCount;
+                }
+                await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
+                res.status(200);
+                res.send({ save: 'OK' });
             } else {
                 res.status(404);
                 res.send();

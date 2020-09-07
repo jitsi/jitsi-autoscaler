@@ -338,6 +338,28 @@ app.put(
     },
 );
 
+app.put(
+    '/groups/:name/scaling-options',
+    body('scaleUpQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scaleDownQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scaleUpThreshold').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scaleDownThreshold').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalePeriod').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scaleUpPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.updateScalingOptions(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
 app.put('/groups/:name/scaling-activities', async (req, res, next) => {
     try {
         await h.updateScalingActivities(req, res);

@@ -13,13 +13,15 @@ interface SidecarResponse {
     reconfigure: boolean;
 }
 
-interface InstanceGroupUpdateRequest {
-    desiredCount: number;
-}
-
 interface InstanceGroupScalingActivitiesRequest {
     enableAutoScale?: boolean;
     enableLaunch?: boolean;
+}
+
+export interface InstanceGroupDesiredValuesRequest {
+    minDesired?: number;
+    maxDesired?: number;
+    desiredCount?: number;
 }
 
 interface HandlersOptions {
@@ -106,13 +108,22 @@ class Handlers {
         res.send(sendResponse);
     }
 
-    async upsertDesiredCount(req: Request, res: Response): Promise<void> {
-        const request: InstanceGroupUpdateRequest = req.body;
+    async updateDesiredCount(req: Request, res: Response): Promise<void> {
+        const request: InstanceGroupDesiredValuesRequest = req.body;
         const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
             const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
             if (instanceGroup) {
-                instanceGroup.scalingOptions.desiredCount = request.desiredCount;
+                if (request.desiredCount != null) {
+                    instanceGroup.scalingOptions.desiredCount = request.desiredCount;
+                }
+                if (request.maxDesired != null) {
+                    instanceGroup.scalingOptions.maxDesired = request.maxDesired;
+                }
+                if (request.minDesired != null) {
+                    instanceGroup.scalingOptions.minDesired = request.minDesired;
+                }
+
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
                 res.status(200);

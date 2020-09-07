@@ -17,6 +17,8 @@ export interface InstanceDetails {
     cloud?: string;
     region?: string;
     group?: string;
+    publicIp?: string;
+    privateIp?: string;
 }
 
 export interface StatsReport {
@@ -58,6 +60,7 @@ export class InstanceStatus {
         let key: string;
         let jibriState: JibriState;
         let jibriStats: JibriStats;
+        ctx.logger.debug('Received report', { report });
         if (isEmpty(report.stats) || report.statsError) {
             // empty stats report, so error
             ctx.logger.error('Empty stats report, not processing', { report });

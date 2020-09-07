@@ -109,3 +109,5 @@ dist
 # custom
 config/*
 scripts/docker-build.sh
+
+.DS_STORE

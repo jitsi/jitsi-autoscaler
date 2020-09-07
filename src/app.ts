@@ -315,10 +315,12 @@ app.put(
 );
 
 app.put(
-    '/groups/:name/desired-count',
-    body('desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('desiredCount').custom(async (value, { req }) => {
-        if (!(await validator.groupHasValidDesiredCount(req.params.name, value))) {
+    '/groups/:name/desired',
+    body('minDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('desiredCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body().custom(async (value, { req }) => {
+        if (!(await validator.groupHasValidDesiredInput(req.params.name, value))) {
             throw new Error('Desired count must be between min and max; min cannot be grater than max');
         }
         return true;
@@ -329,7 +331,7 @@ app.put(
             if (!errors.isEmpty()) {
                 return res.status(400).json({ errors: errors.array() });
             }
-            await h.upsertDesiredCount(req, res);
+            await h.updateDesiredCount(req, res);
         } catch (err) {
             next(err);
         }

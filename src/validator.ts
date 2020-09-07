@@ -1,6 +1,7 @@
 import { JibriTracker } from './jibri_tracker';
 import { Context } from './context';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import { InstanceGroupDesiredValuesRequest } from './handlers';
 
 export interface ValidatorOptions {
     jibriTracker: JibriTracker;
@@ -31,13 +32,15 @@ export default class Validator {
         return desiredCount >= minDesired && desiredCount <= maxDesired && minDesired <= maxDesired;
     }
 
-    async groupHasValidDesiredCount(name: string, desiredCount: number): Promise<boolean> {
+    async groupHasValidDesiredInput(name: string, request: InstanceGroupDesiredValuesRequest): Promise<boolean> {
         const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(name);
-        return this.groupHasValidDesiredValues(
-            instanceGroup.scalingOptions.minDesired,
-            instanceGroup.scalingOptions.maxDesired,
-            desiredCount,
-        );
+
+        const minDesired = request.minDesired != null ? request.minDesired : instanceGroup.scalingOptions.minDesired;
+        const maxDesired = request.maxDesired != null ? request.maxDesired : instanceGroup.scalingOptions.maxDesired;
+        const desiredCount =
+            request.desiredCount != null ? request.desiredCount : instanceGroup.scalingOptions.desiredCount;
+
+        return this.groupHasValidDesiredValues(minDesired, maxDesired, desiredCount);
     }
 
     async canLaunchInstances(name: string, count: number): Promise<boolean> {

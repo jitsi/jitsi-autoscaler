@@ -11,6 +11,8 @@ export interface InstanceReport {
     cloudStatus?: string;
     isShuttingDown?: boolean;
     isScaleDownProtected?: boolean;
+    privateIp?: string;
+    publicIp?: string;
 }
 
 export interface GroupReport {
@@ -124,7 +126,7 @@ export default class GroupReportGenerator {
         const instanceReports = new Map<string, InstanceReport>();
 
         jibriStates.forEach((jibriState) => {
-            const instanceReport = {
+            const instanceReport = <InstanceReport>{
                 instanceId: jibriState.jibriId,
                 displayName: 'unknown',
                 scaleStatus: jibriState.status.busyStatus.toString(),
@@ -132,6 +134,12 @@ export default class GroupReportGenerator {
                 isShuttingDown: jibriState.shutdownStatus,
                 isScaleDownProtected: false,
             };
+            if (jibriState.metadata.publicIp) {
+                instanceReport.publicIp = jibriState.metadata.publicIp;
+            }
+            if (jibriState.metadata.privateIp) {
+                instanceReport.privateIp = jibriState.metadata.privateIp;
+            }
             instanceReports.set(jibriState.jibriId, instanceReport);
         });
 

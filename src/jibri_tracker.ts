@@ -25,6 +25,8 @@ export interface JibriHealth {
 
 export interface JibriMetaData {
     group: string;
+    publicIp?: string;
+    privateIp?: string;
     [key: string]: string;
 }
 

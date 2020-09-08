@@ -116,10 +116,6 @@ export class InstanceTracker {
         this.track = this.track.bind(this);
     }
 
-    instanceKey(details: InstanceDetails, type: string): string {
-        return `instance:${type}:${details.instanceId}`;
-    }
-
     // @TODO: handle stats for instances
     async stats(ctx: Context, report: StatsReport): Promise<boolean> {
         ctx.logger.debug('Received report', { report });

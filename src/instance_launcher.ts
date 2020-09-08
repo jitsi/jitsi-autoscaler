@@ -124,17 +124,16 @@ export default class InstanceLauncher {
         unprotectedInstances.sort((a, b) => {
             return a.status.jvbStatus.participants - b.status.jvbStatus.participants;
         });
-        if (unprotectedInstances.length < desiredScaleDownQuantity) {
+        const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
+        if (actualScaleDownQuantity < desiredScaleDownQuantity) {
             const groupName = group.name;
-            const actualScaleDownQuantity = unprotectedInstances.length;
             ctx.logger.error(
                 '[Launcher] Nr of JVB instances in group for scale down is less than desired scale down quantity',
                 { groupName, actualScaleDownQuantity, desiredScaleDownQuantity },
             );
-            desiredScaleDownQuantity = actualScaleDownQuantity;
         }
         // now return first N instances, least loaded first
-        return this.mapToInstanceDetails(unprotectedInstances.slice(0, desiredScaleDownQuantity - 1));
+        return this.mapToInstanceDetails(unprotectedInstances.slice(0, actualScaleDownQuantity - 1));
     }
 
     getJibrisForScaleDown(
@@ -143,8 +142,8 @@ export default class InstanceLauncher {
         unprotectedInstances: Array<InstanceState>,
         desiredScaleDownQuantity: number,
     ): Array<InstanceDetails> {
-        let listOfInstancesForScaleDown: Array<InstanceDetails>;
         const availableInstances = this.getAvailableJibris(unprotectedInstances);
+        let listOfInstancesForScaleDown = availableInstances.slice(0, desiredScaleDownQuantity);
         const actualScaleDownQuantity = listOfInstancesForScaleDown.length;
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {
             const groupName = group.name;

@@ -1,12 +1,12 @@
 import Redis from 'ioredis';
-import { JibriState } from './jibri_tracker';
+import { InstanceState } from './instance_tracker';
 import { Context } from './context';
 
 export interface InstanceAudit {
     instanceId: string;
     type: string;
     timestamp: number;
-    state?: JibriState;
+    state?: InstanceState;
 }
 
 export interface AuditOptions {
@@ -23,12 +23,12 @@ export default class Audit {
         this.auditTTL = options.auditTTL;
     }
 
-    async saveLatestStatus(groupName: string, instanceId: string, jibriState: JibriState): Promise<boolean> {
+    async saveLatestStatus(groupName: string, instanceId: string, instanceState: InstanceState): Promise<boolean> {
         const value: InstanceAudit = {
             instanceId: instanceId,
             type: 'latest-status',
             timestamp: Date.now(),
-            state: jibriState,
+            state: instanceState,
         };
         return this.setValue(`audit:${groupName}:${instanceId}:latest-status`, value, this.auditTTL);
     }

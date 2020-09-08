@@ -1,7 +1,7 @@
 import Redis from 'ioredis';
 import { Context } from './context';
-import { InstanceDetails } from './instance_status';
 import Audit from './audit';
+import { InstanceDetails } from './instance_tracker';
 
 export interface ShutdownManagerOptions {
     redisClient: Redis.Redis;
@@ -36,8 +36,8 @@ export default class ShutdownManager {
         return true;
     }
 
-    async getShutdownStatus(ctx: Context, details: InstanceDetails): Promise<boolean> {
-        const key = this.shutDownKey(details.instanceId);
+    async getShutdownStatus(ctx: Context, instanceId: string): Promise<boolean> {
+        const key = this.shutDownKey(instanceId);
         const res = await this.redisClient.get(key);
         ctx.logger.debug('Read shutdown status', { key, res });
         return res == 'shutdown';

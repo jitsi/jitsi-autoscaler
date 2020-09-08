@@ -2,7 +2,7 @@ import core = require('oci-core');
 import common = require('oci-common');
 import identity = require('oci-identity');
 import { InstanceGroup } from './instance_group';
-import { JibriHealthState, JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
+import { InstanceTracker, InstanceState } from './instance_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import { ResourceSearchClient } from 'oci-resourcesearch';
@@ -24,7 +24,7 @@ export interface OracleInstanceManagerOptions {
     isDryRun: boolean;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
-    jibriTracker: JibriTracker;
+    instanceTracker: InstanceTracker;
     shutdownManager: ShutdownManager;
     audit: Audit;
 }
@@ -34,13 +34,13 @@ export default class OracleInstanceManager {
     private provider: common.ConfigFileAuthenticationDetailsProvider;
     private identityClient: identity.IdentityClient;
     private computeManagementClient: core.ComputeManagementClient;
-    private jibriTracker: JibriTracker;
+    private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
-        this.jibriTracker = options.jibriTracker;
+        this.instanceTracker = options.instanceTracker;
         this.provider = new common.ConfigFileAuthenticationDetailsProvider(
             options.ociConfigurationFilePath,
             options.ociConfigurationProfile,
@@ -146,18 +146,16 @@ export default class OracleInstanceManager {
                 launchResponse,
             );
             await this.audit.saveLaunchEvent(groupName, launchResponse.instance.id);
-            const state: JibriState = {
-                jibriId: launchResponse.instance.id,
+            const state: InstanceState = {
+                instanceId: launchResponse.instance.id,
+                instanceType: group.type,
                 status: {
-                    busyStatus: JibriStatusState.Provisioning,
-                    health: {
-                        healthStatus: JibriHealthState.Healthy,
-                    },
+                    provisioning: true,
                 },
                 timestamp: Date.now(),
                 metadata: { group: groupName },
             };
-            await this.jibriTracker.track(ctx, state);
+            await this.instanceTracker.track(ctx, state);
             if (isScaleDownProtected) {
                 await this.shutdownManager.setScaleDownProtected(
                     ctx,

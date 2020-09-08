@@ -1,10 +1,10 @@
-import { JibriTracker } from './jibri_tracker';
+import { InstanceTracker } from './instance_tracker';
 import { Context } from './context';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import { InstanceGroupDesiredValuesRequest } from './handlers';
 
 export interface ValidatorOptions {
-    jibriTracker: JibriTracker;
+    instanceTracker: InstanceTracker;
     instanceGroupManager: InstanceGroupManager;
     scaleStatus?: string;
     cloudStatus?: string;
@@ -13,19 +13,19 @@ export interface ValidatorOptions {
 }
 
 export default class Validator {
-    private jibriTracker: JibriTracker;
+    private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
 
     constructor(options: ValidatorOptions) {
-        this.jibriTracker = options.jibriTracker;
+        this.instanceTracker = options.instanceTracker;
         this.instanceGroupManager = options.instanceGroupManager;
 
         this.groupHasActiveInstances = this.groupHasActiveInstances.bind(this);
     }
 
     async groupHasActiveInstances(context: Context, name: string): Promise<boolean> {
-        const jibriStates = await this.jibriTracker.getCurrent(context, name);
-        return jibriStates.length > 0;
+        const instanceStates = await this.instanceTracker.getCurrent(context, name);
+        return instanceStates.length > 0;
     }
 
     groupHasValidDesiredValues(minDesired: number, maxDesired: number, desiredCount: number): boolean {

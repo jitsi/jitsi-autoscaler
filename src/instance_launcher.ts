@@ -1,6 +1,5 @@
-import { JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
+import { InstanceDetails, InstanceState, JibriStatusState, InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
-import { InstanceDetails } from './instance_status';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import Redis from 'ioredis';
 import LockManager from './lock_manager';
@@ -39,7 +38,7 @@ const instanceErrorsCounter = new promClient.Counter({
 });
 
 export interface InstanceLauncherOptions {
-    jibriTracker: JibriTracker;
+    instanceTracker: InstanceTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
@@ -48,7 +47,7 @@ export interface InstanceLauncherOptions {
 }
 
 export default class InstanceLauncher {
-    private jibriTracker: JibriTracker;
+    private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
     private redisClient: Redis.Redis;
@@ -56,7 +55,7 @@ export default class InstanceLauncher {
     private shutdownManager: ShutdownManager;
 
     constructor(options: InstanceLauncherOptions) {
-        this.jibriTracker = options.jibriTracker;
+        this.instanceTracker = options.instanceTracker;
         this.cloudManager = options.cloudManager;
         this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
@@ -78,7 +77,7 @@ export default class InstanceLauncher {
         }
 
         const desiredCount = group.scalingOptions.desiredCount;
-        const currentInventory = await this.jibriTracker.getCurrent(ctx, groupName);
+        const currentInventory = await this.instanceTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;
 
         // set stat for current count of instances
@@ -115,17 +114,37 @@ export default class InstanceLauncher {
         return true;
     }
 
-    async getInstancesForScaleDown(
+    getJVBsForScaleDown(
         ctx: Context,
-        currentInventory: Array<JibriState>,
         group: InstanceGroup,
-    ): Promise<Array<InstanceDetails>> {
-        const desiredScaleDownQuantity =
-            currentInventory.length - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
+        unprotectedInstances: Array<InstanceState>,
+        desiredScaleDownQuantity: number,
+    ): Array<InstanceDetails> {
+        // first sort by participant count
+        unprotectedInstances.sort((a, b) => {
+            return a.status.jvbStatus.participants - b.status.jvbStatus.participants;
+        });
+        if (unprotectedInstances.length < desiredScaleDownQuantity) {
+            const groupName = group.name;
+            const actualScaleDownQuantity = unprotectedInstances.length;
+            ctx.logger.error(
+                '[Launcher] Nr of JVB instances in group for scale down is less than desired scale down quantity',
+                { groupName, actualScaleDownQuantity, desiredScaleDownQuantity },
+            );
+            desiredScaleDownQuantity = actualScaleDownQuantity;
+        }
+        // now return first N instances, least loaded first
+        return this.mapToInstanceDetails(unprotectedInstances.slice(0, desiredScaleDownQuantity - 1));
+    }
 
-        const unprotectedInstances = await this.filterOutProtectedInstances(ctx, currentInventory);
+    getJibrisForScaleDown(
+        ctx: Context,
+        group: InstanceGroup,
+        unprotectedInstances: Array<InstanceState>,
+        desiredScaleDownQuantity: number,
+    ): Array<InstanceDetails> {
+        let listOfInstancesForScaleDown: Array<InstanceDetails>;
         const availableInstances = this.getAvailableJibris(unprotectedInstances);
-        let listOfInstancesForScaleDown = availableInstances.slice(0, desiredScaleDownQuantity);
         const actualScaleDownQuantity = listOfInstancesForScaleDown.length;
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {
             const groupName = group.name;
@@ -149,44 +168,79 @@ export default class InstanceLauncher {
         return listOfInstancesForScaleDown;
     }
 
-    async filterOutProtectedInstances(ctx: Context, instanceDetails: Array<JibriState>): Promise<Array<JibriState>> {
+    async getInstancesForScaleDown(
+        ctx: Context,
+        currentInventory: Array<InstanceState>,
+        group: InstanceGroup,
+    ): Promise<Array<InstanceDetails>> {
+        const desiredScaleDownQuantity =
+            currentInventory.length - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
+
+        const unprotectedInstances = await this.filterOutProtectedInstances(ctx, currentInventory);
+
+        let listOfInstancesForScaleDown: Array<InstanceDetails> = [];
+        switch (group.type) {
+            case 'jibri':
+                listOfInstancesForScaleDown = this.getJibrisForScaleDown(
+                    ctx,
+                    group,
+                    unprotectedInstances,
+                    desiredScaleDownQuantity,
+                );
+                break;
+            case 'JVB':
+                listOfInstancesForScaleDown = this.getJVBsForScaleDown(
+                    ctx,
+                    group,
+                    unprotectedInstances,
+                    desiredScaleDownQuantity,
+                );
+                break;
+        }
+        return listOfInstancesForScaleDown;
+    }
+
+    async filterOutProtectedInstances(
+        ctx: Context,
+        instanceDetails: Array<InstanceState>,
+    ): Promise<Array<InstanceState>> {
         const protectedInstances: boolean[] = await Promise.all(
             instanceDetails.map((instance) => {
-                return this.shutdownManager.isScaleDownProtected(ctx, instance.jibriId);
+                return this.shutdownManager.isScaleDownProtected(ctx, instance.instanceId);
             }),
         );
 
         return instanceDetails.filter((instances, index) => !protectedInstances[index]);
     }
 
-    getAvailableJibris(jibriStates: Array<JibriState>): Array<InstanceDetails> {
-        const states = jibriStates.filter((jibriState) => {
-            return jibriState.status.busyStatus == JibriStatusState.Idle;
+    getAvailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+        const states = instanceStates.filter((instanceState) => {
+            return instanceState.status.jibriStatus.busyStatus == JibriStatusState.Idle;
         });
         return this.mapToInstanceDetails(states);
     }
 
-    getUnavailableJibris(jibriStates: Array<JibriState>): Array<InstanceDetails> {
-        const states = jibriStates.filter((jibriState) => {
-            return jibriState.status.busyStatus != JibriStatusState.Idle;
+    getUnavailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+        const states = instanceStates.filter((instanceState) => {
+            return instanceState.status.jibriStatus.busyStatus != JibriStatusState.Idle;
         });
         return this.mapToInstanceDetails(states);
     }
 
-    mapToInstanceDetails(states: Array<JibriState>): Array<InstanceDetails> {
+    mapToInstanceDetails(states: Array<InstanceState>): Array<InstanceDetails> {
         return states.map((response) => {
-            return {
-                instanceId: response.jibriId,
-                instanceType: 'jibri',
+            return <InstanceDetails>{
+                instanceId: response.instanceId,
+                instanceType: response.instanceType,
                 group: response.metadata.group,
             };
         });
     }
 
-    countNonProvisioningInstances(ctx: Context, states: Array<JibriState>): number {
+    countNonProvisioningInstances(ctx: Context, states: Array<InstanceState>): number {
         let count = 0;
-        states.forEach((jibriState) => {
-            if (jibriState.status.busyStatus != JibriStatusState.Provisioning) {
+        states.forEach((instanceState) => {
+            if (!instanceState.status.provisioning) {
                 count++;
             }
         });

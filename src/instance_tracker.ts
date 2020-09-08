@@ -1,0 +1,343 @@
+import { Context } from './context';
+import Redis from 'ioredis';
+import ShutdownManager from './shutdown_manager';
+import Audit from './audit';
+
+/* eslint-disable */
+function isEmpty(obj: any) {
+    /* eslint-enable */
+    for (const i in obj) return false;
+    return true;
+}
+
+export enum JibriStatusState {
+    Idle = 'IDLE',
+    Busy = 'BUSY',
+}
+
+export enum JibriHealthState {
+    Healthy = 'HEALTHY',
+    Unhealthy = 'UNHEALTHY',
+}
+interface JibriStatusReport {
+    status: JibriStatus;
+}
+
+export interface JibriStatus {
+    busyStatus: JibriStatusState;
+    health: JibriHealth;
+}
+
+export interface JibriHealth {
+    healthStatus: JibriHealthState;
+}
+
+export interface JVBStatus {
+    load: number;
+    participants: number;
+}
+
+export interface InstanceDetails {
+    instanceId: string;
+    instanceType: string;
+    cloud?: string;
+    region?: string;
+    group?: string;
+    publicIp?: string;
+    privateIp?: string;
+}
+
+export interface StatsReport {
+    instance: InstanceDetails;
+    timestamp?: number;
+    stats: unknown;
+    shutdownStatus?: boolean;
+    shutdownError?: boolean;
+    reconfigureError?: boolean;
+    statsError?: boolean;
+}
+
+export interface InstanceStatus {
+    provisioning: boolean;
+    jibriStatus?: JibriStatus;
+    jvbStatus?: JVBStatus;
+}
+
+export interface InstanceMetric {
+    instanceId: string;
+    timestamp: number;
+    value: number;
+}
+
+export interface InstanceMetadata {
+    group: string;
+    publicIp?: string;
+    privateIp?: string;
+    [key: string]: string;
+}
+
+export interface InstanceState {
+    instanceId: string;
+    instanceType: string;
+    status: InstanceStatus;
+    timestamp?: number;
+    metadata: InstanceMetadata;
+    shutdownStatus?: boolean;
+    reconfigureError?: boolean;
+    shutdownError?: boolean;
+    statsError?: boolean;
+}
+
+export interface InstanceTrackerOptions {
+    redisClient: Redis.Redis;
+    shutdownManager: ShutdownManager;
+    audit: Audit;
+    idleTTL: number;
+    metricTTL: number;
+    provisioningTTL: number;
+}
+
+export class InstanceTracker {
+    private redisClient: Redis.Redis;
+    private shutdownManager: ShutdownManager;
+    private audit: Audit;
+    private idleTTL: number;
+    private provisioningTTL: number;
+    private metricTTL: number;
+
+    constructor(options: InstanceTrackerOptions) {
+        this.redisClient = options.redisClient;
+        this.shutdownManager = options.shutdownManager;
+        this.audit = options.audit;
+        this.idleTTL = options.idleTTL;
+        this.provisioningTTL = options.provisioningTTL;
+        this.metricTTL = options.metricTTL;
+
+        this.track = this.track.bind(this);
+    }
+
+    instanceKey(details: InstanceDetails, type: string): string {
+        return `instance:${type}:${details.instanceId}`;
+    }
+
+    // @TODO: handle stats for instances
+    async stats(ctx: Context, report: StatsReport): Promise<boolean> {
+        ctx.logger.debug('Received report', { report });
+        const instanceState = <InstanceState>{
+            instanceId: report.instance.instanceId,
+            instanceType: report.instance.instanceType,
+            metadata: <InstanceMetadata>{ ...report.instance },
+            status: {
+                provisioning: false,
+            },
+            timestamp: report.timestamp,
+            shutdownStatus: report.shutdownStatus,
+            shutdownError: report.shutdownError,
+            reconfigureError: report.reconfigureError,
+            statsError: report.statsError,
+        };
+        if (isEmpty(report.stats) || report.statsError) {
+            // empty stats report, so error
+            ctx.logger.error('Empty stats report, not including stats', { report });
+            // TODO: increment stats report error counter
+        } else {
+            let jibriStatusReport: JibriStatusReport;
+            switch (report.instance.instanceType) {
+                case 'jibri':
+                    jibriStatusReport = <JibriStatusReport>report.stats;
+                    instanceState.status.jibriStatus = jibriStatusReport.status;
+                    break;
+                case 'JVB':
+                    instanceState.status.jvbStatus = <JVBStatus>report.stats;
+                    break;
+            }
+        }
+        ctx.logger.debug('Tracking instance state', { instanceState });
+        return await this.track(ctx, instanceState);
+    }
+
+    async track(ctx: Context, state: InstanceState): Promise<boolean> {
+        let group = 'default';
+        // pull the group from metadata if provided
+        if (state.metadata && state.metadata.group) {
+            group = state.metadata.group;
+        }
+
+        // Store latest instance status
+        const key = `instance:cstatus:${group}:${state.instanceId}`;
+
+        let statusTTL = this.idleTTL;
+        if (state.status.provisioning) {
+            statusTTL = this.provisioningTTL;
+        }
+        const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', statusTTL);
+        if (result !== 'OK') {
+            ctx.logger.error(`unable to set ${key}`);
+            throw new Error(`unable to set ${key}`);
+        }
+
+        const isInstanceShuttingDown = (await this.filterOutInstancesShuttingDown(ctx, [state])).length == 0;
+
+        // Store metric, but only for running instances
+        if (!state.status.provisioning && !isInstanceShuttingDown) {
+            let metricTimestamp = Number(state.timestamp);
+            if (!metricTimestamp) {
+                metricTimestamp = Date.now();
+            }
+
+            let metricValue = 0;
+            switch (state.instanceType) {
+                case 'jibri':
+                    if (state.status.jibriStatus.busyStatus == JibriStatusState.Idle) {
+                        metricValue = 1;
+                    }
+                    break;
+                case 'JVB':
+                    metricValue = state.status.jvbStatus.load;
+                    break;
+            }
+
+            const metricKey = `metric:instance:${group}:${state.instanceId}:${metricTimestamp}`;
+            const metricObject: InstanceMetric = {
+                instanceId: state.instanceId,
+                timestamp: metricTimestamp,
+                value: metricValue,
+            };
+            const resultMetric = await this.redisClient.set(
+                metricKey,
+                JSON.stringify(metricObject),
+                'ex',
+                this.metricTTL,
+            );
+            if (resultMetric !== 'OK') {
+                ctx.logger.error(`unable to set ${metricKey}`);
+                throw new Error(`unable to set ${metricKey}`);
+            }
+        }
+
+        //monitor latest status
+        await this.audit.saveLatestStatus(group, state.instanceId, state);
+        return true;
+    }
+
+    async getAvailableMetricPerPeriod(
+        ctx: Context,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        periodCount: number,
+    ): Promise<Array<number>> {
+        ctx.logger.debug(`Getting available metric per period for ${periodCount} periods`, {
+            metricInventoryPerPeriod,
+        });
+
+        return metricInventoryPerPeriod.slice(0, periodCount).map((instanceMetrics) => {
+            return this.computeAvailableMetric(instanceMetrics);
+        });
+    }
+
+    async getMetricInventoryPerPeriod(
+        ctx: Context,
+        group: string,
+        periodsCount: number,
+        periodDurationSeconds: number,
+    ): Promise<Array<Array<InstanceMetric>>> {
+        const metricPoints: Array<Array<InstanceMetric>> = [];
+        let items: Array<string> = [];
+        const currentTime = Date.now();
+
+        for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
+            metricPoints[periodIdx] = [];
+        }
+
+        let cursor = '0';
+        do {
+            const result = await this.redisClient.scan(cursor, 'match', `metric:instance:${group}:*`);
+            cursor = result[0];
+            if (result[1].length > 0) {
+                items = await this.redisClient.mget(...result[1]);
+                items.forEach((item) => {
+                    const itemJson = JSON.parse(item);
+
+                    const periodIdx = Math.floor((currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000));
+                    if (periodIdx < periodsCount) {
+                        metricPoints[periodIdx].push(itemJson);
+                    }
+                });
+            }
+        } while (cursor != '0');
+        ctx.logger.debug(`instance metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });
+
+        return metricPoints;
+    }
+
+    computeAvailableMetric(instanceMetrics: Array<InstanceMetric>): number {
+        const dataPointsPerInstance: Map<string, number> = new Map();
+        const aggregatedDataPerInstance: Map<string, number> = new Map();
+
+        instanceMetrics.forEach((instanceMetric) => {
+            let currentDataPoints = dataPointsPerInstance.get(instanceMetric.instanceId);
+            if (!currentDataPoints) {
+                currentDataPoints = 0;
+            }
+            dataPointsPerInstance.set(instanceMetric.instanceId, currentDataPoints + 1);
+
+            let currentAggregatedValue = aggregatedDataPerInstance.get(instanceMetric.instanceId);
+            if (!currentAggregatedValue) {
+                currentAggregatedValue = 0;
+            }
+            aggregatedDataPerInstance.set(instanceMetric.instanceId, currentAggregatedValue + instanceMetric.value);
+        });
+
+        const instanceIds: Array<string> = Array.from(aggregatedDataPerInstance.keys());
+
+        if (instanceIds.length > 0) {
+            return instanceIds
+                .map((instanceId) => {
+                    return aggregatedDataPerInstance.get(instanceId) / dataPointsPerInstance.get(instanceId);
+                })
+                .reduce((previousSum, currentValue) => {
+                    return previousSum + currentValue;
+                });
+        } else {
+            return 0;
+        }
+    }
+
+    async getCurrent(ctx: Context, group: string): Promise<Array<InstanceState>> {
+        const states: Array<InstanceState> = [];
+        let items: Array<string> = [];
+
+        let cursor = '0';
+        do {
+            const result = await this.redisClient.scan(cursor, 'match', `instance:cstatus:${group}:*`);
+            cursor = result[0];
+            if (result[1].length > 0) {
+                items = await this.redisClient.mget(...result[1]);
+                items.forEach((item) => {
+                    states.push(JSON.parse(item));
+                });
+            }
+        } while (cursor != '0');
+        ctx.logger.debug(`instance states: ${states}`, { group, states });
+
+        const statesExceptShutDown = await this.filterOutInstancesShuttingDown(ctx, states);
+        ctx.logger.debug(`instance filtered states, with no shutdown instances: ${statesExceptShutDown}`, {
+            group,
+            statesExceptShutDown,
+        });
+
+        return statesExceptShutDown;
+    }
+
+    async filterOutInstancesShuttingDown(ctx: Context, states: Array<InstanceState>): Promise<Array<InstanceState>> {
+        const statesShutdownStatus: boolean[] = await Promise.all(
+            states.map((instanceState) => {
+                return (
+                    instanceState.shutdownStatus ||
+                    this.shutdownManager.getShutdownStatus(ctx, instanceState.instanceId)
+                );
+            }),
+        );
+
+        return states.filter((instanceState, index) => !statesShutdownStatus[index]);
+    }
+}

@@ -9,6 +9,14 @@ export interface InstanceAudit {
     state?: InstanceState;
 }
 
+export interface InstanceAuditResponse {
+    instanceId: string;
+    requestToLaunch: string;
+    latestStatus: string;
+    requestToTerminate: string;
+    latestStatusInfo?: InstanceState;
+}
+
 export interface AuditOptions {
     redisClient: Redis.Redis;
     auditTTL: number;
@@ -59,17 +67,41 @@ export default class Audit {
         return true;
     }
 
-    async generateAudit(ctx: Context, groupName: string): Promise<Record<string, InstanceAudit[]>> {
-        const instanceAudits = await this.getAudit(ctx, groupName);
+    async generateAudit(ctx: Context, groupName: string): Promise<InstanceAuditResponse[]> {
+        const instanceAudits: Array<InstanceAudit> = await this.getAudit(ctx, groupName);
         instanceAudits.sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
 
-        const groupByInstanceId = (array: InstanceAudit[]) => {
-            return array.reduce((result: Record<string, InstanceAudit[]>, currentValue) => {
-                (result[currentValue.instanceId] = result[currentValue.instanceId] || []).push(currentValue);
-                return result;
-            }, {});
-        };
-        return groupByInstanceId(instanceAudits);
+        const instanceAuditResponseList: InstanceAuditResponse[] = [];
+        new Set(instanceAudits.map((instanceAudit) => instanceAudit.instanceId)).forEach((instanceId) => {
+            const instanceAuditResponse: InstanceAuditResponse = {
+                instanceId: instanceId,
+                requestToLaunch: 'unknown',
+                latestStatus: 'unknown',
+                requestToTerminate: 'unknown',
+            };
+            instanceAuditResponseList.push(instanceAuditResponse);
+        });
+
+        instanceAuditResponseList.forEach(function (instanceAuditResponse) {
+            for (const instanceAudit of instanceAudits.filter(
+                (instanceAudit) => instanceAudit.instanceId == instanceAuditResponse.instanceId,
+            )) {
+                switch (instanceAudit.type) {
+                    case 'request-to-launch':
+                        instanceAuditResponse.requestToLaunch = new Date(instanceAudit.timestamp).toUTCString();
+                        break;
+                    case 'request-to-terminate':
+                        instanceAuditResponse.requestToTerminate = new Date(instanceAudit.timestamp).toUTCString();
+                        break;
+                    case 'latest-status':
+                        instanceAuditResponse.latestStatus = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.latestStatusInfo = instanceAudit.state;
+                        break;
+                }
+            }
+        });
+
+        return instanceAuditResponseList;
     }
 
     async getAudit(ctx: Context, groupName: string): Promise<Array<InstanceAudit>> {

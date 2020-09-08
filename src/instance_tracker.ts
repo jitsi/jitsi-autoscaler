@@ -298,7 +298,7 @@ export class InstanceTracker {
         }
     }
 
-    async getCurrent(ctx: Context, group: string): Promise<Array<InstanceState>> {
+    async getCurrent(ctx: Context, group: string, filterShutdown = true): Promise<Array<InstanceState>> {
         const states: Array<InstanceState> = [];
         let items: Array<string> = [];
 
@@ -315,13 +315,16 @@ export class InstanceTracker {
         } while (cursor != '0');
         ctx.logger.debug(`instance states: ${states}`, { group, states });
 
-        const statesExceptShutDown = await this.filterOutInstancesShuttingDown(ctx, states);
-        ctx.logger.debug(`instance filtered states, with no shutdown instances: ${statesExceptShutDown}`, {
-            group,
-            statesExceptShutDown,
-        });
+        if (filterShutdown) {
+            const statesExceptShutDown = await this.filterOutInstancesShuttingDown(ctx, states);
+            ctx.logger.debug(`instance filtered states, with no shutdown instances: ${statesExceptShutDown}`, {
+                group,
+                statesExceptShutDown,
+            });
+            return statesExceptShutDown;
+        }
 
-        return statesExceptShutDown;
+        return states;
     }
 
     async filterOutInstancesShuttingDown(ctx: Context, states: Array<InstanceState>): Promise<Array<InstanceState>> {

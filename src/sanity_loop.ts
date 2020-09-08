@@ -3,13 +3,13 @@ import * as promClient from 'prom-client';
 import GroupReportGenerator from './group_report';
 
 const untrackedInstancesCountCloud = new promClient.Gauge({
-    name: 'untracked_instance_count',
+    name: 'autoscaling_untracked_instance_count',
     help: 'Gauge for current untracked instances',
     labelNames: ['group'],
 });
 
 const instancesCountCloud = new promClient.Gauge({
-    name: 'cloud_instance_count',
+    name: 'autoscaling_cloud_instance_count',
     help: 'Gauge for current instances in cloud',
     labelNames: ['group'],
 });

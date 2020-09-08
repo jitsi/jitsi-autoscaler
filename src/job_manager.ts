@@ -35,7 +35,7 @@ const groupsManaged = new promClient.Gauge({
 });
 
 const jobCreateFailureCounter = new promClient.Counter({
-    name: 'job_create_failure_total',
+    name: 'autoscaling_job_create_failure_total',
     help: 'Counter for jobs failed to create',
     labelNames: ['type'],
 });
@@ -44,7 +44,7 @@ jobCreateFailureCounter.labels(JobType.Launch).inc(0);
 jobCreateFailureCounter.labels(JobType.Sanity).inc(0);
 
 const jobCreateTotalCounter = new promClient.Counter({
-    name: 'job_create_total',
+    name: 'autoscaling_job_create_total',
     help: 'Counter for total job create operations',
     labelNames: ['type'],
 });
@@ -53,7 +53,7 @@ jobCreateTotalCounter.labels(JobType.Launch).inc(0);
 jobCreateTotalCounter.labels(JobType.Sanity).inc(0);
 
 const jobProcessFailureCounter = new promClient.Counter({
-    name: 'job_process_failure_total',
+    name: 'autoscaling_job_process_failure_total',
     help: 'Counter for jobs processing failures',
     labelNames: ['type'],
 });
@@ -62,7 +62,7 @@ jobProcessFailureCounter.labels(JobType.Launch).inc(0);
 jobProcessFailureCounter.labels(JobType.Sanity).inc(0);
 
 const jobProcessTotalCounter = new promClient.Counter({
-    name: 'job_process_total',
+    name: 'autoscaling_job_process_total',
     help: 'Counter for total jobs processed',
     labelNames: ['type'],
 });
@@ -71,17 +71,17 @@ jobProcessTotalCounter.labels(JobType.Launch).inc(0);
 jobProcessTotalCounter.labels(JobType.Sanity).inc(0);
 
 const queueErrorCounter = new promClient.Counter({
-    name: 'queue_error_total',
+    name: 'autoscaling_queue_error_total',
     help: 'Counter for queue errors',
 });
 
 const queueStalledCounter = new promClient.Counter({
-    name: 'queue_stalled_total',
+    name: 'autoscaling_queue_stalled_total',
     help: 'Counter for stalled job events',
 });
 
 const queueWaiting = new promClient.Gauge({
-    name: 'queue_waiting',
+    name: 'autoscaling_queue_waiting',
     help: 'Gauge for current jobs waiting to be processed',
 });
 

@@ -184,7 +184,7 @@ export class InstanceTracker {
             let metricValue = 0;
             switch (state.instanceType) {
                 case 'jibri':
-                    if (state.status.jibriStatus.busyStatus == JibriStatusState.Idle) {
+                    if (state.status.jibriStatus && state.status.jibriStatus.busyStatus == JibriStatusState.Idle) {
                         metricValue = 1;
                     }
                     break;

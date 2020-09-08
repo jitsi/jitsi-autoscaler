@@ -214,14 +214,19 @@ export default class InstanceLauncher {
 
     getAvailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
         const states = instanceStates.filter((instanceState) => {
-            return instanceState.status.jibriStatus.busyStatus == JibriStatusState.Idle;
+            return (
+                instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Idle
+            );
         });
         return this.mapToInstanceDetails(states);
     }
 
     getUnavailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
         const states = instanceStates.filter((instanceState) => {
-            return instanceState.status.jibriStatus.busyStatus != JibriStatusState.Idle;
+            return (
+                !instanceState.status.jibriStatus ||
+                instanceState.status.jibriStatus.busyStatus != JibriStatusState.Idle
+            );
         });
         return this.mapToInstanceDetails(states);
     }

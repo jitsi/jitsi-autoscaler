@@ -147,7 +147,9 @@ export default class GroupReportGenerator {
             } else {
                 switch (group.type) {
                     case 'jibri':
-                        instanceReport.scaleStatus = instanceState.status.jibriStatus.busyStatus.toString();
+                        if (instanceState.status.jibriStatus) {
+                            instanceReport.scaleStatus = instanceState.status.jibriStatus.busyStatus.toString();
+                        }
                         break;
                     case 'JVB':
                         // @TODO: convert JVB stats into more explict statuses

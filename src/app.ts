@@ -9,9 +9,8 @@ import logger from './logger';
 import shortid from 'shortid';
 import { ASAPPubKeyFetcher } from './asap';
 import jwt from 'express-jwt';
-import { JibriTracker } from './jibri_tracker';
+import { InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
-import { InstanceStatus } from './instance_status';
 import InstanceGroupManager from './instance_group';
 import AutoscaleProcessor from './autoscaler';
 import InstanceLauncher from './instance_launcher';
@@ -78,7 +77,7 @@ const shutdownManager = new ShutdownManager({
     audit: audit,
 });
 
-const jibriTracker = new JibriTracker({
+const instanceTracker = new InstanceTracker({
     redisClient,
     shutdownManager: shutdownManager,
     audit: audit,
@@ -87,15 +86,12 @@ const jibriTracker = new JibriTracker({
     provisioningTTL: config.ProvisioningTTL,
 });
 
-const instanceStatus = new InstanceStatus({ redisClient, jibriTracker });
-
 const cloudManager = new CloudManager({
     shutdownManager: shutdownManager,
     isDryRun: config.DryRun,
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
-    jibriTracker: jibriTracker,
-    instanceStatus: instanceStatus,
+    instanceTracker: instanceTracker,
     audit: audit,
 });
 
@@ -122,7 +118,7 @@ instanceGroupManager.init(initCtx).catch((err) => {
 });
 
 const autoscaleProcessor = new AutoscaleProcessor({
-    jibriTracker: jibriTracker,
+    instanceTracker: instanceTracker,
     cloudManager: cloudManager,
     instanceGroupManager: instanceGroupManager,
     lockManager: lockManager,
@@ -130,7 +126,7 @@ const autoscaleProcessor = new AutoscaleProcessor({
 });
 
 const instanceLauncher = new InstanceLauncher({
-    jibriTracker: jibriTracker,
+    instanceTracker: instanceTracker,
     cloudManager: cloudManager,
     instanceGroupManager: instanceGroupManager,
     lockManager: lockManager,
@@ -139,7 +135,7 @@ const instanceLauncher = new InstanceLauncher({
 });
 
 const groupReportGenerator = new GroupReportGenerator({
-    jibriTracker: jibriTracker,
+    instanceTracker: instanceTracker,
     instanceGroupManager: instanceGroupManager,
     cloudManager: cloudManager,
     shutdownManager: shutdownManager,
@@ -202,8 +198,7 @@ async function createSanityProcessingJobs() {
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
 const h = new Handlers({
-    jibriTracker: jibriTracker,
-    instanceStatus: instanceStatus,
+    instanceTracker: instanceTracker,
     instanceGroupManager: instanceGroupManager,
     shutdownManager: shutdownManager,
     groupReportGenerator: groupReportGenerator,
@@ -211,7 +206,7 @@ const h = new Handlers({
     audit: audit,
 });
 
-const validator = new Validator({ jibriTracker, instanceGroupManager });
+const validator = new Validator({ instanceTracker, instanceGroupManager });
 const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use(loggedPaths, context.injectContext);

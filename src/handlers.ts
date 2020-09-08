@@ -1,6 +1,13 @@
 import { Request, Response } from 'express';
-import { JibriTracker, JibriState } from './jibri_tracker';
-import { InstanceStatus, InstanceDetails, StatsReport } from './instance_status';
+import {
+    InstanceTracker,
+    InstanceState,
+    InstanceStatus,
+    StatsReport,
+    InstanceDetails,
+    JibriStatus,
+    InstanceMetadata,
+} from './instance_tracker';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import Redlock from 'redlock';
@@ -35,18 +42,23 @@ interface InstanceGroupScalingOptionsRequest {
 }
 
 interface HandlersOptions {
-    jibriTracker: JibriTracker;
+    instanceTracker: InstanceTracker;
     audit: Audit;
-    instanceStatus: InstanceStatus;
     shutdownManager: ShutdownManager;
     instanceGroupManager: InstanceGroupManager;
     groupReportGenerator: GroupReportGenerator;
     lockManager: LockManager;
 }
 
+export interface JibriState {
+    jibriId: string;
+    status: JibriStatus;
+    timestamp?: number;
+    metadata: InstanceMetadata;
+}
+
 class Handlers {
-    private jibriTracker: JibriTracker;
-    private instanceStatus: InstanceStatus;
+    private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
     private instanceGroupManager: InstanceGroupManager;
     private groupReportGenerator: GroupReportGenerator;
@@ -58,8 +70,7 @@ class Handlers {
         this.sidecarPoll = this.sidecarPoll.bind(this);
 
         this.lockManager = options.lockManager;
-        this.jibriTracker = options.jibriTracker;
-        this.instanceStatus = options.instanceStatus;
+        this.instanceTracker = options.instanceTracker;
         this.instanceGroupManager = options.instanceGroupManager;
         this.shutdownManager = options.shutdownManager;
         this.groupReportGenerator = options.groupReportGenerator;
@@ -67,23 +78,33 @@ class Handlers {
     }
 
     async jibriStateWebhook(req: Request, res: Response): Promise<void> {
-        const status: JibriState = req.body;
-        if (!status.status) {
+        const instate: JibriState = req.body;
+        if (!instate.status) {
             res.sendStatus(400);
             return;
         }
-        if (!status.jibriId) {
+        if (!instate.jibriId) {
             res.sendStatus(400);
             return;
         }
+        const state = <InstanceState>{
+            instanceId: instate.jibriId,
+            instanceType: 'jibri',
+            timestamp: instate.timestamp,
+            metadata: instate.metadata,
+            status: <InstanceStatus>{
+                jibriStatus: instate.status,
+                provisioning: false,
+            },
+        };
 
-        await this.jibriTracker.track(req.context, status);
+        await this.instanceTracker.track(req.context, state);
         res.sendStatus(200);
     }
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, details);
+        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, details.instanceId);
         // TODO: implement reconfiguration checks
         const reconfigureStatus = false;
 
@@ -95,7 +116,7 @@ class Handlers {
 
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        await this.instanceStatus.stats(req.context, report);
+        await this.instanceTracker.stats(req.context, report);
 
         res.status(200);
         res.send({ save: 'OK' });
@@ -104,11 +125,11 @@ class Handlers {
     async sidecarStatus(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
         try {
-            await this.instanceStatus.stats(req.context, report);
+            await this.instanceTracker.stats(req.context, report);
         } catch (err) {
             req.context.logger.error('Status handling error', { err });
         }
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance);
+        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
         // TODO: implement reconfiguration checks
         const reconfigureStatus = false;
 
@@ -135,7 +156,7 @@ class Handlers {
                 }
 
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
-                this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
                 res.status(200);
                 res.send({ save: 'OK' });
             } else {
@@ -181,7 +202,7 @@ class Handlers {
         const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, instanceGroup.name);
         try {
             await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
-            this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
+            await this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
             res.status(200);
             res.send({ save: 'OK' });
         } finally {

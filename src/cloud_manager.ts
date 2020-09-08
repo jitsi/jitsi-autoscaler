@@ -1,8 +1,7 @@
 import OracleCloudManager from './oracle_instance_manager';
-import { InstanceDetails, InstanceStatus } from './instance_status';
 import OracleInstanceManager from './oracle_instance_manager';
 import { InstanceGroup } from './instance_group';
-import { JibriTracker } from './jibri_tracker';
+import { InstanceTracker, InstanceDetails } from './instance_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
@@ -14,10 +13,9 @@ export interface CloudRetryStrategy {
 }
 
 export interface CloudManagerOptions {
-    instanceStatus: InstanceStatus;
     shutdownManager: ShutdownManager;
     isDryRun: boolean;
-    jibriTracker: JibriTracker;
+    instanceTracker: InstanceTracker;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
     audit: Audit;
@@ -41,7 +39,7 @@ export default class CloudManager {
             isDryRun: options.isDryRun,
             ociConfigurationFilePath: options.ociConfigurationFilePath,
             ociConfigurationProfile: options.ociConfigurationProfile,
-            jibriTracker: options.jibriTracker,
+            instanceTracker: options.instanceTracker,
             shutdownManager: options.shutdownManager,
             audit: options.audit,
         });

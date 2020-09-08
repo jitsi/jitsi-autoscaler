@@ -1,4 +1,4 @@
-import { JibriState, JibriStatusState, JibriTracker } from './jibri_tracker';
+import { InstanceState, InstanceTracker, JibriStatusState } from './instance_tracker';
 import { Context } from './context';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
@@ -30,7 +30,7 @@ export interface GroupReport {
 }
 
 export interface GroupReportGeneratorOptions {
-    jibriTracker: JibriTracker;
+    instanceTracker: InstanceTracker;
     instanceGroupManager: InstanceGroupManager;
     cloudManager: CloudManager;
     shutdownManager: ShutdownManager;
@@ -38,14 +38,14 @@ export interface GroupReportGeneratorOptions {
 }
 
 export default class GroupReportGenerator {
-    private jibriTracker: JibriTracker;
+    private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
     private shutdownManager: ShutdownManager;
     private reportExtCallRetryStrategy: CloudRetryStrategy;
 
     constructor(options: GroupReportGeneratorOptions) {
-        this.jibriTracker = options.jibriTracker;
+        this.instanceTracker = options.instanceTracker;
         this.instanceGroupManager = options.instanceGroupManager;
         this.cloudManager = options.cloudManager;
         this.shutdownManager = options.shutdownManager;
@@ -59,8 +59,8 @@ export default class GroupReportGenerator {
         if (!group) {
             throw new Error(`Group ${groupName} not found, failed to generate report`);
         }
-        if (group.type != 'jibri') {
-            throw new Error('Only jibri groups are supported for report generation');
+        if (!group.type) {
+            throw new Error('Only typed groups are supported for report generation');
         }
 
         const groupReport: GroupReport = {
@@ -78,15 +78,15 @@ export default class GroupReportGenerator {
         };
 
         // Get the list of instances from redis and from the cloud manager
-        const jibriStates = await this.jibriTracker.getCurrent(ctx, groupName);
-        groupReport.count = jibriStates.length;
+        const instanceStates = await this.instanceTracker.getCurrent(ctx, groupName);
+        groupReport.count = instanceStates.length;
         const cloudInstances = await this.cloudManager.getInstances(ctx, group, this.reportExtCallRetryStrategy);
 
-        this.getInstanceReportsMap(jibriStates, cloudInstances).forEach((instanceReport) => {
+        this.getInstanceReportsMap(group, instanceStates, cloudInstances).forEach((instanceReport) => {
             groupReport.instances.push(instanceReport);
         });
 
-        await this.addShutdownStatus(ctx, groupReport.instances, 'jibri');
+        await this.addShutdownStatus(ctx, groupReport.instances);
         await this.addShutdownProtectedStatus(ctx, groupReport.instances);
 
         groupReport.instances.forEach((instanceReport) => {
@@ -105,14 +105,21 @@ export default class GroupReportGenerator {
             ) {
                 groupReport.unTrackedCount++;
             }
-            if (instanceReport.scaleStatus == JibriStatusState.Provisioning) {
+            if (instanceReport.scaleStatus == 'PROVISIONING') {
                 groupReport.provisioningCount++;
             }
-            if (instanceReport.scaleStatus == JibriStatusState.Idle) {
-                groupReport.availableCount++;
-            }
-            if (instanceReport.scaleStatus == JibriStatusState.Busy) {
-                groupReport.busyCount++;
+            switch (group.type) {
+                case 'jibri':
+                    if (instanceReport.scaleStatus == JibriStatusState.Idle) {
+                        groupReport.availableCount++;
+                    }
+                    if (instanceReport.scaleStatus == JibriStatusState.Busy) {
+                        groupReport.busyCount++;
+                    }
+                    break;
+                case 'JVB':
+                    // @TODO: implement JVB instance counting
+                    break;
             }
         });
 
@@ -120,27 +127,41 @@ export default class GroupReportGenerator {
     }
 
     private getInstanceReportsMap(
-        jibriStates: Array<JibriState>,
+        group: InstanceGroup,
+        instanceStates: Array<InstanceState>,
         cloudInstances: Array<CloudInstance>,
     ): Map<string, InstanceReport> {
         const instanceReports = new Map<string, InstanceReport>();
 
-        jibriStates.forEach((jibriState) => {
+        instanceStates.forEach((instanceState) => {
             const instanceReport = <InstanceReport>{
-                instanceId: jibriState.jibriId,
+                instanceId: instanceState.instanceId,
                 displayName: 'unknown',
-                scaleStatus: jibriState.status.busyStatus.toString(),
+                scaleStatus: 'unknown',
                 cloudStatus: 'unknown',
-                isShuttingDown: jibriState.shutdownStatus,
+                isShuttingDown: instanceState.shutdownStatus,
                 isScaleDownProtected: false,
             };
-            if (jibriState.metadata.publicIp) {
-                instanceReport.publicIp = jibriState.metadata.publicIp;
+            if (instanceState.status.provisioning) {
+                instanceReport.scaleStatus = 'PROVISIONING';
+            } else {
+                switch (group.type) {
+                    case 'jibri':
+                        instanceReport.scaleStatus = instanceState.status.jibriStatus.busyStatus.toString();
+                        break;
+                    case 'JVB':
+                        // @TODO: convert JVB stats into more explict statuses
+                        instanceReport.scaleStatus = 'ONLINE';
+                        break;
+                }
             }
-            if (jibriState.metadata.privateIp) {
-                instanceReport.privateIp = jibriState.metadata.privateIp;
+            if (instanceState.metadata.publicIp) {
+                instanceReport.publicIp = instanceState.metadata.publicIp;
             }
-            instanceReports.set(jibriState.jibriId, instanceReport);
+            if (instanceState.metadata.privateIp) {
+                instanceReport.privateIp = instanceState.metadata.privateIp;
+            }
+            instanceReports.set(instanceState.instanceId, instanceReport);
         });
 
         cloudInstances.forEach((cloudInstance) => {
@@ -164,19 +185,12 @@ export default class GroupReportGenerator {
         return instanceReports;
     }
 
-    private async addShutdownStatus(
-        ctx: Context,
-        instanceReports: Array<InstanceReport>,
-        instanceType: string,
-    ): Promise<void> {
+    private async addShutdownStatus(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
         const instanceReportsShutdownStatus: boolean[] = await Promise.all(
             instanceReports.map((instanceReport) => {
                 return (
                     instanceReport.isShuttingDown ||
-                    this.shutdownManager.getShutdownStatus(ctx, {
-                        instanceId: instanceReport.instanceId,
-                        instanceType: instanceType,
-                    })
+                    this.shutdownManager.getShutdownStatus(ctx, instanceReport.instanceId)
                 );
             }),
         );

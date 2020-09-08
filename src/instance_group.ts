@@ -135,7 +135,7 @@ export default class InstanceGroupManager {
                 });
             }
         } while (cursor != '0');
-        ctx.logger.debug(`jibri groups are`, { instanceGroups });
+        ctx.logger.debug(`instance groups are`, { instanceGroups });
         return instanceGroups;
     }
 

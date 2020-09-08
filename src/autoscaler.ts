@@ -1,14 +1,14 @@
-import { JibriMetric, JibriTracker } from './jibri_tracker';
+import { InstanceMetric, InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
 import Redlock from 'redlock';
 import Redis from 'ioredis';
-import InstanceGroupManager, { InstanceGroup, ScalingOptions } from './instance_group';
+import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
 import * as promClient from 'prom-client';
 
 export interface AutoscaleProcessorOptions {
-    jibriTracker: JibriTracker;
+    instanceTracker: InstanceTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
@@ -34,7 +34,7 @@ const groupMin = new promClient.Gauge({
 });
 
 export default class AutoscaleProcessor {
-    private jibriTracker: JibriTracker;
+    private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
     private redisClient: Redis.Redis;
@@ -44,7 +44,7 @@ export default class AutoscaleProcessor {
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
 
     constructor(options: AutoscaleProcessorOptions) {
-        this.jibriTracker = options.jibriTracker;
+        this.instanceTracker = options.instanceTracker;
         this.cloudManager = options.cloudManager;
         this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
@@ -79,7 +79,7 @@ export default class AutoscaleProcessor {
             }
 
             ctx.logger.info(`[AutoScaler] Gathering metrics for desired count adjustments for group ${group.name}`);
-            const currentInventory = await this.jibriTracker.getCurrent(ctx, group.name);
+            const currentInventory = await this.instanceTracker.getCurrent(ctx, group.name);
             const count = currentInventory.length;
 
             const maxPeriodCount = Math.max(
@@ -87,33 +87,15 @@ export default class AutoscaleProcessor {
                 group.scalingOptions.scaleDownPeriodsCount,
             );
             const metricInventoryPerPeriod: Array<Array<
-                JibriMetric
-            >> = await this.jibriTracker.getMetricInventoryPerPeriod(
+                InstanceMetric
+            >> = await this.instanceTracker.getMetricInventoryPerPeriod(
                 ctx,
                 group.name,
                 maxPeriodCount,
                 group.scalingOptions.scalePeriod,
             );
 
-            const availableJibrisPerPeriodForScaleUp: Array<number> = await this.jibriTracker.getAvailableMetricPerPeriod(
-                ctx,
-                metricInventoryPerPeriod,
-                group.scalingOptions.scaleUpPeriodsCount,
-            );
-
-            const availableJibrisPerPeriodForScaleDown: Array<number> = await this.jibriTracker.getAvailableMetricPerPeriod(
-                ctx,
-                metricInventoryPerPeriod,
-                group.scalingOptions.scaleDownPeriodsCount,
-            );
-
-            await this.updateDesiredCountIfNeeded(
-                ctx,
-                group,
-                count,
-                availableJibrisPerPeriodForScaleUp,
-                availableJibrisPerPeriodForScaleDown,
-            );
+            await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
         } finally {
             lock.unlock();
         }
@@ -125,19 +107,18 @@ export default class AutoscaleProcessor {
         ctx: Context,
         group: InstanceGroup,
         count: number,
-        availableJibrisPerPeriodForScaleUp: Array<number>,
-        availableJibrisPerPeriodForScaleDown: Array<number>,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
     ) {
-        ctx.logger.info(
-            `[AutoScaler] Evaluating desired count adjustments for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
-            { availableJibrisPerPeriodForScaleUp, availableJibrisPerPeriodForScaleDown },
+        ctx.logger.debug(
+            `[AutoScaler] Begin desired count adjustments for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
         );
 
         // first check if we should scale up the group
         let desiredCount = group.scalingOptions.desiredCount;
+
         if (
             group.scalingOptions.desiredCount <= count &&
-            this.evalScaleUpConditionForAllPeriods(availableJibrisPerPeriodForScaleUp, count, group.scalingOptions)
+            (await this.evalScaleUpConditionForAllPeriods(ctx, metricInventoryPerPeriod, count, group))
         ) {
             desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
             if (desiredCount > group.scalingOptions.maxDesired) {
@@ -147,7 +128,7 @@ export default class AutoscaleProcessor {
             await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else if (
             desiredCount >= count &&
-            this.evalScaleDownConditionForAllPeriods(availableJibrisPerPeriodForScaleDown, count, group.scalingOptions)
+            (await this.evalScaleDownConditionForAllPeriods(ctx, metricInventoryPerPeriod, count, group))
         ) {
             // next check if we should scale down the group
             desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
@@ -178,34 +159,80 @@ export default class AutoscaleProcessor {
         }
     }
 
-    evalScaleUpConditionForAllPeriods(
-        availableJibrisByPeriod: Array<number>,
+    async evalScaleUpConditionForAllPeriods(
+        ctx: Context,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
         count: number,
-        scalingOptions: ScalingOptions,
-    ): boolean {
-        return availableJibrisByPeriod
-            .map((availableForPeriod) => {
-                return (
-                    (count < scalingOptions.maxDesired && availableForPeriod < scalingOptions.scaleUpThreshold) ||
-                    count < scalingOptions.minDesired
+        group: InstanceGroup,
+    ): Promise<boolean> {
+        let scaleMetrics: Array<number>;
+
+        switch (group.type) {
+            case 'jibri':
+                scaleMetrics = await this.instanceTracker.getAvailableMetricPerPeriod(
+                    ctx,
+                    metricInventoryPerPeriod,
+                    group.scalingOptions.scaleUpPeriodsCount,
                 );
-            })
-            .reduce((previousValue, currentValue) => {
-                return previousValue && currentValue;
-            });
+                ctx.logger.info(
+                    `[AutoScaler] Evaluating jibri scale up for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
+                    { scaleMetrics },
+                );
+
+                return scaleMetrics
+                    .map((availableForPeriod) => {
+                        return (
+                            (count < group.scalingOptions.maxDesired &&
+                                availableForPeriod < group.scalingOptions.scaleUpThreshold) ||
+                            count < group.scalingOptions.minDesired
+                        );
+                    })
+                    .reduce((previousValue, currentValue) => {
+                        return previousValue && currentValue;
+                    });
+                break;
+            case 'JVB':
+                // @TODO: implement scale up algorithm for JVB autoscaling
+                break;
+        }
+        return false;
     }
 
-    evalScaleDownConditionForAllPeriods(
-        availableJibrisByPeriod: Array<number>,
+    async evalScaleDownConditionForAllPeriods(
+        ctx: Context,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
         count: number,
-        scalingOptions: ScalingOptions,
-    ): boolean {
-        return availableJibrisByPeriod
-            .map((availableForPeriod) => {
-                return count > scalingOptions.minDesired && availableForPeriod > scalingOptions.scaleDownThreshold;
-            })
-            .reduce((previousValue, currentValue) => {
-                return previousValue && currentValue;
-            });
+        group: InstanceGroup,
+    ): Promise<boolean> {
+        let scaleMetrics: Array<number>;
+
+        switch (group.type) {
+            case 'jibri':
+                scaleMetrics = await this.instanceTracker.getAvailableMetricPerPeriod(
+                    ctx,
+                    metricInventoryPerPeriod,
+                    group.scalingOptions.scaleDownPeriodsCount,
+                );
+                ctx.logger.info(
+                    `[AutoScaler] Evaluating jibri scale down for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
+                    { scaleMetrics },
+                );
+
+                return scaleMetrics
+                    .map((availableForPeriod) => {
+                        return (
+                            count > group.scalingOptions.minDesired &&
+                            availableForPeriod > group.scalingOptions.scaleDownThreshold
+                        );
+                    })
+                    .reduce((previousValue, currentValue) => {
+                        return previousValue && currentValue;
+                    });
+                break;
+            case 'JVB':
+                // @TODO: implement scale up algorithm for JVB autoscaling
+                break;
+        }
+        return false;
     }
 }

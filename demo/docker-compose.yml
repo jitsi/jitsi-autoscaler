@@ -9,7 +9,7 @@ services:
     - $PWD/redis-data:/var/lib/redis
     - $PWD/redis.conf:/usr/local/etc/redis/redis.conf
  autoscaler:
-   # image: "103425057857.dkr.ecr.us-west-2.amazonaws.com/jitsi-vo/jibri-queue:0.0.3"
+   # image: "103425057857.dkr.ecr.us-west-2.amazonaws.com/jitsi/jitsi-autoscaoler:0.1.6"
    build: ../.
    ports:
     - "8080:8080"

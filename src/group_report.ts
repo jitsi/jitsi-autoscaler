@@ -22,6 +22,7 @@ export interface GroupReport {
     provisioningCount?: number;
     availableCount?: number;
     busyCount?: number;
+    expiredCount?: number;
     cloudCount?: number;
     unTrackedCount?: number;
     shuttingDownCount?: number;
@@ -71,6 +72,7 @@ export default class GroupReportGenerator {
             provisioningCount: 0,
             availableCount: 0,
             busyCount: 0,
+            expiredCount: 0,
             unTrackedCount: 0,
             shuttingDownCount: 0,
             scaleDownProtectedCount: 0,
@@ -115,6 +117,9 @@ export default class GroupReportGenerator {
                     }
                     if (instanceReport.scaleStatus == JibriStatusState.Busy) {
                         groupReport.busyCount++;
+                    }
+                    if (instanceReport.scaleStatus == JibriStatusState.Expired) {
+                        groupReport.expiredCount++;
                     }
                     break;
                 case 'JVB':

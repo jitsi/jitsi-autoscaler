@@ -13,6 +13,7 @@ function isEmpty(obj: any) {
 export enum JibriStatusState {
     Idle = 'IDLE',
     Busy = 'BUSY',
+    Expired = 'EXPIRED',
 }
 
 export enum JibriHealthState {

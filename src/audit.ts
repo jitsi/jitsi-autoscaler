@@ -115,7 +115,9 @@ export default class Audit {
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);
                 items.forEach((item) => {
-                    audit.push(JSON.parse(item));
+                    if (item) {
+                        audit.push(JSON.parse(item));
+                    }
                 });
             }
         } while (cursor != '0');

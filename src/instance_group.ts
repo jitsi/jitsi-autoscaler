@@ -130,8 +130,10 @@ export default class InstanceGroupManager {
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);
                 items.forEach((item) => {
-                    const itemJson: InstanceGroup = JSON.parse(item);
-                    instanceGroups.push(itemJson);
+                    if (item) {
+                        const itemJson: InstanceGroup = JSON.parse(item);
+                        instanceGroups.push(itemJson);
+                    }
                 });
             }
         } while (cursor != '0');

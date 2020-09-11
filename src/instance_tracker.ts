@@ -252,11 +252,15 @@ export class InstanceTracker {
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);
                 items.forEach((item) => {
-                    const itemJson = JSON.parse(item);
+                    if (item) {
+                        const itemJson = JSON.parse(item);
 
-                    const periodIdx = Math.floor((currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000));
-                    if (periodIdx < periodsCount) {
-                        metricPoints[periodIdx].push(itemJson);
+                        const periodIdx = Math.floor(
+                            (currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000),
+                        );
+                        if (periodIdx >= 0 && periodIdx < periodsCount) {
+                            metricPoints[periodIdx].push(itemJson);
+                        }
                     }
                 });
             }
@@ -310,7 +314,9 @@ export class InstanceTracker {
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);
                 items.forEach((item) => {
-                    states.push(JSON.parse(item));
+                    if (item) {
+                        states.push(JSON.parse(item));
+                    }
                 });
             }
         } while (cursor != '0');

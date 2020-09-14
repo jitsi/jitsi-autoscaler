@@ -6,6 +6,7 @@ import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
 import * as promClient from 'prom-client';
+import Audit from './audit';
 
 export interface AutoscaleProcessorOptions {
     instanceTracker: InstanceTracker;
@@ -13,6 +14,7 @@ export interface AutoscaleProcessorOptions {
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
     redisClient: Redis.Redis;
+    audit: Audit;
 }
 
 const groupDesired = new promClient.Gauge({
@@ -39,6 +41,7 @@ export default class AutoscaleProcessor {
     private cloudManager: CloudManager;
     private redisClient: Redis.Redis;
     private lockManager: LockManager;
+    private audit: Audit;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
@@ -49,6 +52,7 @@ export default class AutoscaleProcessor {
         this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
         this.redisClient = options.redisClient;
+        this.audit = options.audit;
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
@@ -77,6 +81,7 @@ export default class AutoscaleProcessor {
                 ctx.logger.info(`[AutoScaler] Wait before allowing desired count adjustments for group ${group.name}`);
                 return false;
             }
+            await this.audit.updateLastAutoScalerRun(group.name);
 
             ctx.logger.info(`[AutoScaler] Gathering metrics for desired count adjustments for group ${group.name}`);
             const currentInventory = await this.instanceTracker.getCurrent(ctx, group.name);
@@ -116,25 +121,52 @@ export default class AutoscaleProcessor {
         // first check if we should scale up the group
         let desiredCount = group.scalingOptions.desiredCount;
 
-        if (
-            group.scalingOptions.desiredCount <= count &&
-            (await this.evalScaleUpConditionForAllPeriods(ctx, metricInventoryPerPeriod, count, group))
-        ) {
+        if (group.scalingOptions.desiredCount != count) {
+            ctx.logger.info(
+                `[AutoScaler] Wait for the launcher to finish scaling up/down instances for group ${group.name}`,
+            );
+            return;
+        }
+
+        const scaleMetrics: Array<number> = await this.instanceTracker.getAvailableMetricPerPeriod(
+            ctx,
+            metricInventoryPerPeriod,
+            Math.max(group.scalingOptions.scaleUpPeriodsCount, group.scalingOptions.scaleDownPeriodsCount),
+        );
+
+        if (await this.evalScaleUpConditionForAllPeriods(ctx, scaleMetrics, count, group)) {
             desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
             if (desiredCount > group.scalingOptions.maxDesired) {
                 desiredCount = group.scalingOptions.maxDesired;
             }
+
+            await this.audit.saveAutoScalerActionItem(group.name, {
+                timestamp: Date.now(),
+                actionType: 'increaseDesiredCount',
+                count: count,
+                oldDesiredCount: group.scalingOptions.desiredCount,
+                newDesiredCount: desiredCount,
+                scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleUpPeriodsCount),
+            });
+
             await this.updateDesiredCount(ctx, desiredCount, group);
             await this.instanceGroupManager.setAutoScaleGracePeriod(group);
-        } else if (
-            desiredCount >= count &&
-            (await this.evalScaleDownConditionForAllPeriods(ctx, metricInventoryPerPeriod, count, group))
-        ) {
+        } else if (await this.evalScaleDownConditionForAllPeriods(ctx, scaleMetrics, count, group)) {
             // next check if we should scale down the group
             desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
             if (desiredCount < group.scalingOptions.minDesired) {
                 desiredCount = group.scalingOptions.minDesired;
             }
+
+            await this.audit.saveAutoScalerActionItem(group.name, {
+                timestamp: Date.now(),
+                actionType: 'decreaseDesiredCount',
+                count: count,
+                oldDesiredCount: group.scalingOptions.desiredCount,
+                newDesiredCount: desiredCount,
+                scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleDownPeriodsCount),
+            });
+
             await this.updateDesiredCount(ctx, desiredCount, group);
             await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else {
@@ -161,25 +193,19 @@ export default class AutoscaleProcessor {
 
     async evalScaleUpConditionForAllPeriods(
         ctx: Context,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        scaleMetrics: Array<number>,
         count: number,
         group: InstanceGroup,
     ): Promise<boolean> {
-        let scaleMetrics: Array<number>;
-
         switch (group.type) {
             case 'jibri':
-                scaleMetrics = await this.instanceTracker.getAvailableMetricPerPeriod(
-                    ctx,
-                    metricInventoryPerPeriod,
-                    group.scalingOptions.scaleUpPeriodsCount,
-                );
                 ctx.logger.info(
                     `[AutoScaler] Evaluating jibri scale up for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
                     { scaleMetrics },
                 );
 
                 return scaleMetrics
+                    .slice(0, group.scalingOptions.scaleUpPeriodsCount)
                     .map((availableForPeriod) => {
                         return (
                             (count < group.scalingOptions.maxDesired &&
@@ -190,7 +216,6 @@ export default class AutoscaleProcessor {
                     .reduce((previousValue, currentValue) => {
                         return previousValue && currentValue;
                     });
-                break;
             case 'JVB':
                 // @TODO: implement scale up algorithm for JVB autoscaling
                 break;
@@ -200,25 +225,19 @@ export default class AutoscaleProcessor {
 
     async evalScaleDownConditionForAllPeriods(
         ctx: Context,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        scaleMetrics: Array<number>,
         count: number,
         group: InstanceGroup,
     ): Promise<boolean> {
-        let scaleMetrics: Array<number>;
-
         switch (group.type) {
             case 'jibri':
-                scaleMetrics = await this.instanceTracker.getAvailableMetricPerPeriod(
-                    ctx,
-                    metricInventoryPerPeriod,
-                    group.scalingOptions.scaleDownPeriodsCount,
-                );
                 ctx.logger.info(
                     `[AutoScaler] Evaluating jibri scale down for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
                     { scaleMetrics },
                 );
 
                 return scaleMetrics
+                    .slice(0, group.scalingOptions.scaleDownPeriodsCount)
                     .map((availableForPeriod) => {
                         return (
                             count > group.scalingOptions.minDesired &&
@@ -228,7 +247,6 @@ export default class AutoscaleProcessor {
                     .reduce((previousValue, currentValue) => {
                         return previousValue && currentValue;
                     });
-                break;
             case 'JVB':
                 // @TODO: implement scale up algorithm for JVB autoscaling
                 break;

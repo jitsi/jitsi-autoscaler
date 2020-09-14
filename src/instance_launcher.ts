@@ -6,6 +6,7 @@ import LockManager from './lock_manager';
 import { Context } from './context';
 import * as promClient from 'prom-client';
 import ShutdownManager from './shutdown_manager';
+import Audit from './audit';
 
 const instancesCount = new promClient.Gauge({
     name: 'autoscaling_instance_count',
@@ -44,6 +45,7 @@ export interface InstanceLauncherOptions {
     lockManager: LockManager;
     redisClient: Redis.Redis;
     shutdownManager: ShutdownManager;
+    audit: Audit;
 }
 
 export default class InstanceLauncher {
@@ -53,6 +55,7 @@ export default class InstanceLauncher {
     private redisClient: Redis.Redis;
     private lockManager: LockManager;
     private shutdownManager: ShutdownManager;
+    private audit: Audit;
 
     constructor(options: InstanceLauncherOptions) {
         this.instanceTracker = options.instanceTracker;
@@ -61,6 +64,7 @@ export default class InstanceLauncher {
         this.lockManager = options.lockManager;
         this.redisClient = options.redisClient;
         this.shutdownManager = options.shutdownManager;
+        this.audit = options.audit;
 
         this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
     }
@@ -76,6 +80,7 @@ export default class InstanceLauncher {
             return false;
         }
 
+        await this.audit.updateLastLauncherRun(group.name);
         const desiredCount = group.scalingOptions.desiredCount;
         const currentInventory = await this.instanceTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;
@@ -92,6 +97,14 @@ export default class InstanceLauncher {
                 const scaleDownProtected = await this.instanceGroupManager.isScaleDownProtected(group.name);
                 await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity, scaleDownProtected);
 
+                await this.audit.saveLauncherActionItem(groupName, {
+                    timestamp: Date.now(),
+                    actionType: 'scaleUp',
+                    count: count,
+                    desiredCount: group.scalingOptions.desiredCount,
+                    scaleQuantity: actualScaleUpQuantity,
+                });
+
                 // increment launched instance stats for the group
                 instancesLaunchedCounter.inc({ group: group.name }, actualScaleUpQuantity);
             } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
@@ -99,6 +112,14 @@ export default class InstanceLauncher {
 
                 const listOfInstancesForScaleDown = await this.getInstancesForScaleDown(ctx, currentInventory, group);
                 await this.cloudManager.scaleDown(ctx, group, listOfInstancesForScaleDown);
+
+                await this.audit.saveLauncherActionItem(groupName, {
+                    timestamp: Date.now(),
+                    actionType: 'scaleDown',
+                    count: count,
+                    desiredCount: group.scalingOptions.desiredCount,
+                    scaleQuantity: listOfInstancesForScaleDown.length,
+                });
 
                 instancesDownscaledCounter.inc({ group: group.name }, listOfInstancesForScaleDown.length);
             } else {

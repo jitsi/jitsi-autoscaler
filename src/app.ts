@@ -123,6 +123,7 @@ const autoscaleProcessor = new AutoscaleProcessor({
     instanceGroupManager: instanceGroupManager,
     lockManager: lockManager,
     redisClient,
+    audit: audit,
 });
 
 const instanceLauncher = new InstanceLauncher({
@@ -132,6 +133,7 @@ const instanceLauncher = new InstanceLauncher({
     lockManager: lockManager,
     redisClient,
     shutdownManager,
+    audit: audit,
 });
 
 const groupReportGenerator = new GroupReportGenerator({
@@ -371,7 +373,24 @@ app.get('/groups/:name/report', async (req, res, next) => {
     }
 });
 
+//TODO remove it when it is no longer used
 app.get('/groups/:name/audit', async (req, res, next) => {
+    try {
+        await h.getInstanceAudit(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/groups/:name/instance-audit', async (req, res, next) => {
+    try {
+        await h.getInstanceAudit(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/groups/:name/group-audit', async (req, res, next) => {
     try {
         await h.getGroupAudit(req, res);
     } catch (err) {

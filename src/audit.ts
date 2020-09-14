@@ -9,6 +9,38 @@ export interface InstanceAudit {
     state?: InstanceState;
 }
 
+export interface GroupAudit {
+    groupName: string;
+    type: string;
+    timestamp: number | string;
+    autoScalerActionItem?: AutoScalerActionItem;
+    launcherActionItem?: LauncherActionItem;
+}
+
+export interface AutoScalerActionItem {
+    timestamp: number | string;
+    actionType: string;
+    count: number;
+    oldDesiredCount: number;
+    newDesiredCount: number;
+    scaleMetrics: Array<number>;
+}
+
+export interface LauncherActionItem {
+    timestamp: number | string;
+    actionType: string;
+    count: number;
+    desiredCount: number;
+    scaleQuantity: number;
+}
+
+export interface GroupAuditResponse {
+    lastLauncherRun: string;
+    lastAutoScalerRun: string;
+    autoScalerActionItems?: AutoScalerActionItem[];
+    launcherActionItems?: LauncherActionItem[];
+}
+
 export interface InstanceAuditResponse {
     instanceId: string;
     requestToLaunch: string;
@@ -38,7 +70,7 @@ export default class Audit {
             timestamp: Date.now(),
             state: instanceState,
         };
-        return this.setValue(`audit:${groupName}:${instanceId}:latest-status`, value, this.auditTTL);
+        return this.setInstanceValue(`audit:${groupName}:${instanceId}:latest-status`, value, this.auditTTL);
     }
 
     async saveLaunchEvent(groupName: string, instanceId: string): Promise<boolean> {
@@ -47,7 +79,7 @@ export default class Audit {
             type: 'request-to-launch',
             timestamp: Date.now(),
         };
-        return this.setValue(`audit:${groupName}:${instanceId}:request-to-launch`, value, this.auditTTL);
+        return this.setInstanceValue(`audit:${groupName}:${instanceId}:request-to-launch`, value, this.auditTTL);
     }
 
     async saveShutdownEvent(groupName: string, instanceId: string): Promise<boolean> {
@@ -56,10 +88,10 @@ export default class Audit {
             type: 'request-to-terminate',
             timestamp: Date.now(),
         };
-        return this.setValue(`audit:${groupName}:${instanceId}:request-to-terminate`, value, this.auditTTL);
+        return this.setInstanceValue(`audit:${groupName}:${instanceId}:request-to-terminate`, value, this.auditTTL);
     }
 
-    async setValue(key: string, value: InstanceAudit, ttl: number): Promise<boolean> {
+    async setInstanceValue(key: string, value: InstanceAudit, ttl: number): Promise<boolean> {
         const result = await this.redisClient.set(key, JSON.stringify(value), 'ex', ttl);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
@@ -67,8 +99,64 @@ export default class Audit {
         return true;
     }
 
-    async generateAudit(ctx: Context, groupName: string): Promise<InstanceAuditResponse[]> {
-        const instanceAudits: Array<InstanceAudit> = await this.getAudit(ctx, groupName);
+    async updateLastLauncherRun(groupName: string): Promise<boolean> {
+        const value: GroupAudit = {
+            groupName: groupName,
+            type: 'last-launcher-run',
+            timestamp: Date.now(),
+        };
+        return this.setGroupValue(`audit:${groupName}:last-launcher-run`, value, this.auditTTL);
+    }
+
+    async updateLastAutoScalerRun(groupName: string): Promise<boolean> {
+        const value: GroupAudit = {
+            groupName: groupName,
+            type: 'last-autoScaler-run',
+            timestamp: Date.now(),
+        };
+        return this.setGroupValue(`audit:${groupName}:last-autoScaler-run`, value, this.auditTTL);
+    }
+
+    async saveLauncherActionItem(groupName: string, launcherActionItem: LauncherActionItem): Promise<boolean> {
+        const value: GroupAudit = {
+            groupName: groupName,
+            type: 'launcher-action-item',
+            timestamp: launcherActionItem.timestamp,
+            launcherActionItem: launcherActionItem,
+        };
+
+        return this.setGroupValue(
+            `audit:${groupName}:launcher-action-item:${launcherActionItem.timestamp}`,
+            value,
+            this.auditTTL,
+        );
+    }
+
+    async saveAutoScalerActionItem(groupName: string, autoScalerActionItem: AutoScalerActionItem): Promise<boolean> {
+        const value: GroupAudit = {
+            groupName: groupName,
+            type: 'autoScaler-action-item',
+            timestamp: autoScalerActionItem.timestamp,
+            autoScalerActionItem: autoScalerActionItem,
+        };
+
+        return this.setGroupValue(
+            `audit:${groupName}:autoScaler-action-item:${autoScalerActionItem.timestamp}`,
+            value,
+            this.auditTTL,
+        );
+    }
+
+    async setGroupValue(key: string, value: GroupAudit, ttl: number): Promise<boolean> {
+        const result = await this.redisClient.set(key, JSON.stringify(value), 'ex', ttl);
+        if (result !== 'OK') {
+            throw new Error(`unable to set ${key}`);
+        }
+        return true;
+    }
+
+    async generateInstanceAudit(ctx: Context, groupName: string): Promise<InstanceAuditResponse[]> {
+        const instanceAudits: Array<InstanceAudit> = await this.getInstanceAudit(ctx, groupName);
         instanceAudits.sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
 
         const instanceAuditResponseList: InstanceAuditResponse[] = [];
@@ -104,8 +192,70 @@ export default class Audit {
         return instanceAuditResponseList;
     }
 
-    async getAudit(ctx: Context, groupName: string): Promise<Array<InstanceAudit>> {
+    async generateGroupAudit(ctx: Context, groupName: string): Promise<GroupAuditResponse> {
+        const groupAudits: Array<GroupAudit> = await this.getGroupAudit(ctx, groupName);
+
+        const groupAuditResponse: GroupAuditResponse = {
+            lastLauncherRun: 'unknown',
+            lastAutoScalerRun: 'unknown',
+        };
+
+        const autoScalerActionItems: AutoScalerActionItem[] = [];
+        const launcherActionItems: LauncherActionItem[] = [];
+        for (const groupAudit of groupAudits) {
+            switch (groupAudit.type) {
+                case 'last-launcher-run':
+                    groupAuditResponse.lastLauncherRun = new Date(groupAudit.timestamp).toUTCString();
+                    break;
+                case 'last-autoScaler-run':
+                    groupAuditResponse.lastAutoScalerRun = new Date(groupAudit.timestamp).toUTCString();
+                    break;
+                case 'launcher-action-item':
+                    launcherActionItems.push(groupAudit.launcherActionItem);
+                    break;
+                case 'autoScaler-action-item':
+                    autoScalerActionItems.push(groupAudit.autoScalerActionItem);
+                    break;
+            }
+        }
+        autoScalerActionItems
+            .sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1))
+            .map(function (key) {
+                key.timestamp = new Date(key.timestamp).toUTCString();
+            });
+        launcherActionItems
+            .sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1))
+            .map(function (key) {
+                key.timestamp = new Date(key.timestamp).toUTCString();
+            });
+
+        groupAuditResponse.autoScalerActionItems = autoScalerActionItems;
+        groupAuditResponse.launcherActionItems = launcherActionItems;
+        return groupAuditResponse;
+    }
+
+    async getInstanceAudit(ctx: Context, groupName: string): Promise<Array<InstanceAudit>> {
         const audit: Array<InstanceAudit> = [];
+        let items: Array<string> = [];
+
+        let cursor = '0';
+        do {
+            const result = await this.redisClient.scan(cursor, 'match', `audit:${groupName}:*:*`);
+            cursor = result[0];
+            if (result[1].length > 0) {
+                items = await this.redisClient.mget(...result[1]);
+                items.forEach((item) => {
+                    audit.push(JSON.parse(item));
+                });
+            }
+        } while (cursor != '0');
+        ctx.logger.debug(`Instance audit: `, { groupName, audit });
+
+        return audit;
+    }
+
+    async getGroupAudit(ctx: Context, groupName: string): Promise<Array<GroupAudit>> {
+        const audit: Array<GroupAudit> = [];
         let items: Array<string> = [];
 
         let cursor = '0';

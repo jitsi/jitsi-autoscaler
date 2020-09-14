@@ -253,7 +253,16 @@ class Handlers {
     async getGroupAudit(req: Request, res: Response): Promise<void> {
         const groupName = req.params.name;
         const ctx = req.context;
-        const audit = await this.audit.generateAudit(ctx, groupName);
+        const audit = await this.audit.generateGroupAudit(ctx, groupName);
+
+        res.status(200);
+        res.send({ audit });
+    }
+
+    async getInstanceAudit(req: Request, res: Response): Promise<void> {
+        const groupName = req.params.name;
+        const ctx = req.context;
+        const audit = await this.audit.generateInstanceAudit(ctx, groupName);
 
         res.status(200);
         res.send({ audit });

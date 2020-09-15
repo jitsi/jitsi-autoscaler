@@ -5,7 +5,6 @@ import Redis from 'ioredis';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
-import * as promClient from 'prom-client';
 import Audit from './audit';
 
 export interface AutoscaleProcessorOptions {
@@ -16,24 +15,6 @@ export interface AutoscaleProcessorOptions {
     redisClient: Redis.Redis;
     audit: Audit;
 }
-
-const groupDesired = new promClient.Gauge({
-    name: 'autoscaling_desired_count',
-    help: 'Gauge for desired count of instances',
-    labelNames: ['group'],
-});
-
-const groupMax = new promClient.Gauge({
-    name: 'autoscaling_maximum_count',
-    help: 'Gauge for maxmium count of instances',
-    labelNames: ['group'],
-});
-
-const groupMin = new promClient.Gauge({
-    name: 'autoscaling_minimum_count',
-    help: 'Gauge for minimum count of instances',
-    labelNames: ['group'],
-});
 
 export default class AutoscaleProcessor {
     private instanceTracker: InstanceTracker;
@@ -175,11 +156,6 @@ export default class AutoscaleProcessor {
                 `[AutoScaler] No desired count adjustments needed for group ${group.name} with ${count} instances`,
             );
         }
-
-        // set current min/max/desired values by group
-        groupDesired.set({ group: group.name }, desiredCount);
-        groupMin.set({ group: group.name }, group.scalingOptions.minDesired);
-        groupMax.set({ group: group.name }, group.scalingOptions.maxDesired);
     }
 
     private async updateDesiredCount(ctx: Context, desiredCount: number, group: InstanceGroup) {

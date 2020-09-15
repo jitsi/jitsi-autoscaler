@@ -1,8 +1,9 @@
 import { InstanceState, InstanceTracker, JibriStatusState } from './instance_tracker';
 import { Context } from './context';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
-import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
+import { InstanceGroup } from './instance_group';
+import { CloudInstance } from './cloud_manager';
 import ShutdownManager from './shutdown_manager';
+import MetricsLoop from './metrics_loop';
 
 export interface InstanceReport {
     instanceId: string;
@@ -32,31 +33,25 @@ export interface GroupReport {
 
 export interface GroupReportGeneratorOptions {
     instanceTracker: InstanceTracker;
-    instanceGroupManager: InstanceGroupManager;
-    cloudManager: CloudManager;
     shutdownManager: ShutdownManager;
-    reportExtCallRetryStrategy: CloudRetryStrategy;
+    metricsLoop: MetricsLoop;
 }
 
 export default class GroupReportGenerator {
     private instanceTracker: InstanceTracker;
-    private instanceGroupManager: InstanceGroupManager;
-    private cloudManager: CloudManager;
     private shutdownManager: ShutdownManager;
-    private reportExtCallRetryStrategy: CloudRetryStrategy;
+    private metricsLoop: MetricsLoop;
 
     constructor(options: GroupReportGeneratorOptions) {
         this.instanceTracker = options.instanceTracker;
-        this.instanceGroupManager = options.instanceGroupManager;
-        this.cloudManager = options.cloudManager;
         this.shutdownManager = options.shutdownManager;
-        this.reportExtCallRetryStrategy = options.reportExtCallRetryStrategy;
+        this.metricsLoop = options.metricsLoop;
 
         this.generateReport = this.generateReport.bind(this);
     }
 
-    async generateReport(ctx: Context, groupName: string): Promise<GroupReport> {
-        const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(groupName);
+    async generateReport(ctx: Context, group: InstanceGroup): Promise<GroupReport> {
+        const groupName = group.name;
         if (!group) {
             throw new Error(`Group ${groupName} not found, failed to generate report`);
         }
@@ -82,7 +77,7 @@ export default class GroupReportGenerator {
         // Get the list of instances from redis and from the cloud manager
         const instanceStates = await this.instanceTracker.getCurrent(ctx, groupName, false);
         groupReport.count = instanceStates.length;
-        const cloudInstances = await this.cloudManager.getInstances(ctx, group, this.reportExtCallRetryStrategy);
+        const cloudInstances: CloudInstance[] = await this.metricsLoop.getCloudInstances(group.name);
 
         this.getInstanceReportsMap(group, instanceStates, cloudInstances).forEach((instanceReport) => {
             groupReport.instances.push(instanceReport);

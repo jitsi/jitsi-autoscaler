@@ -244,7 +244,8 @@ class Handlers {
     async getGroupReport(req: Request, res: Response): Promise<void> {
         const groupName = req.params.name;
         const ctx = req.context;
-        const groupReport = await this.groupReportGenerator.generateReport(ctx, groupName);
+        const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(groupName);
+        const groupReport = await this.groupReportGenerator.generateReport(ctx, group);
 
         res.status(200);
         res.send({ groupReport });
@@ -309,7 +310,7 @@ class Handlers {
         const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, groupName);
         try {
             const requestBody = req.body;
-            const scaleDownProtectedTTL = requestBody.scaleDownProtectedTTLSec;
+            const scaleDownProtectedTTL = requestBody.protectedTTLSec;
             req.context.logger.info('Protecting instances from scaling down', {
                 groupName,
                 scaleDownProtectedTTL,
@@ -321,7 +322,7 @@ class Handlers {
                     group.instanceConfigurationId = requestBody.instanceConfigurationId;
                 }
                 group.scalingOptions.desiredCount = group.scalingOptions.desiredCount + requestBody.count;
-                group.protectedTTLSec = requestBody.protectedTTLSec;
+                group.protectedTTLSec = scaleDownProtectedTTL;
 
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
                 await this.instanceGroupManager.setAutoScaleGracePeriod(group);

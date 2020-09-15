@@ -23,6 +23,7 @@ import Audit from './audit';
 import { ClientOpts } from 'redis';
 import { body, param, validationResult } from 'express-validator';
 import SanityLoop from './sanity_loop';
+import MetricsLoop from './metrics_loop';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -136,20 +137,31 @@ const instanceLauncher = new InstanceLauncher({
     audit: audit,
 });
 
+const metricsLoop = new MetricsLoop({
+    redisClient: redisClient,
+    metricsTTL: config.ServiceLevelMetricsTTL,
+    instanceGroupManager: instanceGroupManager,
+    instanceTracker: instanceTracker,
+    ctx: initCtx,
+});
+
 const groupReportGenerator = new GroupReportGenerator({
     instanceTracker: instanceTracker,
-    instanceGroupManager: instanceGroupManager,
-    cloudManager: cloudManager,
     shutdownManager: shutdownManager,
+    metricsLoop: metricsLoop,
+});
+
+const sanityLoop = new SanityLoop({
+    redisClient: redisClient,
+    metricsTTL: config.ServiceLevelMetricsTTL,
+    cloudManager: cloudManager,
     reportExtCallRetryStrategy: {
         maxTimeInSeconds: config.ReportExtCallMaxTimeInSeconds,
         maxDelayInSeconds: config.ReportExtCallMaxDelayInSeconds,
         retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
     },
-});
-
-const sanityLoop = new SanityLoop({
     groupReportGenerator: groupReportGenerator,
+    instanceGroupManager: instanceGroupManager,
 });
 
 // Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
@@ -161,6 +173,7 @@ const jobManager = new JobManager({
     instanceLauncher: instanceLauncher,
     autoscaler: autoscaleProcessor,
     sanityLoop: sanityLoop,
+    metricsLoop: metricsLoop,
     autoscalerProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     launcherProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,
@@ -170,7 +183,6 @@ async function startProcessingGroups() {
     logger.info('Start pooling..');
 
     await createGroupProcessingJobs();
-    await createSanityProcessingJobs();
 }
 logger.info(`Waiting ${config.InitialWaitForPooling}ms before starting to loop for group processing`);
 setTimeout(startProcessingGroups, config.InitialWaitForPooling);
@@ -182,9 +194,15 @@ async function createGroupProcessingJobs() {
         id: pollId,
     });
     const ctx = new context.Context(pollLogger, start, pollId);
-    await jobManager.createGroupProcessingJobs(ctx);
+    try {
+        await jobManager.createGroupProcessingJobs(ctx);
+    } catch (err) {
+        ctx.logger.error(`Error while creating group processing jobs`, { err });
+    }
     setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
 }
+
+createSanityProcessingJobs();
 
 async function createSanityProcessingJobs() {
     const start = Date.now();
@@ -193,11 +211,22 @@ async function createSanityProcessingJobs() {
         id: pollId,
     });
     const ctx = new context.Context(pollLogger, start, pollId);
-    await jobManager.createSanityProcessingJobs(ctx);
+    try {
+        await jobManager.createSanityProcessingJobs(ctx);
+    } catch (err) {
+        ctx.logger.error(`Error while creating sanity processing jobs`, { err });
+    }
     setTimeout(createSanityProcessingJobs, config.SanityJobsCreationIntervalSec * 1000);
 }
 
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
+
+pollForMetrics(metricsLoop);
+
+async function pollForMetrics(metricsLoop: MetricsLoop) {
+    await metricsLoop.updateMetrics();
+    setTimeout(pollForMetrics.bind(null, metricsLoop), config.MetricsLoopIntervalMs);
+}
 
 const h = new Handlers({
     instanceTracker: instanceTracker,

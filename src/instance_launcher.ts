@@ -8,18 +8,6 @@ import * as promClient from 'prom-client';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
 
-const instancesCount = new promClient.Gauge({
-    name: 'autoscaling_instance_count',
-    help: 'Gauge for current instances',
-    labelNames: ['group'],
-});
-
-const runningInstancesCount = new promClient.Gauge({
-    name: 'autoscaling_instance_running',
-    help: 'Gauge for current instances',
-    labelNames: ['group'],
-});
-
 const instancesLaunchedCounter = new promClient.Counter({
     name: 'autoscaling_instance_launched_total',
     help: 'Gauge for launched instances',
@@ -85,9 +73,6 @@ export default class InstanceLauncher {
         const currentInventory = await this.instanceTracker.getCurrent(ctx, groupName);
         const count = currentInventory.length;
 
-        // set stat for current count of instances
-        instancesCount.set({ group: group.name }, count);
-        runningInstancesCount.set({ group: group.name }, this.countNonProvisioningInstances(ctx, currentInventory));
         try {
             if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
                 ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });
@@ -260,15 +245,5 @@ export default class InstanceLauncher {
                 group: response.metadata.group,
             };
         });
-    }
-
-    countNonProvisioningInstances(ctx: Context, states: Array<InstanceState>): number {
-        let count = 0;
-        states.forEach((instanceState) => {
-            if (!instanceState.status.provisioning) {
-                count++;
-            }
-        });
-        return count;
     }
 }

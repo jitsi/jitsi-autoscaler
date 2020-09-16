@@ -10,6 +10,7 @@ import LockManager from './lock_manager';
 import Redlock from 'redlock';
 import * as promClient from 'prom-client';
 import SanityLoop from './sanity_loop';
+import MetricsLoop from './metrics_loop';
 
 export interface JobManagerOptions {
     queueRedisOptions: ClientOpts;
@@ -18,6 +19,7 @@ export interface JobManagerOptions {
     instanceLauncher: InstanceLauncher;
     autoscaler: AutoscaleProcessor;
     sanityLoop: SanityLoop;
+    metricsLoop: MetricsLoop;
     autoscalerProcessingTimeoutMs: number;
     launcherProcessingTimeoutMs: number;
     sanityLoopProcessingTimeoutMs: number;
@@ -28,11 +30,6 @@ export enum JobType {
     Launch = 'LAUNCH',
     Sanity = 'SANITY',
 }
-
-const groupsManaged = new promClient.Gauge({
-    name: 'autoscaling_groups_managed',
-    help: 'Gauge for groups currently being managed',
-});
 
 const jobCreateFailureCounter = new promClient.Counter({
     name: 'autoscaling_job_create_failure_total',
@@ -80,11 +77,6 @@ const queueStalledCounter = new promClient.Counter({
     help: 'Counter for stalled job events',
 });
 
-const queueWaiting = new promClient.Gauge({
-    name: 'autoscaling_queue_waiting',
-    help: 'Gauge for current jobs waiting to be processed',
-});
-
 export interface JobData {
     groupName: string;
     type: JobType;
@@ -98,6 +90,7 @@ export default class JobManager {
     private instanceLauncher: InstanceLauncher;
     private autoscaler: AutoscaleProcessor;
     private sanityLoop: SanityLoop;
+    private metricsLoop: MetricsLoop;
     private jobQueue: Queue;
     private autoscalerProcessingTimeoutMs: number;
     private launcherProcessingTimeoutMs: number;
@@ -109,6 +102,7 @@ export default class JobManager {
         this.instanceLauncher = options.instanceLauncher;
         this.autoscaler = options.autoscaler;
         this.sanityLoop = options.sanityLoop;
+        this.metricsLoop = options.metricsLoop;
         this.autoscalerProcessingTimeoutMs = options.autoscalerProcessingTimeoutMs;
         this.launcherProcessingTimeoutMs = options.launcherProcessingTimeoutMs;
         this.sanityLoopProcessingTimeoutMs = options.sanityLoopProcessingTimeoutMs;
@@ -168,7 +162,7 @@ export default class JobManager {
 
     processJob(
         job: Job,
-        processingHandler: (ctx: context.Context, groupName: string) => Promise<boolean>,
+        processingHandler: (ctx: context.Context, group: string) => Promise<boolean>,
         done: DoneCallback<boolean>,
     ): void {
         const start = Date.now();
@@ -225,7 +219,6 @@ export default class JobManager {
             }
 
             const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(ctx);
-            groupsManaged.set(instanceGroups.length);
 
             await this.createJobs(
                 ctx,
@@ -265,7 +258,6 @@ export default class JobManager {
             }
 
             const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(ctx);
-            groupsManaged.set(instanceGroups.length);
             await this.createJobs(
                 ctx,
                 instanceGroups,
@@ -277,8 +269,7 @@ export default class JobManager {
 
             // populate some queue health metrics
             const healthCheckResult = await this.jobQueue.checkHealth();
-            queueWaiting.set(healthCheckResult.waiting);
-
+            await this.metricsLoop.saveMetricQueueWaiting(healthCheckResult.waiting);
             await this.instanceGroupManager.setGroupJobsCreationGracePeriod();
         } catch (err) {
             ctx.logger.error(`[JobManager] Error while creating jobs for group ${err}`);

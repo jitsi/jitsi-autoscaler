@@ -37,17 +37,19 @@ const env = envalid.cleanEnv(process.env, {
     DEFAULT_INSTANCE_CONFIGURATION_ID: envalid.str(),
     DEFAULT_COMPARTMENT_ID: envalid.str(),
     METRIC_TTL_SEC: envalid.num({ default: 900 }), // seconds
+    SERVICE_LEVEL_METRICS_TTL_SEC: envalid.num({ default: 600 }),
     IDLE_TTL_SEC: envalid.num({ default: 300 }), // seconds, default to 5 minutes
     PROVISIONING_TTL_SEC: envalid.num({ default: 600 }), // seconds
     SHUTDOWN_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
     AUDIT_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
     GROUP_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     GROUP_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 30 }), // with what interval this instance should try producing jobs for group processing
-    SANITY_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 600 }), // with what interval this instance should try producing jobs for sanity check
+    SANITY_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 180 }), // with what interval this instance should try producing jobs for sanity check
     GROUP_JOBS_CREATION_GRACE_PERIOD_SEC: envalid.num({ default: 30 }), // jobs for group processing should be created once every JOB_CREATION_GRACE_PERIOD_SEC
-    SANITY_JOBS_CREATION_GRACE_PERIOD_SEC: envalid.num({ default: 600 }), // jobs for sanity check should be created once every SANITY_JOBS_CREATION_GRACE_PERIOD_SEC
+    SANITY_JOBS_CREATION_GRACE_PERIOD_SEC: envalid.num({ default: 180 }), // jobs for sanity check should be created once every SANITY_JOBS_CREATION_GRACE_PERIOD_SEC
     JOBS_CREATION_LOCK_TTL_MS: envalid.num({ default: 30000 }), // job creation lock ensures only one instance at a time can produce jobs
     SANITY_LOOP_PROCESSING_TIMEOUT_MS: envalid.num({ default: 180000 }), // time in ms
+    METRICS_LOOP_INTERVAL_MS: envalid.num({ default: 60000 }), // time in ms
     OCI_CONFIGURATION_FILE_PATH: envalid.str(),
     OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),
     REPORT_EXT_CALL_MAX_TIME_IN_SECONDS: envalid.num({ default: 60 }),
@@ -85,6 +87,7 @@ export default {
     DryRun: env.DRY_RUN,
     // tracker TTLs
     MetricTTL: env.METRIC_TTL_SEC,
+    ServiceLevelMetricsTTL: env.SERVICE_LEVEL_METRICS_TTL_SEC,
     ProvisioningTTL: env.PROVISIONING_TTL_SEC,
     IdleTTL: env.IDLE_TTL_SEC,
     ShutDownTTL: env.SHUTDOWN_TTL_SEC,
@@ -95,11 +98,13 @@ export default {
     GroupJobsCreationIntervalSec: env.GROUP_JOBS_CREATION_INTERVAL_SEC,
     SanityJobsCreationIntervalSec: env.SANITY_JOBS_CREATION_INTERVAL_SEC,
     GroupJobsCreationGracePeriodSec: env.GROUP_JOBS_CREATION_GRACE_PERIOD_SEC,
-    SanityJobsCreationGracePeriodSec: env.GROUP_JOBS_CREATION_GRACE_PERIOD_SEC,
+    SanityJobsCreationGracePeriodSec: env.SANITY_JOBS_CREATION_GRACE_PERIOD_SEC,
     JobsCreationLockTTLMs: env.JOBS_CREATION_LOCK_TTL_MS,
     // queue jobs consumers
     GroupProcessingTimeoutMs: env.GROUP_LOCK_TTL_MS, // timeout for processing a group is equal to the timeout for locking a group for processing
     SanityProcessingTimoutMs: env.SANITY_LOOP_PROCESSING_TIMEOUT_MS,
+    // metrics loop
+    MetricsLoopIntervalMs: env.METRICS_LOOP_INTERVAL_MS,
     // other
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
     OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,

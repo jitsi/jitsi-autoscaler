@@ -123,7 +123,7 @@ export class InstanceTracker {
     }
 
     // @TODO: handle stats for instances
-    async stats(ctx: Context, report: StatsReport): Promise<boolean> {
+    async stats(ctx: Context, report: StatsReport, shutdownStatus = false): Promise<boolean> {
         ctx.logger.debug('Received report', { report });
         const instanceState = <InstanceState>{
             instanceId: report.instance.instanceId,
@@ -155,10 +155,10 @@ export class InstanceTracker {
             }
         }
         ctx.logger.debug('Tracking instance state', { instanceState });
-        return await this.track(ctx, instanceState);
+        return await this.track(ctx, instanceState, shutdownStatus);
     }
 
-    async track(ctx: Context, state: InstanceState): Promise<boolean> {
+    async track(ctx: Context, state: InstanceState, isInstanceShuttingDown = false): Promise<boolean> {
         let group = 'default';
         // pull the group from metadata if provided
         if (state.metadata && state.metadata.group) {
@@ -177,8 +177,6 @@ export class InstanceTracker {
             ctx.logger.error(`unable to set ${key}`);
             throw new Error(`unable to set ${key}`);
         }
-
-        const isInstanceShuttingDown = (await this.filterOutInstancesShuttingDown(ctx, [state])).length == 0;
 
         // Store metric, but only for running instances
         if (!state.status.provisioning && !isInstanceShuttingDown) {

@@ -124,12 +124,12 @@ class Handlers {
 
     async sidecarStatus(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
+        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
         try {
-            await this.instanceTracker.stats(req.context, report);
+            await this.instanceTracker.stats(req.context, report, shutdownStatus);
         } catch (err) {
             req.context.logger.error('Status handling error', { err });
         }
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
         // TODO: implement reconfiguration checks
         const reconfigureStatus = false;
 

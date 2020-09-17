@@ -142,7 +142,9 @@ export default class GroupReportGenerator {
                 isShuttingDown: instanceState.shutdownStatus,
                 isScaleDownProtected: false,
             };
-            if (instanceState.status.provisioning) {
+            if (instanceState.shutdownStatus) {
+                instanceReport.scaleStatus = 'SHUTDOWN';
+            } else if (instanceState.status.provisioning) {
                 instanceReport.scaleStatus = 'PROVISIONING';
             } else {
                 switch (group.type) {

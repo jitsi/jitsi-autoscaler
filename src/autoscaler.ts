@@ -109,8 +109,9 @@ export default class AutoscaleProcessor {
             return;
         }
 
-        const scaleMetrics: Array<number> = await this.instanceTracker.getAvailableMetricPerPeriod(
+        const scaleMetrics: Array<number> = await this.instanceTracker.getSummaryMetricPerPeriod(
             ctx,
+            group,
             metricInventoryPerPeriod,
             Math.max(group.scalingOptions.scaleUpPeriodsCount, group.scalingOptions.scaleDownPeriodsCount),
         );
@@ -192,8 +193,24 @@ export default class AutoscaleProcessor {
                     .reduce((previousValue, currentValue) => {
                         return previousValue && currentValue;
                     });
+                break;
             case 'JVB':
-                // @TODO: implement scale up algorithm for JVB autoscaling
+                ctx.logger.info(
+                    `[AutoScaler] Evaluating JVB scale up for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
+                    { scaleMetrics },
+                );
+                return scaleMetrics
+                    .slice(0, group.scalingOptions.scaleUpPeriodsCount)
+                    .map((averageForPeriod) => {
+                        return (
+                            (count < group.scalingOptions.maxDesired &&
+                                averageForPeriod >= group.scalingOptions.scaleUpThreshold) ||
+                            count < group.scalingOptions.minDesired
+                        );
+                    })
+                    .reduce((previousValue, currentValue) => {
+                        return previousValue && currentValue;
+                    });
                 break;
         }
         return false;
@@ -223,8 +240,24 @@ export default class AutoscaleProcessor {
                     .reduce((previousValue, currentValue) => {
                         return previousValue && currentValue;
                     });
+                break;
             case 'JVB':
-                // @TODO: implement scale up algorithm for JVB autoscaling
+                ctx.logger.info(
+                    `[AutoScaler] Evaluating JVB scale down for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
+                    { scaleMetrics },
+                );
+
+                return scaleMetrics
+                    .slice(0, group.scalingOptions.scaleDownPeriodsCount)
+                    .map((averageForPeriod) => {
+                        return (
+                            count > group.scalingOptions.minDesired &&
+                            averageForPeriod < group.scalingOptions.scaleDownThreshold
+                        );
+                    })
+                    .reduce((previousValue, currentValue) => {
+                        return previousValue && currentValue;
+                    });
                 break;
         }
         return false;

@@ -2,6 +2,7 @@ import { Context } from './context';
 import Redis from 'ioredis';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
+import { InstanceGroup } from './instance_group';
 
 /* eslint-disable */
 function isEmpty(obj: any) {
@@ -34,8 +35,12 @@ export interface JibriHealth {
 }
 
 export interface JVBStatus {
-    load: number;
+    stress_level: number;
+    muc_clients_configured: number;
+    muc_clients_connected: number;
+    conferences: number;
     participants: number;
+    largest_conference: number;
 }
 
 export interface InstanceDetails {
@@ -190,7 +195,7 @@ export class InstanceTracker {
                     }
                     break;
                 case 'JVB':
-                    metricValue = state.status.jvbStatus.load;
+                    metricValue = state.status.jvbStatus.stress_level;
                     break;
             }
 
@@ -217,6 +222,23 @@ export class InstanceTracker {
         return true;
     }
 
+    async getSummaryMetricPerPeriod(
+        ctx: Context,
+        group: InstanceGroup,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        periodCount: number,
+    ): Promise<Array<number>> {
+        switch (group.type) {
+            case 'jibri':
+                return this.getAvailableMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+                break;
+            case 'JVB':
+                return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+                break;
+        }
+        return;
+    }
+
     async getAvailableMetricPerPeriod(
         ctx: Context,
         metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
@@ -227,7 +249,21 @@ export class InstanceTracker {
         });
 
         return metricInventoryPerPeriod.slice(0, periodCount).map((instanceMetrics) => {
-            return this.computeAvailableMetric(instanceMetrics);
+            return this.computeSummaryMetric(instanceMetrics, false);
+        });
+    }
+
+    async getAverageMetricPerPeriod(
+        ctx: Context,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        periodCount: number,
+    ): Promise<Array<number>> {
+        ctx.logger.debug(`Getting average metric per period for ${periodCount} periods`, {
+            metricInventoryPerPeriod,
+        });
+
+        return metricInventoryPerPeriod.slice(0, periodCount).map((instanceMetrics) => {
+            return this.computeSummaryMetric(instanceMetrics, true);
         });
     }
 
@@ -270,7 +306,7 @@ export class InstanceTracker {
         return metricPoints;
     }
 
-    computeAvailableMetric(instanceMetrics: Array<InstanceMetric>): number {
+    computeSummaryMetric(instanceMetrics: Array<InstanceMetric>, averageFlag = false): number {
         const dataPointsPerInstance: Map<string, number> = new Map();
         const aggregatedDataPerInstance: Map<string, number> = new Map();
 
@@ -291,13 +327,18 @@ export class InstanceTracker {
         const instanceIds: Array<string> = Array.from(aggregatedDataPerInstance.keys());
 
         if (instanceIds.length > 0) {
-            return instanceIds
+            const fullSum = instanceIds
                 .map((instanceId) => {
                     return aggregatedDataPerInstance.get(instanceId) / dataPointsPerInstance.get(instanceId);
                 })
                 .reduce((previousSum, currentValue) => {
                     return previousSum + currentValue;
                 });
+            if (averageFlag) {
+                return fullSum / instanceIds.length;
+            } else {
+                return fullSum;
+            }
         } else {
             return 0;
         }

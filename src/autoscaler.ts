@@ -119,7 +119,7 @@ export default class AutoscaleProcessor {
             metricInventoryPerPeriod,
             Math.max(group.scalingOptions.scaleUpPeriodsCount, group.scalingOptions.scaleDownPeriodsCount),
         );
-        if (scaleMetrics.length > 0) {
+        if (scaleMetrics && scaleMetrics.length > 0) {
             if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, true)) {
                 desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
                 if (desiredCount > group.scalingOptions.maxDesired) {
@@ -162,7 +162,7 @@ export default class AutoscaleProcessor {
                 );
             }
         } else {
-            ctx.logger.warning(
+            ctx.logger.warn(
                 `[AutoScaler] No metrics available, no desired count adjustments possible for group ${group.name} with ${count} instances`,
             );
         }

@@ -41,6 +41,7 @@ export interface JVBStatus {
     conferences: number;
     participants: number;
     largest_conference: number;
+    graceful_shutdown: boolean;
 }
 
 export interface InstanceDetails {

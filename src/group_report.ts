@@ -160,6 +160,12 @@ export default class GroupReportGenerator {
                     case 'JVB':
                         // @TODO: convert JVB stats into more explict statuses
                         instanceReport.scaleStatus = 'ONLINE';
+                        if (instanceState.status.jvbStatus && instanceState.status.jvbStatus.participants) {
+                            instanceReport.scaleStatus = 'IN USE';
+                        }
+                        if (instanceState.status.jvbStatus && instanceState.status.jvbStatus.graceful_shutdown) {
+                            instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
+                        }
                         break;
                 }
             }

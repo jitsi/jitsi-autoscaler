@@ -8,12 +8,14 @@ import MetricsLoop from './metrics_loop';
 export interface InstanceReport {
     instanceId: string;
     displayName?: string;
+    instanceName?: string;
     scaleStatus?: string;
     cloudStatus?: string;
     isShuttingDown?: boolean;
     isScaleDownProtected?: boolean;
     privateIp?: string;
     publicIp?: string;
+    version?: string;
 }
 
 export interface GroupReport {
@@ -51,13 +53,13 @@ export default class GroupReportGenerator {
     }
 
     async generateReport(ctx: Context, group: InstanceGroup): Promise<GroupReport> {
-        const groupName = group.name;
         if (!group) {
-            throw new Error(`Group ${groupName} not found, failed to generate report`);
+            throw new Error(`Group not found, failed to generate report`);
         }
         if (!group.type) {
             throw new Error('Only typed groups are supported for report generation');
         }
+        const groupName = group.name;
 
         const groupReport: GroupReport = {
             groupName: groupName,
@@ -137,8 +139,10 @@ export default class GroupReportGenerator {
             const instanceReport = <InstanceReport>{
                 instanceId: instanceState.instanceId,
                 displayName: 'unknown',
+                instanceName: 'unknown',
                 scaleStatus: 'unknown',
                 cloudStatus: 'unknown',
+                version: 'unknown',
                 isShuttingDown: instanceState.shutdownStatus,
                 isScaleDownProtected: false,
             };
@@ -159,11 +163,17 @@ export default class GroupReportGenerator {
                         break;
                 }
             }
+            if (instanceState.metadata.name) {
+                instanceReport.instanceName = instanceState.metadata.name;
+            }
             if (instanceState.metadata.publicIp) {
                 instanceReport.publicIp = instanceState.metadata.publicIp;
             }
             if (instanceState.metadata.privateIp) {
                 instanceReport.privateIp = instanceState.metadata.privateIp;
+            }
+            if (instanceState.metadata.version) {
+                instanceReport.version = instanceState.metadata.version;
             }
             instanceReports.set(instanceState.instanceId, instanceReport);
         });

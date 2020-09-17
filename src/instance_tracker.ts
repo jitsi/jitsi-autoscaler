@@ -49,6 +49,8 @@ export interface InstanceDetails {
     cloud?: string;
     region?: string;
     group?: string;
+    name?: string;
+    version?: string;
     publicIp?: string;
     privateIp?: string;
 }
@@ -79,6 +81,8 @@ export interface InstanceMetadata {
     group: string;
     publicIp?: string;
     privateIp?: string;
+    version?: string;
+    name?: string;
     [key: string]: string;
 }
 

@@ -109,6 +109,8 @@ const instanceGroupManager = new InstanceGroupManager({
     sanityJobsCreationGracePeriod: config.SanityJobsCreationGracePeriodSec,
 });
 
+logger.info('Starting up autoscaler service with config', { config });
+
 logger.info('Initializing instance group manager...');
 const start = Date.now();
 const initId = shortid.generate();

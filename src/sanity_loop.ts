@@ -39,8 +39,14 @@ export default class SanityLoop {
             await this.saveCloudInstances(group.name, cloudInstances);
             const groupReport = await this.groupReportGenerator.generateReport(ctx, group);
             await this.saveMetricUnTrackedCount(groupName, groupReport.unTrackedCount);
+            ctx.logger.info(
+                `Successfully saved cloud instances and untracked count ${groupReport.unTrackedCount} for ${groupName}`,
+            );
+            return true;
+        } else {
+            ctx.logger.info(`Skipped saving untracked instances, as group is not found ${groupName}`);
+            return false;
         }
-        return true;
     }
 
     async saveMetricUnTrackedCount(groupName: string, count: number): Promise<boolean> {

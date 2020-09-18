@@ -51,13 +51,13 @@ export default class GroupReportGenerator {
     }
 
     async generateReport(ctx: Context, group: InstanceGroup): Promise<GroupReport> {
-        const groupName = group.name;
         if (!group) {
-            throw new Error(`Group ${groupName} not found, failed to generate report`);
+            throw new Error(`Group not found, failed to generate report`);
         }
         if (!group.type) {
             throw new Error('Only typed groups are supported for report generation');
         }
+        const groupName = group.name;
 
         const groupReport: GroupReport = {
             groupName: groupName,
@@ -100,6 +100,7 @@ export default class GroupReportGenerator {
                 instanceReport.scaleStatus == 'unknown' &&
                 (instanceReport.cloudStatus === 'Provisioning' || instanceReport.cloudStatus === 'Running')
             ) {
+                ctx.logger.info(`Adding untracked instance to group report ${groupName}: ${instanceReport.instanceId}`);
                 groupReport.unTrackedCount++;
             }
             if (instanceReport.scaleStatus == 'PROVISIONING') {

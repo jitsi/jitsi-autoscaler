@@ -70,7 +70,16 @@ export default class Audit {
             timestamp: Date.now(),
             state: instanceState,
         };
-        return this.setInstanceValue(`audit:${groupName}:${instanceId}:latest-status`, value, this.auditTTL);
+        const latestStatusSaved = this.setInstanceValue(
+            `audit:${groupName}:${instanceId}:latest-status`,
+            value,
+            this.auditTTL,
+        );
+        if (latestStatusSaved) {
+            this.increaseLaunchEventExpiration(groupName, instanceId);
+            this.increaseShutdownEventExpiration(groupName, instanceId);
+        }
+        return latestStatusSaved;
     }
 
     async saveLaunchEvent(groupName: string, instanceId: string): Promise<boolean> {
@@ -82,6 +91,15 @@ export default class Audit {
         return this.setInstanceValue(`audit:${groupName}:${instanceId}:request-to-launch`, value, this.auditTTL);
     }
 
+    private async increaseLaunchEventExpiration(groupName: string, instanceId: string): Promise<boolean> {
+        // we don't care if this fails (e.g. perhaps the event no longer is there)
+        const result = await this.redisClient.expire(
+            `audit:${groupName}:${instanceId}:request-to-launch`,
+            this.auditTTL,
+        );
+        return result == 1;
+    }
+
     async saveShutdownEvent(groupName: string, instanceId: string): Promise<boolean> {
         const value: InstanceAudit = {
             instanceId: instanceId,
@@ -89,6 +107,15 @@ export default class Audit {
             timestamp: Date.now(),
         };
         return this.setInstanceValue(`audit:${groupName}:${instanceId}:request-to-terminate`, value, this.auditTTL);
+    }
+
+    private async increaseShutdownEventExpiration(groupName: string, instanceId: string): Promise<boolean> {
+        // we don't care if this fails (e.g. perhaps the event no longer is there)
+        const result = await this.redisClient.expire(
+            `audit:${groupName}:${instanceId}:request-to-terminate`,
+            this.auditTTL,
+        );
+        return result == 1;
     }
 
     async setInstanceValue(key: string, value: InstanceAudit, ttl: number): Promise<boolean> {

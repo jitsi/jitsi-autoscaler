@@ -199,7 +199,9 @@ export class InstanceTracker {
                     }
                     break;
                 case 'JVB':
-                    metricValue = state.status.jvbStatus.stress_level;
+                    if (state.status.jvbStatus && state.status.jvbStatus.stress_level) {
+                        metricValue = state.status.jvbStatus.stress_level;
+                    }
                     break;
             }
 
@@ -235,10 +237,8 @@ export class InstanceTracker {
         switch (group.type) {
             case 'jibri':
                 return this.getAvailableMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
-                break;
             case 'JVB':
                 return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
-                break;
         }
         return;
     }

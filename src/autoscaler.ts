@@ -120,7 +120,8 @@ export default class AutoscaleProcessor {
             Math.max(group.scalingOptions.scaleUpPeriodsCount, group.scalingOptions.scaleDownPeriodsCount),
         );
         if (scaleMetrics && scaleMetrics.length > 0) {
-            if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, true)) {
+            // check if we should scale up the group
+            if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'up')) {
                 desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
                 if (desiredCount > group.scalingOptions.maxDesired) {
                     desiredCount = group.scalingOptions.maxDesired;
@@ -137,7 +138,7 @@ export default class AutoscaleProcessor {
 
                 await this.updateDesiredCount(ctx, desiredCount, group);
                 await this.instanceGroupManager.setAutoScaleGracePeriod(group);
-            } else if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, false)) {
+            } else if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'down')) {
                 // next check if we should scale down the group
                 desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
                 if (desiredCount < group.scalingOptions.minDesired) {
@@ -202,11 +203,9 @@ export default class AutoscaleProcessor {
             case 'jibri':
                 // in the jibri case only scale up if value (available count) is above threshold
                 return count > group.scalingOptions.minDesired && value > group.scalingOptions.scaleDownThreshold;
-                break;
             case 'JVB':
                 // in the case of JVB scale down only if value (average stress level) is below threshhold
                 return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;
-                break;
         }
 
         return false;
@@ -217,23 +216,25 @@ export default class AutoscaleProcessor {
         scaleMetrics: Array<number>,
         count: number,
         group: InstanceGroup,
-        scaleUpFlag: boolean,
+        direction: string,
     ): boolean {
         // slice size defines how many metrics to evaluate for scaling decision
         let sliceSize: number;
         // function to determine whether autoscaling conditions have been met
         let scaleChoiceFunction: ScaleChoiceFunction;
-        // string to describe autoscaling direction, used for building output string
-        let direction: string;
 
-        if (scaleUpFlag) {
-            direction = 'up';
-            sliceSize = group.scalingOptions.scaleUpPeriodsCount;
-            scaleChoiceFunction = this.scaleUpChoice;
-        } else {
-            direction = 'down';
-            sliceSize = group.scalingOptions.scaleDownPeriodsCount;
-            scaleChoiceFunction = this.scaleDownChoice;
+        switch (direction) {
+            case 'up':
+                sliceSize = group.scalingOptions.scaleUpPeriodsCount;
+                scaleChoiceFunction = this.scaleUpChoice;
+                break;
+            case 'down':
+                sliceSize = group.scalingOptions.scaleDownPeriodsCount;
+                scaleChoiceFunction = this.scaleDownChoice;
+                break;
+            default:
+                ctx.logger.error('Direction not supported', { direction });
+                return false;
         }
         ctx.logger.info(
             `[AutoScaler] Evaluating scale ${direction} choice for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,

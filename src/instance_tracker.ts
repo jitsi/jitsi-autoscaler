@@ -163,7 +163,7 @@ export class InstanceTracker {
         return await this.track(ctx, instanceState, shutdownStatus);
     }
 
-    async track(ctx: Context, state: InstanceState, isInstanceShuttingDown = false): Promise<boolean> {
+    async track(ctx: Context, state: InstanceState, shutdownStatus = false): Promise<boolean> {
         let group = 'default';
         // pull the group from metadata if provided
         if (state.metadata && state.metadata.group) {
@@ -183,6 +183,7 @@ export class InstanceTracker {
             throw new Error(`unable to set ${key}`);
         }
 
+        const isInstanceShuttingDown = state.shutdownStatus || shutdownStatus;
         // Store metric, but only for running instances
         if (!state.status.provisioning && !isInstanceShuttingDown) {
             let metricTimestamp = Number(state.timestamp);

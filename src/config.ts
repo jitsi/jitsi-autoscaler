@@ -41,7 +41,7 @@ const env = envalid.cleanEnv(process.env, {
     IDLE_TTL_SEC: envalid.num({ default: 300 }), // seconds, default to 5 minutes
     PROVISIONING_TTL_SEC: envalid.num({ default: 600 }), // seconds
     SHUTDOWN_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
-    AUDIT_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
+    AUDIT_TTL_SEC: envalid.num({ default: 172800 }), // default 2 day
     GROUP_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     GROUP_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 30 }), // with what interval this instance should try producing jobs for group processing
     SANITY_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 180 }), // with what interval this instance should try producing jobs for sanity check

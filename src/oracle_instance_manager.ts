@@ -2,13 +2,10 @@ import core = require('oci-core');
 import common = require('oci-common');
 import identity = require('oci-identity');
 import { InstanceGroup } from './instance_group';
-import { InstanceTracker, InstanceState } from './instance_tracker';
 import { Context } from './context';
-import ShutdownManager from './shutdown_manager';
 import { ResourceSearchClient } from 'oci-resourcesearch';
 import * as resourceSearch from 'oci-resourcesearch';
 import { CloudRetryStrategy } from './cloud_manager';
-import Audit from './audit';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -24,9 +21,6 @@ export interface OracleInstanceManagerOptions {
     isDryRun: boolean;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
-    instanceTracker: InstanceTracker;
-    shutdownManager: ShutdownManager;
-    audit: Audit;
 }
 
 export default class OracleInstanceManager {
@@ -34,13 +28,9 @@ export default class OracleInstanceManager {
     private provider: common.ConfigFileAuthenticationDetailsProvider;
     private identityClient: identity.IdentityClient;
     private computeManagementClient: core.ComputeManagementClient;
-    private instanceTracker: InstanceTracker;
-    private shutdownManager: ShutdownManager;
-    private audit: Audit;
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
-        this.instanceTracker = options.instanceTracker;
         this.provider = new common.ConfigFileAuthenticationDetailsProvider(
             options.ociConfigurationFilePath,
             options.ociConfigurationProfile,
@@ -49,8 +39,6 @@ export default class OracleInstanceManager {
         this.computeManagementClient = new core.ComputeManagementClient({
             authenticationDetailsProvider: this.provider,
         });
-        this.shutdownManager = options.shutdownManager;
-        this.audit = options.audit;
 
         this.launchInstances = this.launchInstances.bind(this);
         this.getAvailabilityDomains = this.getAvailabilityDomains.bind(this);
@@ -62,8 +50,7 @@ export default class OracleInstanceManager {
         group: InstanceGroup,
         groupCurrentCount: number,
         quantity: number,
-        isScaleDownProtected: boolean,
-    ): Promise<void> {
+    ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
 
         this.computeManagementClient.regionId = group.region;
@@ -74,7 +61,7 @@ export default class OracleInstanceManager {
             indexes.push(i);
         }
 
-        await Promise.all(
+        const result = await Promise.all(
             indexes.map(async (index) => {
                 ctx.logger.info(
                     `[oracle] Gathering properties for launching instance number ${index + 1} in group ${group.name}`,
@@ -91,10 +78,12 @@ export default class OracleInstanceManager {
                 const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
                 const faultDomain = faultDomains[fdIndex];
 
-                await this.launchInstance(ctx, index, group, availabilityDomain, faultDomain, isScaleDownProtected);
+                return this.launchInstance(ctx, index, group, availabilityDomain, faultDomain);
             }),
         );
         ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
+
+        return result;
     }
 
     async launchInstance(
@@ -103,8 +92,7 @@ export default class OracleInstanceManager {
         group: InstanceGroup,
         availabilityDomain: string,
         faultDomain: string,
-        isScaleDownProtected: boolean,
-    ): Promise<void> {
+    ): Promise<string | boolean> {
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
 
@@ -134,7 +122,7 @@ export default class OracleInstanceManager {
 
         if (this.isDryRun) {
             ctx.logger.info(`[oracle] Dry run enabled, skipping the instance number ${index + 1} launch`);
-            return;
+            return true;
         }
         try {
             const launchResponse = await this.computeManagementClient.launchInstanceConfiguration({
@@ -145,29 +133,11 @@ export default class OracleInstanceManager {
                 `[oracle] Got launch response for instance number ${index + 1} in group ${groupName}`,
                 launchResponse,
             );
-            await this.audit.saveLaunchEvent(groupName, launchResponse.instance.id);
-            const state: InstanceState = {
-                instanceId: launchResponse.instance.id,
-                instanceType: group.type,
-                status: {
-                    provisioning: true,
-                },
-                timestamp: Date.now(),
-                metadata: { group: groupName },
-            };
-            await this.instanceTracker.track(ctx, state);
-            if (isScaleDownProtected) {
-                await this.shutdownManager.setScaleDownProtected(
-                    ctx,
-                    launchResponse.instance.id,
-                    group.protectedTTLSec,
-                );
-                ctx.logger.info(
-                    `[oracle] Instance ${launchResponse.instance.id} from group ${groupName} is in protected mode`,
-                );
-            }
+
+            return launchResponse.instance.id;
         } catch (err) {
-            ctx.logger.error(`[oracle] Failed launching instance number ${index + 1} in group ${groupName}`, err);
+            ctx.logger.error(`[oracle] Failed launching instance number ${index + 1} in group ${groupName}`, { err });
+            return false;
         }
     }
 

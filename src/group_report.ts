@@ -8,12 +8,14 @@ import MetricsLoop from './metrics_loop';
 export interface InstanceReport {
     instanceId: string;
     displayName?: string;
+    instanceName?: string;
     scaleStatus?: string;
     cloudStatus?: string;
     isShuttingDown?: boolean;
     isScaleDownProtected?: boolean;
     privateIp?: string;
     publicIp?: string;
+    version?: string;
 }
 
 export interface GroupReport {
@@ -138,8 +140,10 @@ export default class GroupReportGenerator {
             const instanceReport = <InstanceReport>{
                 instanceId: instanceState.instanceId,
                 displayName: 'unknown',
+                instanceName: 'unknown',
                 scaleStatus: 'unknown',
                 cloudStatus: 'unknown',
+                version: 'unknown',
                 isShuttingDown: instanceState.shutdownStatus,
                 isScaleDownProtected: false,
             };
@@ -157,14 +161,26 @@ export default class GroupReportGenerator {
                     case 'JVB':
                         // @TODO: convert JVB stats into more explict statuses
                         instanceReport.scaleStatus = 'ONLINE';
+                        if (instanceState.status.jvbStatus && instanceState.status.jvbStatus.participants) {
+                            instanceReport.scaleStatus = 'IN USE';
+                        }
+                        if (instanceState.status.jvbStatus && instanceState.status.jvbStatus.graceful_shutdown) {
+                            instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
+                        }
                         break;
                 }
+            }
+            if (instanceState.metadata.name) {
+                instanceReport.instanceName = instanceState.metadata.name;
             }
             if (instanceState.metadata.publicIp) {
                 instanceReport.publicIp = instanceState.metadata.publicIp;
             }
             if (instanceState.metadata.privateIp) {
                 instanceReport.privateIp = instanceState.metadata.privateIp;
+            }
+            if (instanceState.metadata.version) {
+                instanceReport.version = instanceState.metadata.version;
             }
             instanceReports.set(instanceState.instanceId, instanceReport);
         });

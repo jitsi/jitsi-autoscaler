@@ -7,6 +7,10 @@ import LockManager from './lock_manager';
 import { Context } from './context';
 import Audit from './audit';
 
+interface ScaleChoiceFunction {
+    (group: InstanceGroup, count: number, value: number): boolean;
+}
+
 export interface AutoscaleProcessorOptions {
     instanceTracker: InstanceTracker;
     cloudManager: CloudManager;
@@ -109,51 +113,58 @@ export default class AutoscaleProcessor {
             return;
         }
 
-        const scaleMetrics: Array<number> = await this.instanceTracker.getAvailableMetricPerPeriod(
+        const scaleMetrics: Array<number> = await this.instanceTracker.getSummaryMetricPerPeriod(
             ctx,
+            group,
             metricInventoryPerPeriod,
             Math.max(group.scalingOptions.scaleUpPeriodsCount, group.scalingOptions.scaleDownPeriodsCount),
         );
+        if (scaleMetrics && scaleMetrics.length > 0) {
+            // check if we should scale up the group
+            if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'up')) {
+                desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
+                if (desiredCount > group.scalingOptions.maxDesired) {
+                    desiredCount = group.scalingOptions.maxDesired;
+                }
 
-        if (await this.evalScaleUpConditionForAllPeriods(ctx, scaleMetrics, count, group)) {
-            desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
-            if (desiredCount > group.scalingOptions.maxDesired) {
-                desiredCount = group.scalingOptions.maxDesired;
+                await this.audit.saveAutoScalerActionItem(group.name, {
+                    timestamp: Date.now(),
+                    actionType: 'increaseDesiredCount',
+                    count: count,
+                    oldDesiredCount: group.scalingOptions.desiredCount,
+                    newDesiredCount: desiredCount,
+                    scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleUpPeriodsCount),
+                });
+
+                await this.updateDesiredCount(ctx, desiredCount, group);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
+            } else if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'down')) {
+                // next check if we should scale down the group
+                desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
+                if (desiredCount < group.scalingOptions.minDesired) {
+                    desiredCount = group.scalingOptions.minDesired;
+                }
+
+                await this.audit.saveAutoScalerActionItem(group.name, {
+                    timestamp: Date.now(),
+                    actionType: 'decreaseDesiredCount',
+                    count: count,
+                    oldDesiredCount: group.scalingOptions.desiredCount,
+                    newDesiredCount: desiredCount,
+                    scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleDownPeriodsCount),
+                });
+
+                await this.updateDesiredCount(ctx, desiredCount, group);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
+            } else {
+                // otherwise neither action is needed
+                ctx.logger.info(
+                    `[AutoScaler] No desired count adjustments needed for group ${group.name} with ${count} instances`,
+                );
             }
-
-            await this.audit.saveAutoScalerActionItem(group.name, {
-                timestamp: Date.now(),
-                actionType: 'increaseDesiredCount',
-                count: count,
-                oldDesiredCount: group.scalingOptions.desiredCount,
-                newDesiredCount: desiredCount,
-                scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleUpPeriodsCount),
-            });
-
-            await this.updateDesiredCount(ctx, desiredCount, group);
-            await this.instanceGroupManager.setAutoScaleGracePeriod(group);
-        } else if (await this.evalScaleDownConditionForAllPeriods(ctx, scaleMetrics, count, group)) {
-            // next check if we should scale down the group
-            desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
-            if (desiredCount < group.scalingOptions.minDesired) {
-                desiredCount = group.scalingOptions.minDesired;
-            }
-
-            await this.audit.saveAutoScalerActionItem(group.name, {
-                timestamp: Date.now(),
-                actionType: 'decreaseDesiredCount',
-                count: count,
-                oldDesiredCount: group.scalingOptions.desiredCount,
-                newDesiredCount: desiredCount,
-                scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleDownPeriodsCount),
-            });
-
-            await this.updateDesiredCount(ctx, desiredCount, group);
-            await this.instanceGroupManager.setAutoScaleGracePeriod(group);
         } else {
-            // otherwise neither action is needed
-            ctx.logger.info(
-                `[AutoScaler] No desired count adjustments needed for group ${group.name} with ${count} instances`,
+            ctx.logger.warn(
+                `[AutoScaler] No metrics available, no desired count adjustments possible for group ${group.name} with ${count} instances`,
             );
         }
     }
@@ -167,66 +178,79 @@ export default class AutoscaleProcessor {
         }
     }
 
-    async evalScaleUpConditionForAllPeriods(
-        ctx: Context,
-        scaleMetrics: Array<number>,
-        count: number,
-        group: InstanceGroup,
-    ): Promise<boolean> {
+    private scaleUpChoice(group: InstanceGroup, count: number, value: number): boolean {
         switch (group.type) {
             case 'jibri':
-                ctx.logger.info(
-                    `[AutoScaler] Evaluating jibri scale up for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
-                    { scaleMetrics },
+                // in the jibri case only scale up if value (available count) is below threshold
+                return (
+                    (count < group.scalingOptions.maxDesired && value < group.scalingOptions.scaleUpThreshold) ||
+                    count < group.scalingOptions.minDesired
                 );
-
-                return scaleMetrics
-                    .slice(0, group.scalingOptions.scaleUpPeriodsCount)
-                    .map((availableForPeriod) => {
-                        return (
-                            (count < group.scalingOptions.maxDesired &&
-                                availableForPeriod < group.scalingOptions.scaleUpThreshold) ||
-                            count < group.scalingOptions.minDesired
-                        );
-                    })
-                    .reduce((previousValue, currentValue) => {
-                        return previousValue && currentValue;
-                    });
+                break;
             case 'JVB':
-                // @TODO: implement scale up algorithm for JVB autoscaling
+                // in the case of JVB scale up only if value (average stress level) is above or equal to threshhold
+                return (
+                    (count < group.scalingOptions.maxDesired && value >= group.scalingOptions.scaleUpThreshold) ||
+                    count < group.scalingOptions.minDesired
+                );
                 break;
         }
         return false;
     }
 
-    async evalScaleDownConditionForAllPeriods(
+    private scaleDownChoice(group: InstanceGroup, count: number, value: number): boolean {
+        switch (group.type) {
+            case 'jibri':
+                // in the jibri case only scale up if value (available count) is above threshold
+                return count > group.scalingOptions.minDesired && value > group.scalingOptions.scaleDownThreshold;
+            case 'JVB':
+                // in the case of JVB scale down only if value (average stress level) is below threshhold
+                return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;
+        }
+
+        return false;
+    }
+
+    private evalScaleConditionForAllPeriods(
         ctx: Context,
         scaleMetrics: Array<number>,
         count: number,
         group: InstanceGroup,
-    ): Promise<boolean> {
-        switch (group.type) {
-            case 'jibri':
-                ctx.logger.info(
-                    `[AutoScaler] Evaluating jibri scale down for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
-                    { scaleMetrics },
-                );
+        direction: string,
+    ): boolean {
+        // slice size defines how many metrics to evaluate for scaling decision
+        let sliceSize: number;
+        // function to determine whether autoscaling conditions have been met
+        let scaleChoiceFunction: ScaleChoiceFunction;
 
-                return scaleMetrics
-                    .slice(0, group.scalingOptions.scaleDownPeriodsCount)
-                    .map((availableForPeriod) => {
-                        return (
-                            count > group.scalingOptions.minDesired &&
-                            availableForPeriod > group.scalingOptions.scaleDownThreshold
-                        );
-                    })
-                    .reduce((previousValue, currentValue) => {
-                        return previousValue && currentValue;
-                    });
-            case 'JVB':
-                // @TODO: implement scale up algorithm for JVB autoscaling
+        switch (direction) {
+            case 'up':
+                sliceSize = group.scalingOptions.scaleUpPeriodsCount;
+                scaleChoiceFunction = this.scaleUpChoice;
                 break;
+            case 'down':
+                sliceSize = group.scalingOptions.scaleDownPeriodsCount;
+                scaleChoiceFunction = this.scaleDownChoice;
+                break;
+            default:
+                ctx.logger.error('Direction not supported', { direction });
+                return false;
         }
-        return false;
+        ctx.logger.info(
+            `[AutoScaler] Evaluating scale ${direction} choice for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
+            { scaleMetrics, sliceSize },
+        );
+
+        // slice metrics by size, evaluate each period
+        // reduce boolean results with && to ensure all periods fulfills autoscaling criteria
+        return scaleMetrics
+            .slice(0, sliceSize)
+            .map((value) => {
+                // boolean indicating whether individual metric fulfills autoscaling criteria
+                return scaleChoiceFunction(group, count, value);
+            })
+            .reduce((previousValue, currentValue) => {
+                return previousValue && currentValue;
+            });
     }
 }

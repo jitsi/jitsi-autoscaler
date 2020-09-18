@@ -2,6 +2,7 @@ import { Context } from './context';
 import Redis from 'ioredis';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
+import { InstanceGroup } from './instance_group';
 
 /* eslint-disable */
 function isEmpty(obj: any) {
@@ -34,8 +35,13 @@ export interface JibriHealth {
 }
 
 export interface JVBStatus {
-    load: number;
+    stress_level: number;
+    muc_clients_configured: number;
+    muc_clients_connected: number;
+    conferences: number;
     participants: number;
+    largest_conference: number;
+    graceful_shutdown: boolean;
 }
 
 export interface InstanceDetails {
@@ -44,6 +50,8 @@ export interface InstanceDetails {
     cloud?: string;
     region?: string;
     group?: string;
+    name?: string;
+    version?: string;
     publicIp?: string;
     privateIp?: string;
 }
@@ -74,6 +82,8 @@ export interface InstanceMetadata {
     group: string;
     publicIp?: string;
     privateIp?: string;
+    version?: string;
+    name?: string;
     [key: string]: string;
 }
 
@@ -118,7 +128,7 @@ export class InstanceTracker {
     }
 
     // @TODO: handle stats for instances
-    async stats(ctx: Context, report: StatsReport): Promise<boolean> {
+    async stats(ctx: Context, report: StatsReport, shutdownStatus = false): Promise<boolean> {
         ctx.logger.debug('Received report', { report });
         const instanceState = <InstanceState>{
             instanceId: report.instance.instanceId,
@@ -150,10 +160,10 @@ export class InstanceTracker {
             }
         }
         ctx.logger.debug('Tracking instance state', { instanceState });
-        return await this.track(ctx, instanceState);
+        return await this.track(ctx, instanceState, shutdownStatus);
     }
 
-    async track(ctx: Context, state: InstanceState): Promise<boolean> {
+    async track(ctx: Context, state: InstanceState, shutdownStatus = false): Promise<boolean> {
         let group = 'default';
         // pull the group from metadata if provided
         if (state.metadata && state.metadata.group) {
@@ -173,8 +183,7 @@ export class InstanceTracker {
             throw new Error(`unable to set ${key}`);
         }
 
-        const isInstanceShuttingDown = (await this.filterOutInstancesShuttingDown(ctx, [state])).length == 0;
-
+        const isInstanceShuttingDown = state.shutdownStatus || shutdownStatus;
         // Store metric, but only for running instances
         if (!state.status.provisioning && !isInstanceShuttingDown) {
             let metricTimestamp = Number(state.timestamp);
@@ -190,7 +199,9 @@ export class InstanceTracker {
                     }
                     break;
                 case 'JVB':
-                    metricValue = state.status.jvbStatus.load;
+                    if (state.status.jvbStatus && state.status.jvbStatus.stress_level) {
+                        metricValue = state.status.jvbStatus.stress_level;
+                    }
                     break;
             }
 
@@ -217,6 +228,21 @@ export class InstanceTracker {
         return true;
     }
 
+    async getSummaryMetricPerPeriod(
+        ctx: Context,
+        group: InstanceGroup,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        periodCount: number,
+    ): Promise<Array<number>> {
+        switch (group.type) {
+            case 'jibri':
+                return this.getAvailableMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+            case 'JVB':
+                return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+        }
+        return;
+    }
+
     async getAvailableMetricPerPeriod(
         ctx: Context,
         metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
@@ -227,7 +253,21 @@ export class InstanceTracker {
         });
 
         return metricInventoryPerPeriod.slice(0, periodCount).map((instanceMetrics) => {
-            return this.computeAvailableMetric(instanceMetrics);
+            return this.computeSummaryMetric(instanceMetrics, false);
+        });
+    }
+
+    async getAverageMetricPerPeriod(
+        ctx: Context,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        periodCount: number,
+    ): Promise<Array<number>> {
+        ctx.logger.debug(`Getting average metric per period for ${periodCount} periods`, {
+            metricInventoryPerPeriod,
+        });
+
+        return metricInventoryPerPeriod.slice(0, periodCount).map((instanceMetrics) => {
+            return this.computeSummaryMetric(instanceMetrics, true);
         });
     }
 
@@ -270,7 +310,7 @@ export class InstanceTracker {
         return metricPoints;
     }
 
-    computeAvailableMetric(instanceMetrics: Array<InstanceMetric>): number {
+    computeSummaryMetric(instanceMetrics: Array<InstanceMetric>, averageFlag = false): number {
         const dataPointsPerInstance: Map<string, number> = new Map();
         const aggregatedDataPerInstance: Map<string, number> = new Map();
 
@@ -291,13 +331,18 @@ export class InstanceTracker {
         const instanceIds: Array<string> = Array.from(aggregatedDataPerInstance.keys());
 
         if (instanceIds.length > 0) {
-            return instanceIds
+            const fullSum = instanceIds
                 .map((instanceId) => {
                     return aggregatedDataPerInstance.get(instanceId) / dataPointsPerInstance.get(instanceId);
                 })
                 .reduce((previousSum, currentValue) => {
                     return previousSum + currentValue;
                 });
+            if (averageFlag) {
+                return fullSum / instanceIds.length;
+            } else {
+                return fullSum;
+            }
         } else {
             return 0;
         }

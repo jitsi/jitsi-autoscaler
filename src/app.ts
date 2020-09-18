@@ -109,6 +109,8 @@ const instanceGroupManager = new InstanceGroupManager({
     sanityJobsCreationGracePeriod: config.SanityJobsCreationGracePeriodSec,
 });
 
+logger.info('Starting up autoscaler service with config', { config });
+
 logger.info('Initializing instance group manager...');
 const start = Date.now();
 const initId = shortid.generate();
@@ -240,7 +242,7 @@ const h = new Handlers({
 const validator = new Validator({ instanceTracker, instanceGroupManager });
 const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
-app.use(loggedPaths, context.injectContext);
+app.use('/', context.injectContext);
 app.use(loggedPaths, context.accessLogger);
 stats.registerHandler(app, '/metrics');
 app.use(
@@ -273,7 +275,7 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
         l.info(`unauthorized token ${err}`);
         res.status(401).send('invalid token...');
     } else {
-        l.error(`internal error ${err}`);
+        l.error(`internal error ${err}`, { stack: err.stack });
         res.status(500).send('internal server error');
     }
 });

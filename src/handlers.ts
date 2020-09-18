@@ -124,12 +124,12 @@ class Handlers {
 
     async sidecarStatus(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
+        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
         try {
-            await this.instanceTracker.stats(req.context, report);
+            await this.instanceTracker.stats(req.context, report, shutdownStatus);
         } catch (err) {
             req.context.logger.error('Status handling error', { err });
         }
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
         // TODO: implement reconfiguration checks
         const reconfigureStatus = false;
 
@@ -160,8 +160,7 @@ class Handlers {
                 res.status(200);
                 res.send({ save: 'OK' });
             } else {
-                res.status(404);
-                res.send();
+                res.sendStatus(404);
             }
         } finally {
             lock.unlock();
@@ -184,8 +183,7 @@ class Handlers {
                 res.status(200);
                 res.send({ save: 'OK' });
             } else {
-                res.status(404);
-                res.send();
+                res.sendStatus(404);
             }
         } finally {
             lock.unlock();
@@ -224,8 +222,7 @@ class Handlers {
             res.status(200);
             res.send({ instanceGroup });
         } else {
-            res.status(404);
-            res.send();
+            res.sendStatus(404);
         }
     }
 
@@ -245,10 +242,13 @@ class Handlers {
         const groupName = req.params.name;
         const ctx = req.context;
         const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(groupName);
-        const groupReport = await this.groupReportGenerator.generateReport(ctx, group);
-
-        res.status(200);
-        res.send({ groupReport });
+        if (group) {
+            const groupReport = await this.groupReportGenerator.generateReport(ctx, group);
+            res.status(200);
+            res.send({ groupReport });
+        } else {
+            res.sendStatus(404);
+        }
     }
 
     async getGroupAudit(req: Request, res: Response): Promise<void> {
@@ -335,8 +335,7 @@ class Handlers {
                 res.status(200);
                 res.send({ launch: 'OK' });
             } else {
-                res.status(404);
-                res.send();
+                res.sendStatus(404);
             }
         } finally {
             lock.unlock();
@@ -374,8 +373,7 @@ class Handlers {
                 res.status(200);
                 res.send({ save: 'OK' });
             } else {
-                res.status(404);
-                res.send();
+                res.sendStatus(404);
             }
         } finally {
             lock.unlock();

@@ -49,6 +49,37 @@ export default class CloudManager {
         this.scaleDown = this.scaleDown.bind(this);
     }
 
+    async recordLaunch(
+        ctx: Context,
+        group: InstanceGroup,
+        instanceId: string | boolean,
+        isScaleDownProtected: boolean,
+    ): Promise<void> {
+        if (instanceId) {
+            if (!this.isDryRun && instanceId !== true) {
+                await this.audit.saveLaunchEvent(group.name, instanceId);
+                const state: InstanceState = {
+                    instanceId: instanceId,
+                    instanceType: group.type,
+                    status: {
+                        provisioning: true,
+                    },
+                    timestamp: Date.now(),
+                    metadata: { group: group.name },
+                };
+                await this.instanceTracker.track(ctx, state);
+                if (isScaleDownProtected) {
+                    await this.shutdownManager.setScaleDownProtected(ctx, instanceId, group.protectedTTLSec);
+                    ctx.logger.info(
+                        `[CloudManager] Instance ${instanceId} from group ${group.name} is in protected mode`,
+                    );
+                }
+            }
+        } else {
+            ctx.logger.warn(`[CloudManager] Instance launch failed, instance not recorded from group ${group.name}`);
+        }
+    }
+
     async scaleUp(
         ctx: Context,
         group: InstanceGroup,
@@ -76,30 +107,14 @@ export default class CloudManager {
         }
 
         let scaleUpCount = 0;
-        scaleUpResult.forEach(async (instanceId) => {
-            if (instanceId) {
-                scaleUpCount++;
-                if (!this.isDryRun && instanceId !== true) {
-                    await this.audit.saveLaunchEvent(groupName, instanceId);
-                    const state: InstanceState = {
-                        instanceId: instanceId,
-                        instanceType: group.type,
-                        status: {
-                            provisioning: true,
-                        },
-                        timestamp: Date.now(),
-                        metadata: { group: groupName },
-                    };
-                    await this.instanceTracker.track(ctx, state);
-                    if (isScaleDownProtected) {
-                        await this.shutdownManager.setScaleDownProtected(ctx, instanceId, group.protectedTTLSec);
-                        ctx.logger.info(
-                            `[CloudManager] Instance ${instanceId} from group ${groupName} is in protected mode`,
-                        );
-                    }
+        await Promise.all(
+            scaleUpResult.map(async (instanceId) => {
+                if (instanceId) {
+                    scaleUpCount++;
+                    return this.recordLaunch(ctx, group, instanceId, isScaleDownProtected);
                 }
-            }
-        });
+            }),
+        );
 
         return scaleUpCount;
     }

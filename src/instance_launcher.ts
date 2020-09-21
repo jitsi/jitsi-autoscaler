@@ -106,7 +106,6 @@ export default class InstanceLauncher {
                             `[Launcher] Scaling failed to launch requested new instances for group ${groupName} with ${count} instances.`,
                             { scaleUpRequested: actualScaleUpQuantity, scaleUpActual: scaleUpCount },
                         );
-                        instanceErrorsCounter.inc({ group: group.name });
                         throw new Error(
                             `[Launcher] Scaling failed to launch requested new instances for group ${groupName}`,
                         );
@@ -117,7 +116,6 @@ export default class InstanceLauncher {
                         `[Launcher] Scaling failed to launch ANY new instances for group ${groupName} with ${count} instances.`,
                         { scaleUpQuantity: actualScaleUpQuantity },
                     );
-                    instanceErrorsCounter.inc({ group: group.name });
                     throw new Error(`[Launcher] Scaling failed to launch ANY new instances for group ${groupName}`);
                 }
             } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {

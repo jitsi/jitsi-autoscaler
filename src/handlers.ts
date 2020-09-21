@@ -119,7 +119,8 @@ class Handlers {
 
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        await this.instanceTracker.stats(req.context, report);
+        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
+        await this.instanceTracker.stats(req.context, report, shutdownStatus);
 
         res.status(200);
         res.send({ save: 'OK' });

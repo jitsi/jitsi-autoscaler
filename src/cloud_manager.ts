@@ -1,7 +1,7 @@
 import OracleCloudManager from './oracle_instance_manager';
 import OracleInstanceManager from './oracle_instance_manager';
 import { InstanceGroup } from './instance_group';
-import { InstanceTracker, InstanceDetails } from './instance_tracker';
+import { InstanceTracker, InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
@@ -28,6 +28,7 @@ export interface CloudInstance {
 }
 
 export default class CloudManager {
+    private instanceTracker: InstanceTracker;
     private oracleInstanceManager: OracleInstanceManager;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
@@ -39,15 +40,44 @@ export default class CloudManager {
             isDryRun: options.isDryRun,
             ociConfigurationFilePath: options.ociConfigurationFilePath,
             ociConfigurationProfile: options.ociConfigurationProfile,
-            instanceTracker: options.instanceTracker,
-            shutdownManager: options.shutdownManager,
-            audit: options.audit,
         });
+        this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
 
         this.scaleUp = this.scaleUp.bind(this);
         this.scaleDown = this.scaleDown.bind(this);
+    }
+
+    async recordLaunch(
+        ctx: Context,
+        group: InstanceGroup,
+        instanceId: string | boolean,
+        isScaleDownProtected: boolean,
+    ): Promise<void> {
+        if (instanceId) {
+            if (!this.isDryRun && instanceId !== true) {
+                await this.audit.saveLaunchEvent(group.name, instanceId);
+                const state: InstanceState = {
+                    instanceId: instanceId,
+                    instanceType: group.type,
+                    status: {
+                        provisioning: true,
+                    },
+                    timestamp: Date.now(),
+                    metadata: { group: group.name },
+                };
+                await this.instanceTracker.track(ctx, state);
+                if (isScaleDownProtected) {
+                    await this.shutdownManager.setScaleDownProtected(ctx, instanceId, group.protectedTTLSec);
+                    ctx.logger.info(
+                        `[CloudManager] Instance ${instanceId} from group ${group.name} is in protected mode`,
+                    );
+                }
+            }
+        } else {
+            ctx.logger.warn(`[CloudManager] Instance launch failed, instance not recorded from group ${group.name}`);
+        }
     }
 
     async scaleUp(
@@ -56,20 +86,37 @@ export default class CloudManager {
         groupCurrentCount: number,
         quantity: number,
         isScaleDownProtected: boolean,
-    ): Promise<boolean> {
+    ): Promise<number> {
         const groupName = group.name;
-        ctx.logger.info('Scaling up', { groupName, quantity });
+        ctx.logger.info('[CloudManager] Scaling up', { groupName, quantity });
         // TODO: get the instance manager by cloud
-        if (group.cloud == 'oracle') {
-            await this.oracleInstanceManager.launchInstances(
-                ctx,
-                group,
-                groupCurrentCount,
-                quantity,
-                isScaleDownProtected,
-            );
+        let scaleUpResult: Array<boolean | string>;
+
+        switch (group.cloud) {
+            case 'oracle':
+                scaleUpResult = await this.oracleInstanceManager.launchInstances(
+                    ctx,
+                    group,
+                    groupCurrentCount,
+                    quantity,
+                );
+                break;
+            default:
+                ctx.logger.error(`Cloud type not supported: ${group.cloud}`);
+                return 0;
         }
-        return true;
+
+        let scaleUpCount = 0;
+        await Promise.all(
+            scaleUpResult.map(async (instanceId) => {
+                if (instanceId) {
+                    scaleUpCount++;
+                    return this.recordLaunch(ctx, group, instanceId, isScaleDownProtected);
+                }
+            }),
+        );
+
+        return scaleUpCount;
     }
 
     async scaleDown(ctx: Context, group: InstanceGroup, instances: Array<InstanceDetails>): Promise<boolean> {
@@ -80,7 +127,7 @@ export default class CloudManager {
                 return this.shutdownManager.setShutdownStatus(ctx, details);
             }),
         );
-        ctx.logger.info(`Finished scaling down all the instances in group ${group.name}`);
+        ctx.logger.info(`[CloudManager] Finished scaling down all the instances in group ${group.name}`);
         return true;
     }
 

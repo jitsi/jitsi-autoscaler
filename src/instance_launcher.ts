@@ -80,18 +80,44 @@ export default class InstanceLauncher {
                 const actualScaleUpQuantity =
                     Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
                 const scaleDownProtected = await this.instanceGroupManager.isScaleDownProtected(group.name);
-                await this.cloudManager.scaleUp(ctx, group, count, actualScaleUpQuantity, scaleDownProtected);
+                const scaleUpCount = await this.cloudManager.scaleUp(
+                    ctx,
+                    group,
+                    count,
+                    actualScaleUpQuantity,
+                    scaleDownProtected,
+                );
 
-                await this.audit.saveLauncherActionItem(groupName, {
-                    timestamp: Date.now(),
-                    actionType: 'scaleUp',
-                    count: count,
-                    desiredCount: group.scalingOptions.desiredCount,
-                    scaleQuantity: actualScaleUpQuantity,
-                });
+                if (scaleUpCount > 0) {
+                    await this.audit.saveLauncherActionItem(groupName, {
+                        timestamp: Date.now(),
+                        actionType: 'scaleUp',
+                        count: count,
+                        desiredCount: group.scalingOptions.desiredCount,
+                        scaleQuantity: scaleUpCount,
+                    });
 
-                // increment launched instance stats for the group
-                instancesLaunchedCounter.inc({ group: group.name }, actualScaleUpQuantity);
+                    // increment launched instance stats for the group
+                    instancesLaunchedCounter.inc({ group: group.name }, scaleUpCount);
+
+                    // check if scale up count didn't meet requested quantity, error if so
+                    if (scaleUpCount != actualScaleUpQuantity) {
+                        ctx.logger.error(
+                            `[Launcher] Scaling failed to launch requested new instances for group ${groupName} with ${count} instances.`,
+                            { scaleUpRequested: actualScaleUpQuantity, scaleUpActual: scaleUpCount },
+                        );
+                        throw new Error(
+                            `[Launcher] Scaling failed to launch requested new instances for group ${groupName}`,
+                        );
+                    }
+                } else {
+                    // something bad happened, so throw an error
+                    ctx.logger.error(
+                        `[Launcher] Scaling failed to launch ANY new instances for group ${groupName} with ${count} instances.`,
+                        { scaleUpQuantity: actualScaleUpQuantity },
+                    );
+                    throw new Error(`[Launcher] Scaling failed to launch ANY new instances for group ${groupName}`);
+                }
             } else if (count > group.scalingOptions.desiredCount && count > group.scalingOptions.minDesired) {
                 ctx.logger.info('[Launcher] Will scale down to the desired count', { groupName, desiredCount, count });
 

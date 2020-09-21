@@ -396,18 +396,21 @@ app.put('/groups/:name/scaling-activities', async (req, res, next) => {
     }
 });
 
-app.get('/groups/:name/report', async (req, res, next) => {
+app.put('/groups/:name/instance-configuration', body('instanceConfigurationId').isString(), async (req, res, next) => {
     try {
-        await h.getGroupReport(req, res);
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+        await h.updateInstanceConfiguration(req, res);
     } catch (err) {
         next(err);
     }
 });
 
-//TODO remove it when it is no longer used
-app.get('/groups/:name/audit', async (req, res, next) => {
+app.get('/groups/:name/report', async (req, res, next) => {
     try {
-        await h.getInstanceAudit(req, res);
+        await h.getGroupReport(req, res);
     } catch (err) {
         next(err);
     }

@@ -40,6 +40,9 @@ interface InstanceGroupScalingOptionsRequest {
     scaleUpPeriodsCount?: number;
     scaleDownPeriodsCount?: number;
 }
+interface InstanceConfigurationUpdateRequest {
+    instanceConfigurationId: string;
+}
 
 interface HandlersOptions {
     instanceTracker: InstanceTracker;
@@ -179,6 +182,24 @@ class Handlers {
                 if (scalingActivitiesRequest.enableLaunch != null) {
                     instanceGroup.enableLaunch = scalingActivitiesRequest.enableLaunch;
                 }
+                await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
+                res.status(200);
+                res.send({ save: 'OK' });
+            } else {
+                res.sendStatus(404);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    async updateInstanceConfiguration(req: Request, res: Response): Promise<void> {
+        const instanceConfigurationUpdateRequest: InstanceConfigurationUpdateRequest = req.body;
+        const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+            if (instanceGroup) {
+                instanceGroup.instanceConfigurationId = instanceConfigurationUpdateRequest.instanceConfigurationId;
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 res.status(200);
                 res.send({ save: 'OK' });

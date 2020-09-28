@@ -89,6 +89,8 @@ export default class InstanceLauncher {
                 );
 
                 if (scaleUpCount > 0) {
+                    await this.instanceGroupManager.setAutoScaleGracePeriod(group);
+
                     await this.audit.saveLauncherActionItem(groupName, {
                         timestamp: Date.now(),
                         actionType: 'scaleUp',
@@ -123,6 +125,8 @@ export default class InstanceLauncher {
 
                 const listOfInstancesForScaleDown = await this.getInstancesForScaleDown(ctx, currentInventory, group);
                 await this.cloudManager.scaleDown(ctx, group, listOfInstancesForScaleDown);
+
+                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
 
                 await this.audit.saveLauncherActionItem(groupName, {
                     timestamp: Date.now(),

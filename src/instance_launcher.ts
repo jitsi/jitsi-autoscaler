@@ -89,7 +89,6 @@ export default class InstanceLauncher {
                 );
 
                 if (scaleUpCount > 0) {
-
                     await this.audit.saveLauncherActionItem(groupName, {
                         timestamp: Date.now(),
                         actionType: 'scaleUp',
@@ -155,7 +154,9 @@ export default class InstanceLauncher {
     ): Array<InstanceDetails> {
         // first sort by participant count
         unprotectedInstances.sort((a, b) => {
-            return a.status.jvbStatus.participants - b.status.jvbStatus.participants;
+            const aParticipants = a.status.jvbStatus ? a.status.jvbStatus.participants : 0;
+            const bParticipants = b.status.jvbStatus ? b.status.jvbStatus.participants : 0;
+            return aParticipants - bParticipants;
         });
         const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {

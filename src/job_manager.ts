@@ -11,6 +11,7 @@ import Redlock from 'redlock';
 import * as promClient from 'prom-client';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
+import { Context } from './context';
 
 export interface JobManagerOptions {
     queueRedisOptions: ClientOpts;
@@ -133,24 +134,64 @@ export default class JobManager {
             logger.error(`[QueueProcessor] Stalled job ${jobId}; will be reprocessed`);
             queueStalledCounter.inc();
         });
+        newQueue.on('job succeeded', (jobId, result) => {
+            logger.info(`Job ${jobId} succeeded with result: ${result}`);
+        });
+        newQueue.on('job retrying', (jobId, err) => {
+            console.log(`Job ${jobId} failed with error ${err.message} but is being retried!`);
+        });
 
         newQueue.process((job: Job, done: DoneCallback<boolean>) => {
-            switch (job.data.type) {
-                case JobType.Autoscale:
-                    this.processJob(job, (ctx, group) => this.autoscaler.processAutoscalingByGroup(ctx, group), done);
-                    break;
-                case JobType.Launch:
-                    this.processJob(
-                        job,
-                        (ctx, group) => this.instanceLauncher.launchOrShutdownInstancesByGroup(ctx, group),
-                        done,
+            let ctx;
+            const start = process.hrtime();
+
+            try {
+                const start = Date.now();
+                const pollId = shortid.generate();
+                const pollLogger = logger.child({
+                    id: pollId,
+                });
+                ctx = new context.Context(pollLogger, start, pollId);
+
+                switch (job.data.type) {
+                    case JobType.Autoscale:
+                        this.processJob(
+                            ctx,
+                            job,
+                            (ctx, group) => this.autoscaler.processAutoscalingByGroup(ctx, group),
+                            done,
+                        );
+                        break;
+                    case JobType.Launch:
+                        this.processJob(
+                            ctx,
+                            job,
+                            (ctx, group) => this.instanceLauncher.launchOrShutdownInstancesByGroup(ctx, group),
+                            done,
+                        );
+                        break;
+                    case JobType.Sanity:
+                        this.processJob(
+                            ctx,
+                            job,
+                            (ctx, group) => this.sanityLoop.reportUntrackedInstances(ctx, group),
+                            done,
+                        );
+                        break;
+                    default:
+                        this.processJob(ctx, job, () => this.handleUnknownJobType(), done);
+                }
+            } catch (error) {
+                if (ctx) {
+                    const delta = process.hrtime(start);
+                    ctx.logger.error(
+                        `[QueueProcessor] Unexpected error processing job ${job}: ${error}, after ${
+                            delta[0] * 1000 + delta[1] / 1000000
+                        } ms`,
                     );
-                    break;
-                case JobType.Sanity:
-                    this.processJob(job, (ctx, group) => this.sanityLoop.reportUntrackedInstances(ctx, group), done);
-                    break;
-                default:
-                    this.processJob(job, () => this.handleUnknownJobType(), done);
+                }
+                // Ensure done is returned in case of unexpected errors
+                return done(error, false);
             }
         });
         return newQueue;
@@ -161,16 +202,12 @@ export default class JobManager {
     }
 
     processJob(
+        ctx: Context,
         job: Job,
         processingHandler: (ctx: context.Context, group: string) => Promise<boolean>,
         done: DoneCallback<boolean>,
     ): void {
-        const start = Date.now();
-        const pollId = shortid.generate();
-        const pollLogger = logger.child({
-            id: pollId,
-        });
-        const ctx = new context.Context(pollLogger, start, pollId);
+        const start = process.hrtime();
         const jobData: JobData = job.data;
         ctx.logger.info(
             `[QueueProcessor] Start processing job ${jobData.type}:${job.id} for group ${jobData.groupName}`,
@@ -178,15 +215,21 @@ export default class JobManager {
 
         processingHandler(ctx, jobData.groupName)
             .then((result: boolean) => {
+                const delta = process.hrtime(start);
                 ctx.logger.info(
-                    `[QueueProcessor] Done processing job ${jobData.type}:${job.id} for group ${jobData.groupName}`,
+                    `[QueueProcessor] Done processing job ${jobData.type}:${job.id} for group ${jobData.groupName} in ${
+                        delta[0] * 1000 + delta[1] / 1000000
+                    } ms`,
                 );
                 jobProcessTotalCounter.inc({ type: jobData.type });
                 return done(null, result);
             })
             .catch((error) => {
+                const delta = process.hrtime(start);
                 ctx.logger.info(
-                    `[QueueProcessor] Error processing job ${jobData.type}:${job.id} for group ${jobData.groupName}: ${error}`,
+                    `[QueueProcessor] Error processing job ${jobData.type}:${job.id} for group ${
+                        jobData.groupName
+                    }: ${error}, after ${delta[0] * 1000 + delta[1] / 1000000} ms`,
                     {
                         jobId: job.id,
                         jobData: jobData,

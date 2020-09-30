@@ -167,7 +167,7 @@ export default class InstanceLauncher {
             );
         }
         // now return first N instances, least loaded first
-        return this.mapToInstanceDetails(unprotectedInstances.slice(0, actualScaleDownQuantity - 1));
+        return this.mapToInstanceDetails(unprotectedInstances.slice(0, actualScaleDownQuantity));
     }
 
     getJibrisForScaleDown(

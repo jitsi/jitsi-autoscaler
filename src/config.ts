@@ -44,11 +44,11 @@ const env = envalid.cleanEnv(process.env, {
     AUDIT_TTL_SEC: envalid.num({ default: 172800 }), // default 2 day
     GROUP_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     GROUP_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 30 }), // with what interval this instance should try producing jobs for group processing
-    SANITY_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 180 }), // with what interval this instance should try producing jobs for sanity check
+    SANITY_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 240 }), // with what interval this instance should try producing jobs for sanity check
     GROUP_JOBS_CREATION_GRACE_PERIOD_SEC: envalid.num({ default: 30 }), // jobs for group processing should be created once every JOB_CREATION_GRACE_PERIOD_SEC
-    SANITY_JOBS_CREATION_GRACE_PERIOD_SEC: envalid.num({ default: 180 }), // jobs for sanity check should be created once every SANITY_JOBS_CREATION_GRACE_PERIOD_SEC
+    SANITY_JOBS_CREATION_GRACE_PERIOD_SEC: envalid.num({ default: 240 }), // jobs for sanity check should be created once every SANITY_JOBS_CREATION_GRACE_PERIOD_SEC
     JOBS_CREATION_LOCK_TTL_MS: envalid.num({ default: 30000 }), // job creation lock ensures only one instance at a time can produce jobs
-    SANITY_LOOP_PROCESSING_TIMEOUT_MS: envalid.num({ default: 180000 }), // time in ms
+    SANITY_LOOP_PROCESSING_TIMEOUT_MS: envalid.num({ default: 180000 }), // max time allowed for a sanity job to finish processing until it times out - in ms
     METRICS_LOOP_INTERVAL_MS: envalid.num({ default: 60000 }), // time in ms
     OCI_CONFIGURATION_FILE_PATH: envalid.str(),
     OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),

@@ -106,6 +106,7 @@ export interface InstanceTrackerOptions {
     idleTTL: number;
     metricTTL: number;
     provisioningTTL: number;
+    shutdownStatusTTL: number;
 }
 
 export class InstanceTracker {
@@ -114,6 +115,7 @@ export class InstanceTracker {
     private audit: Audit;
     private idleTTL: number;
     private provisioningTTL: number;
+    private shutdownStatusTTL: number;
     private metricTTL: number;
 
     constructor(options: InstanceTrackerOptions) {
@@ -122,6 +124,7 @@ export class InstanceTracker {
         this.audit = options.audit;
         this.idleTTL = options.idleTTL;
         this.provisioningTTL = options.provisioningTTL;
+        this.shutdownStatusTTL = options.shutdownStatusTTL;
         this.metricTTL = options.metricTTL;
 
         this.track = this.track.bind(this);
@@ -177,13 +180,18 @@ export class InstanceTracker {
         if (state.status.provisioning) {
             statusTTL = this.provisioningTTL;
         }
+        const isInstanceShuttingDown = state.shutdownStatus || shutdownStatus;
+        if (isInstanceShuttingDown) {
+            // We keep shutdown status a bit longer, to be consistent to Oracle Search API which has a delay in seeing Terminating status
+            statusTTL = this.shutdownStatusTTL;
+        }
+
         const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', statusTTL);
         if (result !== 'OK') {
             ctx.logger.error(`unable to set ${key}`);
             throw new Error(`unable to set ${key}`);
         }
 
-        const isInstanceShuttingDown = state.shutdownStatus || shutdownStatus;
         // Store metric, but only for running instances
         if (!state.status.provisioning && !isInstanceShuttingDown) {
             let metricTimestamp = Number(state.timestamp);

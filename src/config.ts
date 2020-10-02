@@ -41,6 +41,7 @@ const env = envalid.cleanEnv(process.env, {
     IDLE_TTL_SEC: envalid.num({ default: 300 }), // seconds, default to 5 minutes
     PROVISIONING_TTL_SEC: envalid.num({ default: 900 }), // seconds
     SHUTDOWN_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
+    SHUTDOWN_STATUS_TTL_SEC: envalid.num({ default: 600 }), // default 10 minutes
     AUDIT_TTL_SEC: envalid.num({ default: 172800 }), // default 2 day
     GROUP_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     GROUP_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 30 }), // with what interval this instance should try producing jobs for group processing
@@ -90,6 +91,7 @@ export default {
     ServiceLevelMetricsTTL: env.SERVICE_LEVEL_METRICS_TTL_SEC,
     ProvisioningTTL: env.PROVISIONING_TTL_SEC,
     IdleTTL: env.IDLE_TTL_SEC,
+    ShutdownStatusTTL: env.SHUTDOWN_STATUS_TTL_SEC,
     ShutDownTTL: env.SHUTDOWN_TTL_SEC,
     AuditTTL: env.AUDIT_TTL_SEC,
     // group processing lock

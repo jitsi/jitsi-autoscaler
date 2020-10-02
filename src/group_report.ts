@@ -154,6 +154,7 @@ export default class GroupReportGenerator {
             } else {
                 switch (group.type) {
                     case 'jibri':
+                        instanceReport.scaleStatus = 'SIDECAR_RUNNING';
                         if (instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus) {
                             instanceReport.scaleStatus = instanceState.status.jibriStatus.busyStatus.toString();
                         }

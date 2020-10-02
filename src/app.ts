@@ -85,6 +85,7 @@ const instanceTracker = new InstanceTracker({
     idleTTL: config.IdleTTL,
     metricTTL: config.MetricTTL,
     provisioningTTL: config.ProvisioningTTL,
+    shutdownStatusTTL: config.ShutdownStatusTTL,
 });
 
 const cloudManager = new CloudManager({

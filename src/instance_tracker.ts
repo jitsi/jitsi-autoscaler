@@ -147,8 +147,8 @@ export class InstanceTracker {
             statsError: report.statsError,
         };
         if (isEmpty(report.stats) || report.statsError) {
-            // empty stats report, so error
-            ctx.logger.error('Empty stats report, not including stats', { report });
+            // empty stats report, this can happen either at provisioning when jibri is not yet up, or when the sidecar does not see a jibri
+            ctx.logger.warn('Empty stats report, as it does not include jibri or jvb stats', { report });
             // TODO: increment stats report error counter
         } else {
             let jibriStatusReport: JibriStatusReport;
@@ -200,34 +200,41 @@ export class InstanceTracker {
             }
 
             let metricValue = 0;
+            let trackMetric = true;
             switch (state.instanceType) {
                 case 'jibri':
                     if (state.status.jibriStatus && state.status.jibriStatus.busyStatus == JibriStatusState.Idle) {
                         metricValue = 1;
                     }
+                    // If Jibri is not up, the available metric is tracked with value 0
                     break;
                 case 'JVB':
-                    if (state.status.jvbStatus && state.status.jvbStatus.stress_level) {
+                    if (!state.status.jvbStatus) {
+                        // If JVB is not up, we should not use it to compute average stress level across jvbs
+                        trackMetric = false;
+                    } else if (state.status.jvbStatus.stress_level) {
                         metricValue = state.status.jvbStatus.stress_level;
                     }
                     break;
             }
 
-            const metricKey = `metric:instance:${group}:${state.instanceId}:${metricTimestamp}`;
-            const metricObject: InstanceMetric = {
-                instanceId: state.instanceId,
-                timestamp: metricTimestamp,
-                value: metricValue,
-            };
-            const resultMetric = await this.redisClient.set(
-                metricKey,
-                JSON.stringify(metricObject),
-                'ex',
-                this.metricTTL,
-            );
-            if (resultMetric !== 'OK') {
-                ctx.logger.error(`unable to set ${metricKey}`);
-                throw new Error(`unable to set ${metricKey}`);
+            if (trackMetric) {
+                const metricKey = `metric:instance:${group}:${state.instanceId}:${metricTimestamp}`;
+                const metricObject: InstanceMetric = {
+                    instanceId: state.instanceId,
+                    timestamp: metricTimestamp,
+                    value: metricValue,
+                };
+                const resultMetric = await this.redisClient.set(
+                    metricKey,
+                    JSON.stringify(metricObject),
+                    'ex',
+                    this.metricTTL,
+                );
+                if (resultMetric !== 'OK') {
+                    ctx.logger.error(`unable to set ${metricKey}`);
+                    throw new Error(`unable to set ${metricKey}`);
+                }
             }
         }
 

@@ -47,7 +47,12 @@ export default class SanityLoop {
             );
 
             await this.saveCloudInstances(group.name, cloudInstances);
-            const groupReport = await this.groupReportGenerator.generateReport(ctx, group);
+
+            const groupReportStart = process.hrtime();
+            const groupReport = await this.groupReportGenerator.generateReport(ctx, group, cloudInstances);
+            const groupReportEnd = process.hrtime(groupReportStart);
+            ctx.logger.info(`Retrieved group report in ${groupReportEnd[0] * 1000 + groupReportEnd[1] / 1000000} ms`);
+
             await this.saveMetricUnTrackedCount(groupName, groupReport.unTrackedCount);
             ctx.logger.info(
                 `Successfully saved cloud instances and untracked count ${groupReport.unTrackedCount} for ${groupName}`,
@@ -69,22 +74,11 @@ export default class SanityLoop {
     }
 
     private async saveCloudInstances(groupName: string, cloudInstances: Array<CloudInstance>) {
-        await Promise.all(
-            cloudInstances.map(async (cloudInstance) => {
-                return this.setCloudInstanceValue(
-                    `cloud-instances:${groupName}:${cloudInstance.instanceId}`,
-                    cloudInstance,
-                    this.metricsTTL,
-                );
-            }),
+        await this.redisClient.set(
+            `cloud-instances-list:${groupName}`,
+            JSON.stringify(cloudInstances),
+            'ex',
+            this.metricsTTL,
         );
-    }
-
-    async setCloudInstanceValue(key: string, value: CloudInstance, ttl: number): Promise<boolean> {
-        const result = await this.redisClient.set(key, JSON.stringify(value), 'ex', ttl);
-        if (result !== 'OK') {
-            throw new Error(`unable to set ${key}`);
-        }
-        return true;
     }
 }

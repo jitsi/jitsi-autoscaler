@@ -265,7 +265,7 @@ class Handlers {
         const ctx = req.context;
         const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(groupName);
         if (group) {
-            const groupReport = await this.groupReportGenerator.generateReport(ctx, group);
+            const groupReport = await this.groupReportGenerator.generateReport(ctx, group, null);
             res.status(200);
             res.send({ groupReport });
         } else {

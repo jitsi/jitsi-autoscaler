@@ -52,7 +52,11 @@ export default class GroupReportGenerator {
         this.generateReport = this.generateReport.bind(this);
     }
 
-    async generateReport(ctx: Context, group: InstanceGroup): Promise<GroupReport> {
+    async generateReport(
+        ctx: Context,
+        group: InstanceGroup,
+        retrievedCloudInstances: CloudInstance[],
+    ): Promise<GroupReport> {
         if (!group) {
             throw new Error(`Group not found, failed to generate report`);
         }
@@ -79,7 +83,11 @@ export default class GroupReportGenerator {
         // Get the list of instances from redis and from the cloud manager
         const instanceStates = await this.instanceTracker.getCurrent(ctx, groupName, false);
         groupReport.count = instanceStates.length;
-        const cloudInstances: CloudInstance[] = await this.metricsLoop.getCloudInstances(group.name);
+
+        let cloudInstances: CloudInstance[] = retrievedCloudInstances;
+        if (!cloudInstances) {
+            cloudInstances = await this.metricsLoop.getCloudInstances(group.name);
+        }
 
         this.getInstanceReportsMap(group, instanceStates, cloudInstances).forEach((instanceReport) => {
             groupReport.instances.push(instanceReport);

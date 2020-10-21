@@ -158,23 +158,12 @@ export default class MetricsLoop {
     }
 
     async getCloudInstances(groupName: string): Promise<Array<CloudInstance>> {
-        const cloudInstances: Array<CloudInstance> = [];
-        let items: Array<string> = [];
-
-        let cursor = '0';
-        do {
-            const result = await this.redisClient.scan(cursor, 'match', `cloud-instances:${groupName}:*`);
-            cursor = result[0];
-            if (result[1].length > 0) {
-                items = await this.redisClient.mget(...result[1]);
-                items.forEach((item) => {
-                    if (item) {
-                        cloudInstances.push(JSON.parse(item));
-                    }
-                });
-            }
-        } while (cursor != '0');
-        this.ctx.logger.debug(`Cloud instances: `, { groupName, cloudInstances });
+        let cloudInstances: Array<CloudInstance> = [];
+        const response = await this.redisClient.get(`cloud-instances-list:${groupName}`);
+        if (response !== null && response.length > 0) {
+            cloudInstances = JSON.parse(response);
+            this.ctx.logger.debug(`Cloud instances: `, { groupName, cloudInstances });
+        }
 
         return cloudInstances;
     }

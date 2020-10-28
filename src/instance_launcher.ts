@@ -160,10 +160,9 @@ export default class InstanceLauncher {
         });
         const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {
-            const groupName = group.name;
             ctx.logger.error(
                 '[Launcher] Nr of JVB instances in group for scale down is less than desired scale down quantity',
-                { groupName, actualScaleDownQuantity, desiredScaleDownQuantity },
+                { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
             );
         }
         // now return first N instances, least loaded first
@@ -176,28 +175,34 @@ export default class InstanceLauncher {
         unprotectedInstances: Array<InstanceState>,
         desiredScaleDownQuantity: number,
     ): Array<InstanceDetails> {
-        const availableInstances = this.getAvailableJibris(unprotectedInstances);
-        let listOfInstancesForScaleDown = availableInstances.slice(0, desiredScaleDownQuantity);
-        const actualScaleDownQuantity = listOfInstancesForScaleDown.length;
+        const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {
-            const groupName = group.name;
-            ctx.logger.info(
-                '[Launcher] Nr of available instances for scale down is less then the desired scale down quantity',
-                {
-                    groupName,
-                    actualScaleDownQuantity,
-                    desiredScaleDownQuantity,
-                },
-            );
-
-            const unavailableJibris = this.getUnavailableJibris(unprotectedInstances);
-            listOfInstancesForScaleDown = availableInstances.concat(
-                unavailableJibris.slice(
-                    0,
-                    Math.min(unavailableJibris.length, desiredScaleDownQuantity - actualScaleDownQuantity),
-                ),
+            ctx.logger.error(
+                '[Launcher] Nr of Jibri instances in group for scale down is less than desired scale down quantity',
+                { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
             );
         }
+        // Try to not scale down the available and the busy instances unless needed
+        // This is needed in case of scale up problems, when we should terminate the provisioning instances first
+        let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
+        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
+            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
+                this.getAvailableJibris(unprotectedInstances),
+            );
+        }
+        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
+            ctx.logger.info(
+                '[Launcher] Nr of non-busy instances for scale down is less then the desired scale down quantity',
+                {
+                    groupName: group.name,
+                    currentNumber: listOfInstancesForScaleDown.length,
+                    actualScaleDownQuantity,
+                },
+            );
+            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(this.getBusyJibris(unprotectedInstances));
+        }
+
+        listOfInstancesForScaleDown = listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
         return listOfInstancesForScaleDown;
     }
 
@@ -246,7 +251,17 @@ export default class InstanceLauncher {
         return instanceDetails.filter((instances, index) => !protectedInstances[index]);
     }
 
-    getAvailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+    private getProvisioningOrWithoutStatusInstances(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+        const states = instanceStates.filter((instanceState) => {
+            return (
+                (!instanceState.status.jibriStatus && !instanceState.status.jvbStatus) ||
+                instanceState.status.provisioning == true
+            );
+        });
+        return this.mapToInstanceDetails(states);
+    }
+
+    private getAvailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
         const states = instanceStates.filter((instanceState) => {
             return (
                 instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Idle
@@ -255,17 +270,14 @@ export default class InstanceLauncher {
         return this.mapToInstanceDetails(states);
     }
 
-    getUnavailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+    private getBusyJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
         const states = instanceStates.filter((instanceState) => {
-            return (
-                !instanceState.status.jibriStatus ||
-                instanceState.status.jibriStatus.busyStatus != JibriStatusState.Idle
-            );
+            return instanceState.status.jibriStatus.busyStatus != JibriStatusState.Idle;
         });
         return this.mapToInstanceDetails(states);
     }
 
-    mapToInstanceDetails(states: Array<InstanceState>): Array<InstanceDetails> {
+    private mapToInstanceDetails(states: Array<InstanceState>): Array<InstanceDetails> {
         return states.map((response) => {
             return <InstanceDetails>{
                 instanceId: response.instanceId,

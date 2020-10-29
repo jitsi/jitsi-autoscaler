@@ -192,7 +192,7 @@ export default class InstanceLauncher {
         }
         if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
             ctx.logger.info(
-                '[Launcher] Nr of non-busy instances for scale down is less then the desired scale down quantity',
+                '[Launcher] Nr of non-busy Jibris for scale down is less then the desired scale down quantity',
                 {
                     groupName: group.name,
                     currentNumber: listOfInstancesForScaleDown.length,
@@ -272,7 +272,9 @@ export default class InstanceLauncher {
 
     private getBusyJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
         const states = instanceStates.filter((instanceState) => {
-            return instanceState.status.jibriStatus.busyStatus != JibriStatusState.Idle;
+            return (
+                instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Busy
+            );
         });
         return this.mapToInstanceDetails(states);
     }

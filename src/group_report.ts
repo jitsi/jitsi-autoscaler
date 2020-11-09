@@ -216,27 +216,32 @@ export default class GroupReportGenerator {
     }
 
     private async addShutdownStatus(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
-        const instanceReportsShutdownStatus: boolean[] = await Promise.all(
+        const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(
+            ctx,
             instanceReports.map((instanceReport) => {
-                return (
-                    instanceReport.isShuttingDown ||
-                    this.shutdownManager.getShutdownStatus(ctx, instanceReport.instanceId)
-                );
+                return instanceReport.instanceId;
             }),
         );
+
+        const instanceReportsShutdownStatus: boolean[] = [];
+        for (let i = 0; i < instanceReports.length; i++) {
+            instanceReportsShutdownStatus.push(instanceReports[i].isShuttingDown || shutdownStatuses[i]);
+        }
+
         instanceReports.forEach((instanceReport, index) => {
             instanceReport.isShuttingDown = instanceReportsShutdownStatus[index];
         });
     }
 
     private async addShutdownProtectedStatus(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
-        const instanceReportsShutdownStatus: boolean[] = await Promise.all(
+        const instanceReportsProtectedStatus: boolean[] = await this.shutdownManager.areScaleDownProtected(
+            ctx,
             instanceReports.map((instanceReport) => {
-                return this.shutdownManager.isScaleDownProtected(ctx, instanceReport.instanceId);
+                return instanceReport.instanceId;
             }),
         );
         instanceReports.forEach((instanceReport, index) => {
-            instanceReport.isScaleDownProtected = instanceReportsShutdownStatus[index];
+            instanceReport.isScaleDownProtected = instanceReportsProtectedStatus[index];
         });
     }
 }

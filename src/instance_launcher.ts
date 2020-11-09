@@ -242,9 +242,10 @@ export default class InstanceLauncher {
         ctx: Context,
         instanceDetails: Array<InstanceState>,
     ): Promise<Array<InstanceState>> {
-        const protectedInstances: boolean[] = await Promise.all(
+        const protectedInstances: boolean[] = await this.shutdownManager.areScaleDownProtected(
+            ctx,
             instanceDetails.map((instance) => {
-                return this.shutdownManager.isScaleDownProtected(ctx, instance.instanceId);
+                return instance.instanceId;
             }),
         );
 

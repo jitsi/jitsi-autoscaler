@@ -102,6 +102,7 @@ export interface InstanceState {
 
 export interface InstanceTrackerOptions {
     redisClient: Redis.Redis;
+    redisScanCount: number;
     shutdownManager: ShutdownManager;
     audit: Audit;
     idleTTL: number;
@@ -112,15 +113,17 @@ export interface InstanceTrackerOptions {
 
 export class InstanceTracker {
     private redisClient: Redis.Redis;
+    private readonly redisScanCount: number;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
-    private idleTTL: number;
-    private provisioningTTL: number;
-    private shutdownStatusTTL: number;
-    private metricTTL: number;
+    private readonly idleTTL: number;
+    private readonly provisioningTTL: number;
+    private readonly shutdownStatusTTL: number;
+    private readonly metricTTL: number;
 
     constructor(options: InstanceTrackerOptions) {
         this.redisClient = options.redisClient;
+        this.redisScanCount = options.redisScanCount;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
         this.idleTTL = options.idleTTL;
@@ -305,7 +308,13 @@ export class InstanceTracker {
         let scanCount = 0;
         const inventoryStart = process.hrtime();
         do {
-            const result = await this.redisClient.scan(cursor, 'match', `metric:instance:${group}:*`);
+            const result = await this.redisClient.scan(
+                cursor,
+                'match',
+                `metric:instance:${group}:*`,
+                'count',
+                this.redisScanCount,
+            );
             cursor = result[0];
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);
@@ -328,9 +337,9 @@ export class InstanceTracker {
         ctx.logger.debug(`instance metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });
 
         ctx.logger.info(
-            `Scanned metrics in ${scanCount} scans and ${
+            `Scanned ${metricPoints.length} metrics in ${scanCount} scans and ${
                 inventoryEnd[0] * 1000 + inventoryEnd[1] / 1000000
-            } ms, for group ${group} with inventory ${metricPoints.length}`,
+            } ms, for group ${group}`,
         );
 
         return metricPoints;
@@ -383,7 +392,13 @@ export class InstanceTracker {
         let cursor = '0';
         let scanCounts = 0;
         do {
-            const result = await this.redisClient.scan(cursor, 'match', `instance:cstatus:${group}:*`);
+            const result = await this.redisClient.scan(
+                cursor,
+                'match',
+                `instance:cstatus:${group}:*`,
+                'count',
+                this.redisScanCount,
+            );
             cursor = result[0];
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);
@@ -398,9 +413,9 @@ export class InstanceTracker {
         ctx.logger.debug(`instance states: ${states}`, { group, states });
         const currentEnd = process.hrtime(currentStart);
         ctx.logger.info(
-            `Scanned group instances in  ${scanCounts} scans and ${
+            `Scanned ${states.length} group instances in ${scanCounts} scans and ${
                 currentEnd[0] * 1000 + currentEnd[1] / 1000000
-            } ms, for group ${group} with states ${states.length}`,
+            } ms, for group ${group}`,
         );
 
         if (filterShutdown) {
@@ -413,9 +428,9 @@ export class InstanceTracker {
             });
 
             ctx.logger.info(
-                `Filtered out shutting down instances in ${
+                `Filtered out shutting down from ${states.length} instances in ${
                     filterShutdownEnd[0] * 1000 + filterShutdownEnd[1] / 1000000
-                }} ms for group ${group} with states ${states.length}`,
+                } ms for group ${group}`,
             );
             return statesExceptShutDown;
         }

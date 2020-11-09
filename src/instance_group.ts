@@ -32,6 +32,7 @@ export interface InstanceGroup {
 
 export interface InstanceGroupManagerOptions {
     redisClient: Redis.Redis;
+    redisScanCount: number;
     initialGroupList: Array<InstanceGroup>;
     groupJobsCreationGracePeriod: number;
     sanityJobsCreationGracePeriod: number;
@@ -40,12 +41,14 @@ export interface InstanceGroupManagerOptions {
 export default class InstanceGroupManager {
     private readonly keyPrefix = 'group:';
     private redisClient: Redis.Redis;
-    private initialGroupList: Array<InstanceGroup>;
-    private processingIntervalSeconds: number;
-    private sanityJobsIntervalSeconds: number;
+    private readonly redisScanCount: number;
+    private readonly initialGroupList: Array<InstanceGroup>;
+    private readonly processingIntervalSeconds: number;
+    private readonly sanityJobsIntervalSeconds: number;
 
     constructor(options: InstanceGroupManagerOptions) {
         this.redisClient = options.redisClient;
+        this.redisScanCount = options.redisScanCount;
         this.initialGroupList = options.initialGroupList;
         this.processingIntervalSeconds = options.groupJobsCreationGracePeriod;
         this.sanityJobsIntervalSeconds = options.sanityJobsCreationGracePeriod;
@@ -79,7 +82,13 @@ export default class InstanceGroupManager {
     async existsAtLeastOneGroup(): Promise<boolean> {
         let cursor = '0';
         do {
-            const result = await this.redisClient.scan(cursor, 'match', `${this.keyPrefix}*`);
+            const result = await this.redisClient.scan(
+                cursor,
+                'match',
+                `${this.keyPrefix}*`,
+                'count',
+                this.redisScanCount,
+            );
             cursor = result[0];
             if (result[1].length > 0) {
                 const items = await this.redisClient.mget(...result[1]);
@@ -124,8 +133,16 @@ export default class InstanceGroupManager {
         const instanceGroups: Array<InstanceGroup> = [];
 
         let cursor = '0';
+        let scanCount = 0;
+        const getGroupsStart = process.hrtime();
         do {
-            const result = await this.redisClient.scan(cursor, 'match', `${this.keyPrefix}*`);
+            const result = await this.redisClient.scan(
+                cursor,
+                'match',
+                `${this.keyPrefix}*`,
+                'count',
+                this.redisScanCount,
+            );
             cursor = result[0];
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);
@@ -136,8 +153,15 @@ export default class InstanceGroupManager {
                     }
                 });
             }
+            scanCount++;
         } while (cursor != '0');
+        const getGroupsEnd = process.hrtime(getGroupsStart);
         ctx.logger.debug(`instance groups are`, { instanceGroups });
+        ctx.logger.info(
+            `Scanned all ${instanceGroups.length} groups in ${scanCount} scans and ${
+                getGroupsEnd[0] * 1000 + getGroupsEnd[1] / 1000000
+            } ms`,
+        );
         return instanceGroups;
     }
 

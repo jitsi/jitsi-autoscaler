@@ -51,15 +51,18 @@ export interface InstanceAuditResponse {
 
 export interface AuditOptions {
     redisClient: Redis.Redis;
+    redisScanCount: number;
     auditTTL: number;
 }
 
 export default class Audit {
     private redisClient: Redis.Redis;
-    private auditTTL: number;
+    private readonly redisScanCount: number;
+    private readonly auditTTL: number;
 
     constructor(options: AuditOptions) {
         this.redisClient = options.redisClient;
+        this.redisScanCount = options.redisScanCount;
         this.auditTTL = options.auditTTL;
     }
 
@@ -267,7 +270,13 @@ export default class Audit {
 
         let cursor = '0';
         do {
-            const result = await this.redisClient.scan(cursor, 'match', `audit:${groupName}:*:*`);
+            const result = await this.redisClient.scan(
+                cursor,
+                'match',
+                `audit:${groupName}:*:*`,
+                'count',
+                this.redisScanCount,
+            );
             cursor = result[0];
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);
@@ -289,7 +298,13 @@ export default class Audit {
 
         let cursor = '0';
         do {
-            const result = await this.redisClient.scan(cursor, 'match', `audit:${groupName}:*`);
+            const result = await this.redisClient.scan(
+                cursor,
+                'match',
+                `audit:${groupName}:*`,
+                'count',
+                this.redisScanCount,
+            );
             cursor = result[0];
             if (result[1].length > 0) {
                 items = await this.redisClient.mget(...result[1]);

@@ -88,6 +88,7 @@ export default class MetricsLoop {
             await Promise.all(
                 instanceGroups.map(async (group) => {
                     this.ctx.logger.debug(`Will update metrics for group ${group.name}`);
+                    const start = process.hrtime();
 
                     groupDesired.set({ group: group.name }, group.scalingOptions.desiredCount);
                     groupMin.set({ group: group.name }, group.scalingOptions.minDesired);
@@ -109,6 +110,11 @@ export default class MetricsLoop {
 
                     const queueWaitingCount = await this.getQueueWaitingCount();
                     queueWaiting.set(queueWaitingCount);
+
+                    const end = process.hrtime(start);
+                    this.ctx.logger.debug(
+                        `Updated metrics for group ${group.name} in ${end[0] * 1000 + end[1] / 1000000} ms`,
+                    );
                 }),
             );
         } catch (err) {

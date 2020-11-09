@@ -21,6 +21,7 @@ export enum JibriHealthState {
     Healthy = 'HEALTHY',
     Unhealthy = 'UNHEALTHY',
 }
+
 interface JibriStatusReport {
     status: JibriStatus;
 }
@@ -301,6 +302,8 @@ export class InstanceTracker {
         }
 
         let cursor = '0';
+        let scanCount = 0;
+        const inventoryStart = process.hrtime();
         do {
             const result = await this.redisClient.scan(cursor, 'match', `metric:instance:${group}:*`);
             cursor = result[0];
@@ -319,8 +322,16 @@ export class InstanceTracker {
                     }
                 });
             }
+            scanCount++;
         } while (cursor != '0');
+        const inventoryEnd = process.hrtime(inventoryStart);
         ctx.logger.debug(`instance metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });
+
+        ctx.logger.info(
+            `Scanned metrics in ${scanCount} scans and ${
+                inventoryEnd[0] * 1000 + inventoryEnd[1] / 1000000
+            } ms, for group ${group} with inventory ${metricPoints.length}`,
+        );
 
         return metricPoints;
     }
@@ -367,7 +378,10 @@ export class InstanceTracker {
         const states: Array<InstanceState> = [];
         let items: Array<string> = [];
 
+        const currentStart = process.hrtime();
+
         let cursor = '0';
+        let scanCounts = 0;
         do {
             const result = await this.redisClient.scan(cursor, 'match', `instance:cstatus:${group}:*`);
             cursor = result[0];
@@ -379,18 +393,32 @@ export class InstanceTracker {
                     }
                 });
             }
+            scanCounts++;
         } while (cursor != '0');
         ctx.logger.debug(`instance states: ${states}`, { group, states });
+        const currentEnd = process.hrtime(currentStart);
+        ctx.logger.info(
+            `Scanned group instances in  ${scanCounts} scans and ${
+                currentEnd[0] * 1000 + currentEnd[1] / 1000000
+            } ms, for group ${group} with states ${states.length}`,
+        );
 
         if (filterShutdown) {
+            const filterShutdownStart = process.hrtime();
             const statesExceptShutDown = await this.filterOutInstancesShuttingDown(ctx, states);
+            const filterShutdownEnd = process.hrtime(filterShutdownStart);
             ctx.logger.debug(`instance filtered states, with no shutdown instances: ${statesExceptShutDown}`, {
                 group,
                 statesExceptShutDown,
             });
+
+            ctx.logger.info(
+                `Filtered out shutting down instances in ${
+                    filterShutdownEnd[0] * 1000 + filterShutdownEnd[1] / 1000000
+                }} ms for group ${group} with states ${states.length}`,
+            );
             return statesExceptShutDown;
         }
-
         return states;
     }
 

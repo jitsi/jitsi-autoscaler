@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import { InstanceState } from './instance_tracker';
+import { InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
 
 export interface InstanceAudit {
@@ -103,13 +103,22 @@ export default class Audit {
         return result == 1;
     }
 
-    async saveShutdownEvent(groupName: string, instanceId: string): Promise<boolean> {
-        const value: InstanceAudit = {
-            instanceId: instanceId,
-            type: 'request-to-terminate',
-            timestamp: Date.now(),
-        };
-        return this.setInstanceValue(`audit:${groupName}:${instanceId}:request-to-terminate`, value, this.auditTTL);
+    async saveShutdownEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
+        const pipeline = this.redisClient.pipeline();
+        for (const instance of instanceDetails) {
+            const value: InstanceAudit = {
+                instanceId: instance.instanceId,
+                type: 'request-to-terminate',
+                timestamp: Date.now(),
+            };
+            pipeline.set(
+                `audit:${instance.group}:${instance.instanceId}:request-to-terminate`,
+                JSON.stringify(value),
+                'ex',
+                this.auditTTL,
+            );
+        }
+        await pipeline.exec();
     }
 
     private async increaseShutdownEventExpiration(groupName: string, instanceId: string): Promise<boolean> {

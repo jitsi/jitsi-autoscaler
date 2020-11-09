@@ -122,11 +122,7 @@ export default class CloudManager {
     async scaleDown(ctx: Context, group: InstanceGroup, instances: Array<InstanceDetails>): Promise<boolean> {
         const groupName = group.name;
         ctx.logger.info('Scaling down', { groupName, instances });
-        await Promise.all(
-            instances.map((details) => {
-                return this.shutdownManager.setShutdownStatus(ctx, details);
-            }),
-        );
+        await this.shutdownManager.setShutdownStatus(ctx, instances);
         ctx.logger.info(`[CloudManager] Finished scaling down all the instances in group ${group.name}`);
         return true;
     }

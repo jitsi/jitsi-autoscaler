@@ -21,7 +21,6 @@ export enum JibriHealthState {
     Healthy = 'HEALTHY',
     Unhealthy = 'UNHEALTHY',
 }
-
 interface JibriStatusReport {
     status: JibriStatus;
 }
@@ -438,15 +437,17 @@ export class InstanceTracker {
     }
 
     async filterOutInstancesShuttingDown(ctx: Context, states: Array<InstanceState>): Promise<Array<InstanceState>> {
-        const statesShutdownStatus: boolean[] = await Promise.all(
-            states.map((instanceState) => {
-                return (
-                    instanceState.shutdownStatus ||
-                    this.shutdownManager.getShutdownStatus(ctx, instanceState.instanceId)
-                );
+        const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(
+            ctx,
+            states.map((state) => {
+                return state.instanceId;
             }),
         );
 
+        const statesShutdownStatus: boolean[] = [];
+        for (let i = 0; i < states.length; i++) {
+            statesShutdownStatus.push(states[i].shutdownStatus || shutdownStatuses[i]);
+        }
         return states.filter((instanceState, index) => !statesShutdownStatus[index]);
     }
 }

@@ -69,6 +69,7 @@ const redisClient = new Redis(redisOptions);
 
 const audit = new Audit({
     redisClient: redisClient,
+    redisScanCount: config.RedisScanCount,
     auditTTL: config.AuditTTL,
 });
 
@@ -80,6 +81,7 @@ const shutdownManager = new ShutdownManager({
 
 const instanceTracker = new InstanceTracker({
     redisClient,
+    redisScanCount: config.RedisScanCount,
     shutdownManager: shutdownManager,
     audit: audit,
     idleTTL: config.IdleTTL,
@@ -105,6 +107,7 @@ const lockManager: LockManager = new LockManager(logger, {
 
 const instanceGroupManager = new InstanceGroupManager({
     redisClient: redisClient,
+    redisScanCount: config.RedisScanCount,
     initialGroupList: config.GroupList,
     groupJobsCreationGracePeriod: config.GroupJobsCreationGracePeriodSec,
     sanityJobsCreationGracePeriod: config.SanityJobsCreationGracePeriodSec,

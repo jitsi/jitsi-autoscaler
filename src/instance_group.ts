@@ -139,6 +139,14 @@ export default class InstanceGroupManager {
         }, new Map<string, InstanceGroup>());
     }
 
+    async getAllInstanceGroupNames(ctx: Context): Promise<string[]> {
+        const start = process.hrtime();
+        const result = await this.redisClient.hkeys(this.GROUPS_HASH_NAME);
+        const end = process.hrtime(start);
+        ctx.logger.info(`Scanned all ${result.length} group names in ${end[0] * 1000 + end[1] / 1000000} ms`);
+        return result;
+    }
+
     async getAllInstanceGroups(ctx: Context): Promise<Array<InstanceGroup>> {
         const instanceGroups: Array<InstanceGroup> = [];
 

@@ -39,6 +39,7 @@ export interface InstanceGroupManagerOptions {
 }
 
 export default class InstanceGroupManager {
+    private readonly GROUPS_HASH_NAME = 'allgroups';
     private readonly keyPrefix = 'group:';
     private redisClient: Redis.Redis;
     private readonly redisScanCount: number;
@@ -82,7 +83,8 @@ export default class InstanceGroupManager {
     async existsAtLeastOneGroup(): Promise<boolean> {
         let cursor = '0';
         do {
-            const result = await this.redisClient.scan(
+            const result = await this.redisClient.hscan(
+                this.GROUPS_HASH_NAME,
                 cursor,
                 'match',
                 `${this.keyPrefix}*`,
@@ -93,7 +95,7 @@ export default class InstanceGroupManager {
             if (result[1].length > 0) {
                 const pipeline = this.redisClient.pipeline();
                 result[1].forEach((key: string) => {
-                    pipeline.get(key);
+                    pipeline.hget(this.GROUPS_HASH_NAME, key);
                 });
 
                 const items = await pipeline.exec();
@@ -109,15 +111,19 @@ export default class InstanceGroupManager {
     async upsertInstanceGroup(ctx: Context, group: InstanceGroup): Promise<void> {
         ctx.logger.info(`Storing ${group.name}`);
         const groupKey = this.getGroupKey(group.name);
-        const result = await this.redisClient.set(groupKey, JSON.stringify(group));
-        if (result !== 'OK') {
+        const result: Redis.BooleanResponse = await this.redisClient.hset(
+            this.GROUPS_HASH_NAME,
+            groupKey,
+            JSON.stringify(group),
+        );
+        if (result == 0) {
             throw new Error(`unable to set ${groupKey}`);
         }
     }
 
     async getInstanceGroup(groupName: string): Promise<InstanceGroup> {
         const groupKey = this.getGroupKey(groupName);
-        const result = await this.redisClient.get(groupKey);
+        const result = await this.redisClient.hget(this.GROUPS_HASH_NAME, groupKey);
         if (result !== null && result.length > 0) {
             return JSON.parse(result);
         } else {
@@ -140,7 +146,8 @@ export default class InstanceGroupManager {
         let scanCount = 0;
         const getGroupsStart = process.hrtime();
         do {
-            const result = await this.redisClient.scan(
+            const result = await this.redisClient.hscan(
+                this.GROUPS_HASH_NAME,
                 cursor,
                 'match',
                 `${this.keyPrefix}*`,
@@ -151,7 +158,7 @@ export default class InstanceGroupManager {
             if (result[1].length > 0) {
                 const pipeline = this.redisClient.pipeline();
                 result[1].forEach((key: string) => {
-                    pipeline.get(key);
+                    pipeline.hget(this.GROUPS_HASH_NAME, key);
                 });
 
                 const items = await pipeline.exec();
@@ -177,7 +184,7 @@ export default class InstanceGroupManager {
     async deleteInstanceGroup(ctx: Context, groupName: string): Promise<void> {
         ctx.logger.info(`Deleting group ${groupName}`);
         const groupKey = this.getGroupKey(groupName);
-        await this.redisClient.del(groupKey);
+        await this.redisClient.hdel(this.GROUPS_HASH_NAME, groupKey);
         ctx.logger.info(`Group ${groupName} is deleted`);
     }
 

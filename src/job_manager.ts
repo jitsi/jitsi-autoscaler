@@ -1,5 +1,5 @@
 import Queue, { DoneCallback, Job } from 'bee-queue';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager from './instance_group';
 import * as context from './context';
 import shortid from 'shortid';
 import logger from './logger';
@@ -261,11 +261,11 @@ export default class JobManager {
                 return;
             }
 
-            const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(ctx);
+            const instanceGroupNames = await this.instanceGroupManager.getAllInstanceGroupNames(ctx);
 
             await this.createJobs(
                 ctx,
-                instanceGroups,
+                instanceGroupNames,
                 this.jobQueue,
                 JobType.Sanity,
                 this.sanityLoopProcessingTimeoutMs,
@@ -300,15 +300,21 @@ export default class JobManager {
                 return;
             }
 
-            const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(ctx);
+            const instanceGroupNames = await this.instanceGroupManager.getAllInstanceGroupNames(ctx);
             await this.createJobs(
                 ctx,
-                instanceGroups,
+                instanceGroupNames,
                 this.jobQueue,
                 JobType.Autoscale,
                 this.autoscalerProcessingTimeoutMs,
             );
-            await this.createJobs(ctx, instanceGroups, this.jobQueue, JobType.Launch, this.launcherProcessingTimeoutMs);
+            await this.createJobs(
+                ctx,
+                instanceGroupNames,
+                this.jobQueue,
+                JobType.Launch,
+                this.launcherProcessingTimeoutMs,
+            );
 
             // populate some queue health metrics
             const healthCheckResult = await this.jobQueue.checkHealth();
@@ -324,16 +330,16 @@ export default class JobManager {
 
     async createJobs(
         ctx: context.Context,
-        instanceGroups: Array<InstanceGroup>,
+        instanceGroupNames: Array<string>,
         jobQueue: Queue,
         jobType: JobType,
         processingTimeoutMillis: number,
     ): Promise<void> {
-        instanceGroups.forEach((instanceGroup) => {
-            ctx.logger.info(`[JobManager] Creating ${jobType} job for group ${instanceGroup.name}`);
+        instanceGroupNames.forEach((instanceGroupName) => {
+            ctx.logger.info(`[JobManager] Creating ${jobType} job for group ${instanceGroupName}`);
 
             const jobData: JobData = {
-                groupName: instanceGroup.name,
+                groupName: instanceGroupName,
                 type: jobType,
             };
 
@@ -348,7 +354,7 @@ export default class JobManager {
                 })
                 .catch((error) => {
                     ctx.logger.info(
-                        `[JobManager] Error while creating ${jobType} job for group ${instanceGroup.name}: ${error}`,
+                        `[JobManager] Error while creating ${jobType} job for group ${instanceGroupName}: ${error}`,
                     );
                     jobCreateFailureCounter.inc({ type: jobData.type });
                 });

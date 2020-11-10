@@ -91,7 +91,12 @@ export default class InstanceGroupManager {
             );
             cursor = result[0];
             if (result[1].length > 0) {
-                const items = await this.redisClient.mget(...result[1]);
+                const pipeline = this.redisClient.pipeline();
+                result[1].forEach((key: string) => {
+                    pipeline.get(key);
+                });
+
+                const items = await pipeline.exec();
                 if (items.length > 0) {
                     return true;
                 }
@@ -129,7 +134,6 @@ export default class InstanceGroupManager {
     }
 
     async getAllInstanceGroups(ctx: Context): Promise<Array<InstanceGroup>> {
-        let items: Array<string> = [];
         const instanceGroups: Array<InstanceGroup> = [];
 
         let cursor = '0';
@@ -145,10 +149,15 @@ export default class InstanceGroupManager {
             );
             cursor = result[0];
             if (result[1].length > 0) {
-                items = await this.redisClient.mget(...result[1]);
+                const pipeline = this.redisClient.pipeline();
+                result[1].forEach((key: string) => {
+                    pipeline.get(key);
+                });
+
+                const items = await pipeline.exec();
                 items.forEach((item) => {
-                    if (item) {
-                        const itemJson: InstanceGroup = JSON.parse(item);
+                    if (item[1]) {
+                        const itemJson: InstanceGroup = JSON.parse(item[1]);
                         instanceGroups.push(itemJson);
                     }
                 });

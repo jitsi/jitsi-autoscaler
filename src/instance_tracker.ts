@@ -296,7 +296,6 @@ export class InstanceTracker {
         periodDurationSeconds: number,
     ): Promise<Array<Array<InstanceMetric>>> {
         const metricPoints: Array<Array<InstanceMetric>> = [];
-        let items: Array<string> = [];
         const currentTime = Date.now();
 
         for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
@@ -316,10 +315,15 @@ export class InstanceTracker {
             );
             cursor = result[0];
             if (result[1].length > 0) {
-                items = await this.redisClient.mget(...result[1]);
+                const pipeline = this.redisClient.pipeline();
+                result[1].forEach((key: string) => {
+                    pipeline.get(key);
+                });
+
+                const items = await pipeline.exec();
                 items.forEach((item) => {
                     if (item) {
-                        const itemJson = JSON.parse(item);
+                        const itemJson = JSON.parse(item[1]);
 
                         const periodIdx = Math.floor(
                             (currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000),
@@ -384,8 +388,6 @@ export class InstanceTracker {
 
     async getCurrent(ctx: Context, group: string, filterShutdown = true): Promise<Array<InstanceState>> {
         const states: Array<InstanceState> = [];
-        let items: Array<string> = [];
-
         const currentStart = process.hrtime();
 
         let cursor = '0';
@@ -400,10 +402,15 @@ export class InstanceTracker {
             );
             cursor = result[0];
             if (result[1].length > 0) {
-                items = await this.redisClient.mget(...result[1]);
+                const pipeline = this.redisClient.pipeline();
+                result[1].forEach((key: string) => {
+                    pipeline.get(key);
+                });
+
+                const items = await pipeline.exec();
                 items.forEach((item) => {
                     if (item) {
-                        states.push(JSON.parse(item));
+                        states.push(JSON.parse(item[1]));
                     }
                 });
             }

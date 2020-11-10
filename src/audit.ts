@@ -275,7 +275,6 @@ export default class Audit {
 
     async getInstanceAudit(ctx: Context, groupName: string): Promise<Array<InstanceAudit>> {
         const audit: Array<InstanceAudit> = [];
-        let items: Array<string> = [];
 
         let cursor = '0';
         do {
@@ -288,10 +287,15 @@ export default class Audit {
             );
             cursor = result[0];
             if (result[1].length > 0) {
-                items = await this.redisClient.mget(...result[1]);
+                const pipeline = this.redisClient.pipeline();
+                result[1].forEach((key: string) => {
+                    pipeline.get(key);
+                });
+
+                const items = await pipeline.exec();
                 items.forEach((item) => {
-                    if (item) {
-                        audit.push(JSON.parse(item));
+                    if (item[1]) {
+                        audit.push(JSON.parse(item[1]));
                     }
                 });
             }
@@ -303,7 +307,6 @@ export default class Audit {
 
     async getGroupAudit(ctx: Context, groupName: string): Promise<Array<GroupAudit>> {
         const audit: Array<GroupAudit> = [];
-        let items: Array<string> = [];
 
         let cursor = '0';
         do {
@@ -316,10 +319,15 @@ export default class Audit {
             );
             cursor = result[0];
             if (result[1].length > 0) {
-                items = await this.redisClient.mget(...result[1]);
+                const pipeline = this.redisClient.pipeline();
+                result[1].forEach((key: string) => {
+                    pipeline.get(key);
+                });
+
+                const items = await pipeline.exec();
                 items.forEach((item) => {
-                    if (item) {
-                        audit.push(JSON.parse(item));
+                    if (item[1]) {
+                        audit.push(JSON.parse(item[1]));
                     }
                 });
             }

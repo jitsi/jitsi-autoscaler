@@ -95,7 +95,7 @@ export default class MetricsLoop {
                     groupMax.set({ group: group.name }, group.scalingOptions.maxDesired);
                     groupsManaged.set(instanceGroups.length);
 
-                    const currentInventory = await this.instanceTracker.getCurrent(this.ctx, group.name);
+                    const currentInventory = await this.instanceTracker.trimCurrent(this.ctx, group.name);
                     instancesCount.set({ group: group.name }, currentInventory.length);
                     runningInstancesCount.set(
                         { group: group.name },

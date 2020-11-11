@@ -81,7 +81,7 @@ export default class GroupReportGenerator {
         };
 
         // Get the list of instances from redis and from the cloud manager
-        const instanceStates = await this.instanceTracker.getCurrent(ctx, groupName, false);
+        const instanceStates = await this.instanceTracker.trimCurrent(ctx, groupName, false);
         groupReport.count = instanceStates.length;
 
         let cloudInstances: CloudInstance[] = retrievedCloudInstances;

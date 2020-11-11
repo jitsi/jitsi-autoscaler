@@ -21,6 +21,7 @@ export enum JibriHealthState {
     Healthy = 'HEALTHY',
     Unhealthy = 'UNHEALTHY',
 }
+
 interface JibriStatusReport {
     status: JibriStatus;
 }
@@ -84,6 +85,7 @@ export interface InstanceMetadata {
     privateIp?: string;
     version?: string;
     name?: string;
+
     [key: string]: string;
 }
 
@@ -131,6 +133,8 @@ export class InstanceTracker {
         this.metricTTL = options.metricTTL;
 
         this.track = this.track.bind(this);
+        this.getInstanceStates = this.getInstanceStates.bind(this);
+        this.filterOutAndTrimExpiredStates = this.filterOutAndTrimExpiredStates.bind(this);
     }
 
     // @TODO: handle stats for instances
@@ -169,6 +173,10 @@ export class InstanceTracker {
         return await this.track(ctx, instanceState, shutdownStatus);
     }
 
+    private getGroupInstancesStatesKey(groupName: string): string {
+        return `instances:status:${groupName}`;
+    }
+
     async track(ctx: Context, state: InstanceState, shutdownStatus = false): Promise<boolean> {
         let group = 'default';
         // pull the group from metadata if provided
@@ -176,32 +184,21 @@ export class InstanceTracker {
             group = state.metadata.group;
         }
 
+        const instanceStateTimestamp = Number(state.timestamp);
+        if (!instanceStateTimestamp) {
+            state.timestamp = Date.now();
+        }
+
         // Store latest instance status
-        const key = `instance:cstatus:${group}:${state.instanceId}`;
+        await this.redisClient.hset(
+            this.getGroupInstancesStatesKey(group),
+            `${state.instanceId}`,
+            JSON.stringify(state),
+        );
 
-        let statusTTL = this.idleTTL;
-        if (state.status.provisioning) {
-            statusTTL = this.provisioningTTL;
-        }
         const isInstanceShuttingDown = state.shutdownStatus || shutdownStatus;
-        if (isInstanceShuttingDown) {
-            // We keep shutdown status a bit longer, to be consistent to Oracle Search API which has a delay in seeing Terminating status
-            statusTTL = this.shutdownStatusTTL;
-        }
-
-        const result = await this.redisClient.set(key, JSON.stringify(state), 'ex', statusTTL);
-        if (result !== 'OK') {
-            ctx.logger.error(`unable to set ${key}`);
-            throw new Error(`unable to set ${key}`);
-        }
-
         // Store metric, but only for running instances
         if (!state.status.provisioning && !isInstanceShuttingDown) {
-            let metricTimestamp = Number(state.timestamp);
-            if (!metricTimestamp) {
-                metricTimestamp = Date.now();
-            }
-
             let metricValue = 0;
             let trackMetric = true;
             switch (state.instanceType) {
@@ -222,10 +219,10 @@ export class InstanceTracker {
             }
 
             if (trackMetric) {
-                const metricKey = `metric:instance:${group}:${state.instanceId}:${metricTimestamp}`;
+                const metricKey = `metric:instance:${group}:${state.instanceId}:${state.timestamp}`;
                 const metricObject: InstanceMetric = {
                     instanceId: state.instanceId,
-                    timestamp: metricTimestamp,
+                    timestamp: state.timestamp,
                     value: metricValue,
                 };
                 const resultMetric = await this.redisClient.set(
@@ -386,33 +383,31 @@ export class InstanceTracker {
         }
     }
 
-    async getCurrent(ctx: Context, group: string, filterShutdown = true): Promise<Array<InstanceState>> {
-        const states: Array<InstanceState> = [];
+    async trimCurrent(ctx: Context, group: string, filterShutdown = true): Promise<Array<InstanceState>> {
+        let states: Array<InstanceState> = [];
         const currentStart = process.hrtime();
+        const groupInstancesStatesKey = this.getGroupInstancesStatesKey(group);
 
         let cursor = '0';
         let scanCounts = 0;
         do {
-            const result = await this.redisClient.scan(
+            const result = await this.redisClient.hscan(
+                groupInstancesStatesKey,
                 cursor,
                 'match',
-                `instance:cstatus:${group}:*`,
+                `*`,
                 'count',
                 this.redisScanCount,
             );
             cursor = result[0];
             if (result[1].length > 0) {
-                const pipeline = this.redisClient.pipeline();
-                result[1].forEach((key: string) => {
-                    pipeline.get(key);
-                });
-
-                const items = await pipeline.exec();
-                items.forEach((item) => {
-                    if (item) {
-                        states.push(JSON.parse(item[1]));
-                    }
-                });
+                const instanceStates = await this.getInstanceStates(result[1], groupInstancesStatesKey);
+                const validInstanceStates = await this.filterOutAndTrimExpiredStates(
+                    ctx,
+                    groupInstancesStatesKey,
+                    instanceStates,
+                );
+                states = states.concat(validInstanceStates);
             }
             scanCounts++;
         } while (cursor != '0');
@@ -441,6 +436,67 @@ export class InstanceTracker {
             return statesExceptShutDown;
         }
         return states;
+    }
+
+    private async getInstanceStates(fields: string[], groupInstancesStatesKey: string): Promise<Array<InstanceState>> {
+        const instanceStatesResponse: Array<InstanceState> = [];
+        const pipeline = this.redisClient.pipeline();
+
+        fields.forEach((instanceId: string) => {
+            pipeline.hget(groupInstancesStatesKey, instanceId);
+        });
+        const instanceStates = await pipeline.exec();
+
+        for (const state of instanceStates) {
+            if (state[1]) {
+                instanceStatesResponse.push(JSON.parse(state[1]));
+            }
+        }
+        return instanceStatesResponse;
+    }
+
+    private async filterOutAndTrimExpiredStates(
+        ctx: Context,
+        groupInstancesStatesKey: string,
+        instanceStates: Array<InstanceState>,
+    ): Promise<Array<InstanceState>> {
+        const groupInstancesStatesResponse: Array<InstanceState> = [];
+        const deletePipeline = this.redisClient.pipeline();
+
+        const shutdownStatuses: boolean[] = await this.shutdownManager.getShutdownStatuses(
+            ctx,
+            instanceStates.map((instanceState) => {
+                return instanceState.instanceId;
+            }),
+        );
+
+        for (let i = 0; i < instanceStates.length; i++) {
+            const state = instanceStates[i];
+            let statusTTL = this.idleTTL;
+            if (state.status && state.status.provisioning) {
+                statusTTL = this.provisioningTTL;
+            }
+
+            const isInstanceShuttingDown = state.shutdownStatus || shutdownStatuses[i];
+            if (isInstanceShuttingDown) {
+                // We keep shutdown status a bit longer, to be consistent to Oracle Search API which has a delay in seeing Terminating status
+                statusTTL = this.shutdownStatusTTL;
+            }
+
+            const expiresAt = new Date(state.timestamp + 1000 * statusTTL);
+            const isValidState: boolean = expiresAt >= new Date();
+            if (isValidState) {
+                groupInstancesStatesResponse.push(state);
+            } else {
+                deletePipeline.hdel(groupInstancesStatesKey, state.instanceId);
+                ctx.logger.debug(`will delete expired state:`, {
+                    expiresAt,
+                    state,
+                });
+            }
+        }
+        await deletePipeline.exec();
+        return groupInstancesStatesResponse;
     }
 
     async filterOutInstancesShuttingDown(ctx: Context, states: Array<InstanceState>): Promise<Array<InstanceState>> {

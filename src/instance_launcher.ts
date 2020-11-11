@@ -70,7 +70,7 @@ export default class InstanceLauncher {
 
         await this.audit.updateLastLauncherRun(group.name);
         const desiredCount = group.scalingOptions.desiredCount;
-        const currentInventory = await this.instanceTracker.getCurrent(ctx, groupName);
+        const currentInventory = await this.instanceTracker.trimCurrent(ctx, groupName);
         const count = currentInventory.length;
 
         try {

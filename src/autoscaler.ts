@@ -69,7 +69,7 @@ export default class AutoscaleProcessor {
             await this.audit.updateLastAutoScalerRun(group.name);
 
             ctx.logger.info(`[AutoScaler] Gathering metrics for desired count adjustments for group ${group.name}`);
-            const currentInventory = await this.instanceTracker.getCurrent(ctx, group.name);
+            const currentInventory = await this.instanceTracker.trimCurrent(ctx, group.name);
             const count = currentInventory.length;
 
             const maxPeriodCount = Math.max(

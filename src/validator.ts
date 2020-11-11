@@ -24,7 +24,7 @@ export default class Validator {
     }
 
     async groupHasActiveInstances(context: Context, name: string): Promise<boolean> {
-        const instanceStates = await this.instanceTracker.getCurrent(context, name, false);
+        const instanceStates = await this.instanceTracker.trimCurrent(context, name, false);
         return instanceStates.length > 0;
     }
 

@@ -319,7 +319,7 @@ export class InstanceTracker {
 
                 const items = await pipeline.exec();
                 items.forEach((item) => {
-                    if (item) {
+                    if (item[1]) {
                         const itemJson = JSON.parse(item[1]);
 
                         const periodIdx = Math.floor(

@@ -110,6 +110,7 @@ export interface InstanceTrackerOptions {
     metricTTL: number;
     provisioningTTL: number;
     shutdownStatusTTL: number;
+    groupRelatedDataTTL: number;
 }
 
 export class InstanceTracker {
@@ -121,6 +122,7 @@ export class InstanceTracker {
     private readonly provisioningTTL: number;
     private readonly shutdownStatusTTL: number;
     private readonly metricTTL: number;
+    private readonly groupRelatedDataTTL: number;
 
     constructor(options: InstanceTrackerOptions) {
         this.redisClient = options.redisClient;
@@ -131,6 +133,7 @@ export class InstanceTracker {
         this.provisioningTTL = options.provisioningTTL;
         this.shutdownStatusTTL = options.shutdownStatusTTL;
         this.metricTTL = options.metricTTL;
+        this.groupRelatedDataTTL = options.groupRelatedDataTTL;
 
         this.track = this.track.bind(this);
         this.getInstanceStates = this.getInstanceStates.bind(this);
@@ -177,6 +180,15 @@ export class InstanceTracker {
         return `instances:status:${groupName}`;
     }
 
+    private getGroupMetricsKey(groupName: string): string {
+        return `gmetric:instance:${groupName}`;
+    }
+
+    private async extendTTLForKey(key: string, ttl: number): Promise<boolean> {
+        const result = await this.redisClient.expire(key, ttl);
+        return result == 1;
+    }
+
     async track(ctx: Context, state: InstanceState, shutdownStatus = false): Promise<boolean> {
         let group = 'default';
         // pull the group from metadata if provided
@@ -219,22 +231,16 @@ export class InstanceTracker {
             }
 
             if (trackMetric) {
-                const metricKey = `metric:instance:${group}:${state.instanceId}:${state.timestamp}`;
                 const metricObject: InstanceMetric = {
                     instanceId: state.instanceId,
                     timestamp: state.timestamp,
                     value: metricValue,
                 };
-                const resultMetric = await this.redisClient.set(
-                    metricKey,
+                await this.redisClient.zadd(
+                    this.getGroupMetricsKey(group),
+                    metricObject.timestamp,
                     JSON.stringify(metricObject),
-                    'ex',
-                    this.metricTTL,
                 );
-                if (resultMetric !== 'OK') {
-                    ctx.logger.error(`unable to set ${metricKey}`);
-                    throw new Error(`unable to set ${metricKey}`);
-                }
             }
         }
 
@@ -294,50 +300,46 @@ export class InstanceTracker {
     ): Promise<Array<Array<InstanceMetric>>> {
         const metricPoints: Array<Array<InstanceMetric>> = [];
         const currentTime = Date.now();
+        const validUntil = new Date(currentTime - 1000 * this.metricTTL).getTime();
+
+        // Extend TTL longer enough for the key to be deleted only after the group is deleted or no action is performed on it
+        await this.extendTTLForKey(this.getGroupMetricsKey(group), this.groupRelatedDataTTL);
+
+        const cleanupStart = process.hrtime();
+        const itemsCleanedUp: number = await this.redisClient.zremrangebyscore(
+            this.getGroupMetricsKey(group),
+            0,
+            validUntil,
+        );
+        const cleanupEnd = process.hrtime(cleanupStart);
+        ctx.logger.info(
+            `Cleaned up ${itemsCleanedUp} metrics in ${
+                cleanupEnd[0] * 1000 + cleanupEnd[1] / 1000000
+            } ms, for group ${group}`,
+        );
 
         for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
             metricPoints[periodIdx] = [];
         }
 
-        let cursor = '0';
-        let scanCount = 0;
         const inventoryStart = process.hrtime();
-        do {
-            const result = await this.redisClient.scan(
-                cursor,
-                'match',
-                `metric:instance:${group}:*`,
-                'count',
-                this.redisScanCount,
-            );
-            cursor = result[0];
-            if (result[1].length > 0) {
-                const pipeline = this.redisClient.pipeline();
-                result[1].forEach((key: string) => {
-                    pipeline.get(key);
-                });
+        const items: string[] = await this.redisClient.zrange(this.getGroupMetricsKey(group), 0, -1);
 
-                const items = await pipeline.exec();
-                items.forEach((item) => {
-                    if (item[1]) {
-                        const itemJson = JSON.parse(item[1]);
-
-                        const periodIdx = Math.floor(
-                            (currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000),
-                        );
-                        if (periodIdx >= 0 && periodIdx < periodsCount) {
-                            metricPoints[periodIdx].push(itemJson);
-                        }
-                    }
-                });
+        items.forEach((item) => {
+            if (item) {
+                const itemJson = JSON.parse(item);
+                const periodIdx = Math.floor((currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000));
+                if (periodIdx >= 0 && periodIdx < periodsCount) {
+                    metricPoints[periodIdx].push(itemJson);
+                }
             }
-            scanCount++;
-        } while (cursor != '0');
+        });
+
         const inventoryEnd = process.hrtime(inventoryStart);
         ctx.logger.debug(`instance metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });
 
         ctx.logger.info(
-            `Scanned ${metricPoints.length} metrics in ${scanCount} scans and ${
+            `Returned ${metricPoints.length} metrics in ${
                 inventoryEnd[0] * 1000 + inventoryEnd[1] / 1000000
             } ms, for group ${group}`,
         );
@@ -387,6 +389,9 @@ export class InstanceTracker {
         let states: Array<InstanceState> = [];
         const currentStart = process.hrtime();
         const groupInstancesStatesKey = this.getGroupInstancesStatesKey(group);
+
+        // Extend TTL longer enough for the key to be deleted only after the group is deleted or no action is performed on it
+        await this.extendTTLForKey(groupInstancesStatesKey, this.groupRelatedDataTTL);
 
         let cursor = '0';
         let scanCounts = 0;

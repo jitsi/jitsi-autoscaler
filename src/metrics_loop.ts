@@ -1,6 +1,6 @@
 import Redis from 'ioredis';
 import * as promClient from 'prom-client';
-import InstanceGroupManager from './instance_group';
+import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { InstanceState, InstanceTracker } from './instance_tracker';
 import { CloudInstance } from './cloud_manager';
@@ -70,7 +70,7 @@ export default class MetricsLoop {
     private metricsTTL: number;
     private instanceGroupManager: InstanceGroupManager;
     private instanceTracker: InstanceTracker;
-
+    private groupLabels: Set<string>;
     private ctx: Context;
 
     constructor(options: MetricsLoopOptions) {
@@ -79,11 +79,14 @@ export default class MetricsLoop {
         this.instanceGroupManager = options.instanceGroupManager;
         this.instanceTracker = options.instanceTracker;
         this.ctx = options.ctx;
+        this.groupLabels = new Set<string>();
     }
 
     async updateMetrics(): Promise<void> {
         try {
-            const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(this.ctx);
+            const instanceGroups: InstanceGroup[] = await this.instanceGroupManager.getAllInstanceGroups(this.ctx);
+
+            this.updateGroupLabelsAndFixMetrics(instanceGroups);
 
             await Promise.all(
                 instanceGroups.map(async (group) => {
@@ -121,6 +124,40 @@ export default class MetricsLoop {
             this.ctx.logger.warn(`[MetricsLoop] Error updating in memory metrics`, { err });
             return;
         }
+    }
+
+    /**
+     * Adds new group labels and removes the no longer existing group labels.
+     * Ensures the gauges will no longer hold the values for non-existing groups.
+     */
+    private updateGroupLabelsAndFixMetrics(instanceGroups: InstanceGroup[]) {
+        const instanceGroupNamesSet = new Set<string>();
+
+        instanceGroups.forEach((instanceGroup) => {
+            if (instanceGroup.name) {
+                const groupName = instanceGroup.name;
+                instanceGroupNamesSet.add(groupName);
+                this.groupLabels.add(groupName);
+            }
+        });
+
+        this.groupLabels.forEach((groupLabel) => {
+            if (!instanceGroupNamesSet.has(groupLabel)) {
+                this.removeGroupMetrics(groupLabel);
+                this.groupLabels.delete(groupLabel);
+                this.ctx.logger.info(`[MetricsLoop] Deleted invalid metrics group label ${groupLabel}`);
+            }
+        });
+    }
+
+    private removeGroupMetrics(groupName: string) {
+        groupDesired.remove(groupName);
+        groupMin.remove(groupName);
+        groupMax.remove(groupName);
+        instancesCount.remove(groupName);
+        runningInstancesCount.remove(groupName);
+        instancesCountCloud.remove(groupName);
+        untrackedInstancesCountCloud.remove(groupName);
     }
 
     countNonProvisioningInstances(ctx: Context, states: Array<InstanceState>): number {

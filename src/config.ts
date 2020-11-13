@@ -44,6 +44,7 @@ const env = envalid.cleanEnv(process.env, {
     SHUTDOWN_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
     SHUTDOWN_STATUS_TTL_SEC: envalid.num({ default: 600 }), // default 10 minutes
     AUDIT_TTL_SEC: envalid.num({ default: 172800 }), // default 2 day
+    GROUP_RELATED_DATA_TTL_SEC: envalid.num({ default: 172800 }), // default 2 day; keep group related data max 2 days after the group is deleted or no action is performed on it
     GROUP_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     GROUP_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 30 }), // with what interval this instance should try producing jobs for group processing
     SANITY_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 240 }), // with what interval this instance should try producing jobs for sanity check
@@ -96,6 +97,7 @@ export default {
     ShutdownStatusTTL: env.SHUTDOWN_STATUS_TTL_SEC,
     ShutDownTTL: env.SHUTDOWN_TTL_SEC,
     AuditTTL: env.AUDIT_TTL_SEC,
+    GroupRelatedDataTTL: env.GROUP_RELATED_DATA_TTL_SEC,
     // group processing lock
     GroupLockTTLMs: env.GROUP_LOCK_TTL_MS,
     // queue jobs producers

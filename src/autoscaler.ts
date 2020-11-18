@@ -66,7 +66,7 @@ export default class AutoscaleProcessor {
                 ctx.logger.info(`[AutoScaler] Wait before allowing desired count adjustments for group ${group.name}`);
                 return false;
             }
-            await this.audit.updateLastAutoScalerRun(group.name);
+            await this.audit.updateLastAutoScalerRun(ctx, group.name);
 
             ctx.logger.info(`[AutoScaler] Gathering metrics for desired count adjustments for group ${group.name}`);
             const currentInventory = await this.instanceTracker.trimCurrent(ctx, group.name);

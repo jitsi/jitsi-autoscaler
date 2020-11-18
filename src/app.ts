@@ -71,6 +71,7 @@ const audit = new Audit({
     redisClient: redisClient,
     redisScanCount: config.RedisScanCount,
     auditTTL: config.AuditTTL,
+    groupRelatedDataTTL: config.GroupRelatedDataTTL,
 });
 
 const shutdownManager = new ShutdownManager({

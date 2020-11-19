@@ -12,7 +12,7 @@ export interface InstanceAudit {
 export interface GroupAudit {
     groupName: string;
     type: string;
-    timestamp: number | string;
+    timestamp?: number | string;
     autoScalerActionItem?: AutoScalerActionItem;
     launcherActionItem?: LauncherActionItem;
 }
@@ -53,17 +53,20 @@ export interface AuditOptions {
     redisClient: Redis.Redis;
     redisScanCount: number;
     auditTTL: number;
+    groupRelatedDataTTL: number;
 }
 
 export default class Audit {
     private redisClient: Redis.Redis;
     private readonly redisScanCount: number;
     private readonly auditTTL: number;
+    private readonly groupRelatedDataTTL: number;
 
     constructor(options: AuditOptions) {
         this.redisClient = options.redisClient;
         this.redisScanCount = options.redisScanCount;
         this.auditTTL = options.auditTTL;
+        this.groupRelatedDataTTL = options.groupRelatedDataTTL;
     }
 
     async saveLatestStatus(groupName: string, instanceId: string, instanceState: InstanceState): Promise<boolean> {
@@ -138,22 +141,87 @@ export default class Audit {
         return true;
     }
 
-    async updateLastLauncherRun(groupName: string): Promise<boolean> {
+    private getGroupAuditActionsKey(groupName: string): string {
+        return `group-audit-actions:${groupName}`;
+    }
+
+    private async extendTTLForKey(key: string, ttl: number): Promise<boolean> {
+        const result = await this.redisClient.expire(key, ttl);
+        return result == 1;
+    }
+
+    private async setGroupValue(groupName: string, value: GroupAudit): Promise<boolean> {
+        let timestamp = value.timestamp;
+        if (!timestamp) {
+            timestamp = Date.now();
+        }
+        await this.redisClient.zadd(this.getGroupAuditActionsKey(groupName), timestamp, JSON.stringify(value));
+        return true;
+    }
+
+    async updateLastLauncherRun(ctx: Context, groupName: string): Promise<boolean> {
+        const updateLastLaunchStart = process.hrtime();
+
+        // Extend TTL longer enough for the key to be deleted only after the group is deleted or no action is performed on it
+        await this.extendTTLForKey(this.getGroupAuditActionsKey(groupName), this.groupRelatedDataTTL);
+        await this.cleanupGroupActionsAudit(ctx, groupName);
+
         const value: GroupAudit = {
             groupName: groupName,
             type: 'last-launcher-run',
-            timestamp: Date.now(),
         };
-        return this.setGroupValue(`audit:${groupName}:last-launcher-run`, value, this.auditTTL);
+        const updateResponse = this.setGroupValue(groupName, value);
+
+        const updateLastLaunchEnd = process.hrtime(updateLastLaunchStart);
+        ctx.logger.info(
+            `Updated last launcher run in ${
+                updateLastLaunchEnd[0] * 1000 + updateLastLaunchEnd[1] / 1000000
+            } ms, for group ${groupName}`,
+        );
+
+        return updateResponse;
     }
 
-    async updateLastAutoScalerRun(groupName: string): Promise<boolean> {
+    async updateLastAutoScalerRun(ctx: Context, groupName: string): Promise<boolean> {
+        const updateLastAutoScalerStart = process.hrtime();
+
+        // Extend TTL longer enough for the key to be deleted only after the group is deleted or no action is performed on it
+        await this.extendTTLForKey(this.getGroupAuditActionsKey(groupName), this.groupRelatedDataTTL);
+        await this.cleanupGroupActionsAudit(ctx, groupName);
+
         const value: GroupAudit = {
             groupName: groupName,
             type: 'last-autoScaler-run',
-            timestamp: Date.now(),
         };
-        return this.setGroupValue(`audit:${groupName}:last-autoScaler-run`, value, this.auditTTL);
+        const updateResponse = this.setGroupValue(groupName, value);
+
+        const updateLastAutoScalerEnd = process.hrtime(updateLastAutoScalerStart);
+        ctx.logger.info(
+            `Updated last autoScaler run in ${
+                updateLastAutoScalerEnd[0] * 1000 + updateLastAutoScalerEnd[1] / 1000000
+            } ms, for group ${groupName}`,
+        );
+
+        return updateResponse;
+    }
+
+    private async cleanupGroupActionsAudit(ctx: Context, groupName: string): Promise<boolean> {
+        const currentTime = Date.now();
+        const cleanupUntil = new Date(currentTime - 1000 * this.auditTTL).getTime();
+
+        const cleanupStart = process.hrtime();
+        const itemsCleanedUp: number = await this.redisClient.zremrangebyscore(
+            this.getGroupAuditActionsKey(groupName),
+            0,
+            cleanupUntil,
+        );
+        const cleanupEnd = process.hrtime(cleanupStart);
+        ctx.logger.info(
+            `Cleaned up ${itemsCleanedUp} group audit actions in ${
+                cleanupEnd[0] * 1000 + cleanupEnd[1] / 1000000
+            } ms, for group ${groupName}`,
+        );
+        return true;
     }
 
     async saveLauncherActionItem(groupName: string, launcherActionItem: LauncherActionItem): Promise<boolean> {
@@ -164,11 +232,7 @@ export default class Audit {
             launcherActionItem: launcherActionItem,
         };
 
-        return this.setGroupValue(
-            `audit:${groupName}:launcher-action-item:${launcherActionItem.timestamp}`,
-            value,
-            this.auditTTL,
-        );
+        return this.setGroupValue(groupName, value);
     }
 
     async saveAutoScalerActionItem(groupName: string, autoScalerActionItem: AutoScalerActionItem): Promise<boolean> {
@@ -179,19 +243,7 @@ export default class Audit {
             autoScalerActionItem: autoScalerActionItem,
         };
 
-        return this.setGroupValue(
-            `audit:${groupName}:autoScaler-action-item:${autoScalerActionItem.timestamp}`,
-            value,
-            this.auditTTL,
-        );
-    }
-
-    async setGroupValue(key: string, value: GroupAudit, ttl: number): Promise<boolean> {
-        const result = await this.redisClient.set(key, JSON.stringify(value), 'ex', ttl);
-        if (result !== 'OK') {
-            throw new Error(`unable to set ${key}`);
-        }
-        return true;
+        return this.setGroupValue(groupName, value);
     }
 
     async generateInstanceAudit(ctx: Context, groupName: string): Promise<InstanceAuditResponse[]> {
@@ -308,31 +360,28 @@ export default class Audit {
     async getGroupAudit(ctx: Context, groupName: string): Promise<Array<GroupAudit>> {
         const audit: Array<GroupAudit> = [];
 
-        let cursor = '0';
-        do {
-            const result = await this.redisClient.scan(
-                cursor,
-                'match',
-                `audit:${groupName}:*`,
-                'count',
-                this.redisScanCount,
-            );
-            cursor = result[0];
-            if (result[1].length > 0) {
-                const pipeline = this.redisClient.pipeline();
-                result[1].forEach((key: string) => {
-                    pipeline.get(key);
-                });
-
-                const items = await pipeline.exec();
-                items.forEach((item) => {
-                    if (item[1]) {
-                        audit.push(JSON.parse(item[1]));
-                    }
-                });
+        const groupAuditStart = process.hrtime();
+        const items: string[] = await this.redisClient.zrange(this.getGroupAuditActionsKey(groupName), 0, -1);
+        for (const item of items) {
+            if (item) {
+                const groupAudit: GroupAudit = JSON.parse(item);
+                if (!groupAudit.timestamp) {
+                    const scoreAsTimestamp = await this.redisClient.zscore(
+                        this.getGroupAuditActionsKey(groupName),
+                        JSON.stringify(groupAudit),
+                    );
+                    groupAudit.timestamp = Number(scoreAsTimestamp);
+                }
+                audit.push(groupAudit);
             }
-        } while (cursor != '0');
-        ctx.logger.debug(`Group audit: `, { groupName, audit });
+        }
+        const groupAuditEnd = process.hrtime(groupAuditStart);
+
+        ctx.logger.info(
+            `Returned ${items.length} group audit actions in ${
+                groupAuditEnd[0] * 1000 + groupAuditEnd[1] / 1000000
+            } ms, for group ${groupName}`,
+        );
 
         return audit;
     }

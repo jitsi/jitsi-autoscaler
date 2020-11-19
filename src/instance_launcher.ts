@@ -165,8 +165,17 @@ export default class InstanceLauncher {
                 { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
             );
         }
+        // Try to not scale down the running instances unless needed
+        // This is needed in case of scale up problems, when we should terminate the provisioning instances first
+        let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
+        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
+            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
+                this.getRunningInstances(unprotectedInstances),
+            );
+        }
+
         // now return first N instances, least loaded first
-        return this.mapToInstanceDetails(unprotectedInstances.slice(0, actualScaleDownQuantity));
+        return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
     }
 
     getJibrisForScaleDown(
@@ -257,6 +266,16 @@ export default class InstanceLauncher {
             return (
                 (!instanceState.status.jibriStatus && !instanceState.status.jvbStatus) ||
                 instanceState.status.provisioning == true
+            );
+        });
+        return this.mapToInstanceDetails(states);
+    }
+
+    private getRunningInstances(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+        const states = instanceStates.filter((instanceState) => {
+            return (
+                (instanceState.status.jibriStatus || instanceState.status.jvbStatus) &&
+                instanceState.status.provisioning == false
             );
         });
         return this.mapToInstanceDetails(states);

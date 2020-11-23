@@ -55,6 +55,9 @@ const env = envalid.cleanEnv(process.env, {
     METRICS_LOOP_INTERVAL_MS: envalid.num({ default: 60000 }), // time in ms
     OCI_CONFIGURATION_FILE_PATH: envalid.str(),
     OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),
+    COMPUTE_EXT_CALL_MAX_TIME_IN_SECONDS: envalid.num({ default: 60 }),
+    COMPUTE_EXT_CALL_MAX_DELAY_IN_SECONDS: envalid.num({ default: 30 }),
+    COMPUTE_EXT_CALL_RETRYABLE_STATUS_CODES: envalid.str({ default: '429 409' }), // Retry on Too Many Requests, Conflict
     REPORT_EXT_CALL_MAX_TIME_IN_SECONDS: envalid.num({ default: 60 }),
     REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS: envalid.num({ default: 30 }),
     REPORT_EXT_CALL_RETRYABLE_STATUS_CODES: envalid.str({ default: '429 409' }), // Retry on Too Many Requests, Conflict
@@ -114,6 +117,14 @@ export default {
     // other
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
     OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,
+    // retry config for compute, e.g. launching instances
+    ComputeExtCallMaxTimeInSeconds: env.COMPUTE_EXT_CALL_MAX_TIME_IN_SECONDS,
+    ComputeExtCallMaxDelayInSeconds: env.COMPUTE_EXT_CALL_MAX_DELAY_IN_SECONDS,
+    ComputeExtCallRetryableStatusCodes: env.COMPUTE_EXT_CALL_RETRYABLE_STATUS_CODES.split(' ').map(
+        (statusCodeAsString) => {
+            return Number(statusCodeAsString);
+        },
+    ),
     ReportExtCallMaxTimeInSeconds: env.REPORT_EXT_CALL_MAX_TIME_IN_SECONDS,
     ReportExtCallMaxDelayInSeconds: env.REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS,
     ReportExtCallRetryableStatusCodes: env.REPORT_EXT_CALL_RETRYABLE_STATUS_CODES.split(' ').map(

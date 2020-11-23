@@ -18,6 +18,7 @@ export interface CloudManagerOptions {
     instanceTracker: InstanceTracker;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
+    ociComputeRetryStrategy: CloudRetryStrategy;
     audit: Audit;
 }
 
@@ -38,6 +39,7 @@ export default class CloudManager {
         this.isDryRun = options.isDryRun;
         this.oracleInstanceManager = new OracleCloudManager({
             isDryRun: options.isDryRun,
+            ociComputeRetryStrategy: options.ociComputeRetryStrategy,
             ociConfigurationFilePath: options.ociConfigurationFilePath,
             ociConfigurationProfile: options.ociConfigurationProfile,
         });

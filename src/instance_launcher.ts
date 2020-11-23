@@ -34,6 +34,7 @@ export interface InstanceLauncherOptions {
     redisClient: Redis.Redis;
     shutdownManager: ShutdownManager;
     audit: Audit;
+    minSecondsBetweenRuns: number;
 }
 
 export default class InstanceLauncher {
@@ -44,6 +45,7 @@ export default class InstanceLauncher {
     private lockManager: LockManager;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
+    private minSecondsBetweenRuns: number;
 
     constructor(options: InstanceLauncherOptions) {
         this.instanceTracker = options.instanceTracker;
@@ -53,6 +55,7 @@ export default class InstanceLauncher {
         this.redisClient = options.redisClient;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
+        this.minSecondsBetweenRuns = options.minSecondsBetweenRuns;
 
         this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
     }
@@ -65,6 +68,12 @@ export default class InstanceLauncher {
 
         if (!group.enableLaunch) {
             ctx.logger.info(`[Launcher] Scaling not enabled for group ${group.name}`);
+            return false;
+        }
+
+        const secondsSinceRun = await this.audit.getSecondsSinceLastLauncherRun(groupName);
+        if (secondsSinceRun && secondsSinceRun < this.minSecondsBetweenRuns) {
+            ctx.logger.info(`[Launcher] Skipping job for ${group.name} as launcher was run in the last ${this.minSecondsBetweenRuns} seconds`);
             return false;
         }
 

@@ -18,6 +18,7 @@ export interface AutoscaleProcessorOptions {
     lockManager: LockManager;
     redisClient: Redis.Redis;
     audit: Audit;
+    minSecondsBetweenRuns: number;
 }
 
 export default class AutoscaleProcessor {
@@ -27,6 +28,7 @@ export default class AutoscaleProcessor {
     private redisClient: Redis.Redis;
     private lockManager: LockManager;
     private audit: Audit;
+    private minSecondsBetweenRuns: number;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
@@ -38,6 +40,7 @@ export default class AutoscaleProcessor {
         this.lockManager = options.lockManager;
         this.redisClient = options.redisClient;
         this.audit = options.audit;
+        this.minSecondsBetweenRuns = options.minSecondsBetweenRuns;
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
@@ -61,6 +64,13 @@ export default class AutoscaleProcessor {
                 ctx.logger.info(`[AutoScaler] Autoscaling not enabled for group ${group.name}`);
                 return false;
             }
+
+            const secondsSinceRun = await this.audit.getSecondsSinceLastAutoscaleRun(groupName);
+            if (secondsSinceRun && secondsSinceRun < this.minSecondsBetweenRuns) {
+                ctx.logger.info(`[Launcher] Skipping job for ${groupName} as launcher was run in the last ${this.minSecondsBetweenRuns} seconds`);
+                return false;
+            }
+
             const autoscalingAllowed = await this.instanceGroupManager.allowAutoscaling(group.name);
             if (!autoscalingAllowed) {
                 ctx.logger.info(`[AutoScaler] Wait before allowing desired count adjustments for group ${group.name}`);

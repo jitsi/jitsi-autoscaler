@@ -95,6 +95,11 @@ const instanceTracker = new InstanceTracker({
 const cloudManager = new CloudManager({
     shutdownManager: shutdownManager,
     isDryRun: config.DryRun,
+    ociComputeRetryStrategy: {
+        maxTimeInSeconds: config.ComputeExtCallMaxTimeInSeconds,
+        maxDelayInSeconds: config.ComputeExtCallMaxDelayInSeconds,
+        retryableStatusCodes: config.ComputeExtCallRetryableStatusCodes,
+    },
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
     instanceTracker: instanceTracker,
@@ -133,6 +138,7 @@ const autoscaleProcessor = new AutoscaleProcessor({
     lockManager: lockManager,
     redisClient,
     audit: audit,
+    minSecondsBetweenRuns: Math.max(config.GroupJobsCreationIntervalSec - 10, 0),
 });
 
 const instanceLauncher = new InstanceLauncher({
@@ -143,6 +149,7 @@ const instanceLauncher = new InstanceLauncher({
     redisClient,
     shutdownManager,
     audit: audit,
+    minSecondsBetweenRuns: Math.max(config.GroupJobsCreationIntervalSec - 10, 0),
 });
 
 const metricsLoop = new MetricsLoop({

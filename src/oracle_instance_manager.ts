@@ -21,6 +21,7 @@ export interface OracleInstanceManagerOptions {
     isDryRun: boolean;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
+    ociComputeRetryStrategy: CloudRetryStrategy;
 }
 
 export default class OracleInstanceManager {
@@ -28,9 +29,11 @@ export default class OracleInstanceManager {
     private provider: common.ConfigFileAuthenticationDetailsProvider;
     private identityClient: identity.IdentityClient;
     private computeManagementClient: core.ComputeManagementClient;
+    private ociComputeRetryStrategy: CloudRetryStrategy;
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
+        this.ociComputeRetryStrategy = options.ociComputeRetryStrategy;
         this.provider = new common.ConfigFileAuthenticationDetailsProvider(
             options.ociConfigurationFilePath,
             options.ociConfigurationProfile,
@@ -39,6 +42,23 @@ export default class OracleInstanceManager {
         this.computeManagementClient = new core.ComputeManagementClient({
             authenticationDetailsProvider: this.provider,
         });
+        this.computeManagementClient.clientConfiguration = {
+            retryConfiguration: {
+                terminationStrategy: new common.MaxTimeTerminationStrategy(
+                    this.ociComputeRetryStrategy.maxTimeInSeconds,
+                ),
+                delayStrategy: new common.ExponentialBackoffDelayStrategy(
+                    this.ociComputeRetryStrategy.maxDelayInSeconds,
+                ),
+                retryCondition: (response) => {
+                    return (
+                        this.ociComputeRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
+                            return response.statusCode === retryableStatusCode;
+                        }).length > 0
+                    );
+                },
+            },
+        };
 
         this.launchInstances = this.launchInstances.bind(this);
         this.getAvailabilityDomains = this.getAvailabilityDomains.bind(this);

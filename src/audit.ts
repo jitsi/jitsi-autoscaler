@@ -1,6 +1,7 @@
 import Redis from 'ioredis';
 import { InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
+import { JobType } from './job_manager';
 
 export interface InstanceAudit {
     instanceId: string;
@@ -169,8 +170,9 @@ export default class Audit {
         const value: GroupAudit = {
             groupName: groupName,
             type: 'last-launcher-run',
+            timestamp: Date.now(),
         };
-        const updateResponse = this.setGroupValue(groupName, value);
+        this.setLastRunValue(groupName, JobType.Launch, value);
 
         const updateLastLaunchEnd = process.hrtime(updateLastLaunchStart);
         ctx.logger.info(
@@ -179,7 +181,7 @@ export default class Audit {
             } ms, for group ${groupName}`,
         );
 
-        return updateResponse;
+        return true;
     }
 
     async updateLastAutoScalerRun(ctx: Context, groupName: string): Promise<boolean> {
@@ -192,8 +194,9 @@ export default class Audit {
         const value: GroupAudit = {
             groupName: groupName,
             type: 'last-autoScaler-run',
+            timestamp: Date.now(),
         };
-        const updateResponse = this.setGroupValue(groupName, value);
+        this.setLastRunValue(groupName, JobType.Autoscale, value);
 
         const updateLastAutoScalerEnd = process.hrtime(updateLastAutoScalerStart);
         ctx.logger.info(
@@ -202,7 +205,45 @@ export default class Audit {
             } ms, for group ${groupName}`,
         );
 
-        return updateResponse;
+        return true;
+    }
+
+    async getSecondsSinceLastAutoscaleRun(groupName: string): Promise<number> {
+        return await this.getSecondsSinceLastRun(groupName, JobType.Autoscale);
+    }
+
+    async getSecondsSinceLastLauncherRun(groupName: string): Promise<number> {
+        return await this.getSecondsSinceLastRun(groupName, JobType.Launch);
+    }
+
+    private async setLastRunValue(group: string, jobType: JobType, value: GroupAudit): Promise<boolean> {
+        const key = `last-${jobType}-run:${group}`;
+        const result = await this.redisClient.set(key, JSON.stringify(value), 'ex', this.auditTTL);
+        if (result !== 'OK') {
+            throw new Error(`unable to set ${key}`);
+        }
+        return true;
+    }
+
+    private async getLastRunValue(group: string, jobType: JobType): Promise<GroupAudit> {
+        const key = `last-${jobType}-run:${group}`;
+        const result = await this.redisClient.get(key);
+        if (result !== null && result.length > 0) {
+            return JSON.parse(result);
+        } else {
+            return null;
+        }
+    }
+
+    private async getSecondsSinceLastRun(group: string, jobType: JobType): Promise<number> {
+        const groupAudit: GroupAudit = await this.getLastRunValue(group, jobType);
+        if (groupAudit && groupAudit.timestamp) {
+            const now = Date.now();
+            const diffMs = now - Number(groupAudit.timestamp);
+            return diffMs / 1000;
+        } else {
+            return null;
+        }
     }
 
     private async cleanupGroupActionsAudit(ctx: Context, groupName: string): Promise<boolean> {
@@ -284,28 +325,32 @@ export default class Audit {
     }
 
     async generateGroupAudit(ctx: Context, groupName: string): Promise<GroupAuditResponse> {
-        const groupAudits: Array<GroupAudit> = await this.getGroupAudit(ctx, groupName);
+        const groupActionsAudits: Array<GroupAudit> = await this.getGroupActionsAudit(ctx, groupName);
 
         const groupAuditResponse: GroupAuditResponse = {
             lastLauncherRun: 'unknown',
             lastAutoScalerRun: 'unknown',
         };
 
+        const lastLauncherRun: GroupAudit = await this.getLastRunValue(groupName, JobType.Launch);
+        if (lastLauncherRun) {
+            groupAuditResponse.lastLauncherRun = new Date(lastLauncherRun.timestamp).toUTCString();
+        }
+
+        const lastAutoscalerRun: GroupAudit = await this.getLastRunValue(groupName, JobType.Autoscale);
+        if (lastAutoscalerRun) {
+            groupAuditResponse.lastAutoScalerRun = new Date(lastAutoscalerRun.timestamp).toUTCString();
+        }
+
         const autoScalerActionItems: AutoScalerActionItem[] = [];
         const launcherActionItems: LauncherActionItem[] = [];
-        for (const groupAudit of groupAudits) {
-            switch (groupAudit.type) {
-                case 'last-launcher-run':
-                    groupAuditResponse.lastLauncherRun = new Date(groupAudit.timestamp).toUTCString();
-                    break;
-                case 'last-autoScaler-run':
-                    groupAuditResponse.lastAutoScalerRun = new Date(groupAudit.timestamp).toUTCString();
-                    break;
+        for (const groupActionAudit of groupActionsAudits) {
+            switch (groupActionAudit.type) {
                 case 'launcher-action-item':
-                    launcherActionItems.push(groupAudit.launcherActionItem);
+                    launcherActionItems.push(groupActionAudit.launcherActionItem);
                     break;
                 case 'autoScaler-action-item':
-                    autoScalerActionItems.push(groupAudit.autoScalerActionItem);
+                    autoScalerActionItems.push(groupActionAudit.autoScalerActionItem);
                     break;
             }
         }
@@ -357,7 +402,7 @@ export default class Audit {
         return audit;
     }
 
-    async getGroupAudit(ctx: Context, groupName: string): Promise<Array<GroupAudit>> {
+    async getGroupActionsAudit(ctx: Context, groupName: string): Promise<Array<GroupAudit>> {
         const audit: Array<GroupAudit> = [];
 
         const groupAuditStart = process.hrtime();

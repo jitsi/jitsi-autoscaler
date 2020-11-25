@@ -87,7 +87,7 @@ export default class AutoscaleProcessor {
 
             await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
         } finally {
-            lock.unlock();
+            await lock.unlock();
         }
 
         return true;

@@ -167,7 +167,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            lock.unlock();
+            await lock.unlock();
         }
     }
 
@@ -190,7 +190,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            lock.unlock();
+            await lock.unlock();
         }
     }
 
@@ -208,7 +208,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            lock.unlock();
+            await lock.unlock();
         }
     }
 
@@ -226,7 +226,7 @@ class Handlers {
             res.status(200);
             res.send({ save: 'OK' });
         } finally {
-            lock.unlock();
+            await lock.unlock();
         }
     }
 
@@ -256,7 +256,7 @@ class Handlers {
             res.status(200);
             res.send({ instanceGroups: instanceGroups });
         } finally {
-            lock.unlock();
+            await lock.unlock();
         }
     }
 
@@ -317,7 +317,7 @@ class Handlers {
                         await this.instanceGroupManager.upsertInstanceGroup(ctx, initialGroup);
                     }
                 } finally {
-                    lock.unlock();
+                    await lock.unlock();
                 }
             }),
         );
@@ -360,7 +360,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            lock.unlock();
+            await lock.unlock();
         }
     }
 
@@ -398,7 +398,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            lock.unlock();
+            await lock.unlock();
         }
     }
 }

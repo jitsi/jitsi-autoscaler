@@ -194,9 +194,15 @@ export default class InstanceLauncher {
         // Try to not scale down the available and the busy instances unless needed
         // This is needed in case of scale up problems, when we should terminate the provisioning instances first
         let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
+
         if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
             listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
                 this.getAvailableJibris(unprotectedInstances),
+            );
+        }
+        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
+            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
+                this.getExpiredJibris(unprotectedInstances),
             );
         }
         if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
@@ -285,6 +291,16 @@ export default class InstanceLauncher {
         const states = instanceStates.filter((instanceState) => {
             return (
                 instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Idle
+            );
+        });
+        return this.mapToInstanceDetails(states);
+    }
+
+    private getExpiredJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+        const states = instanceStates.filter((instanceState) => {
+            return (
+                instanceState.status.jibriStatus &&
+                instanceState.status.jibriStatus.busyStatus == JibriStatusState.Expired
             );
         });
         return this.mapToInstanceDetails(states);

@@ -233,8 +233,18 @@ class Handlers {
     async getInstanceGroups(req: Request, res: Response): Promise<void> {
         const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(req.context);
 
+        const sortedInstanceGroups = instanceGroups.sort((groupA, groupB) => {
+            if (!groupA) {
+                return 1;
+            } else if (!groupB) {
+                return -1;
+            } else {
+                return groupA.name.localeCompare(groupB.name);
+            }
+        });
+
         res.status(200);
-        res.send({ instanceGroups: instanceGroups });
+        res.send({ instanceGroups: sortedInstanceGroups });
     }
 
     async getInstanceGroup(req: Request, res: Response): Promise<void> {

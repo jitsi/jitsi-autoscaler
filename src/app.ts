@@ -24,6 +24,7 @@ import { ClientOpts } from 'redis';
 import { body, param, validationResult } from 'express-validator';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
+import ScalingManager from './scaling_options_manager';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -187,6 +188,11 @@ const jobManager = new JobManager({
     sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,
 });
 
+const scalingManager = new ScalingManager({
+    lockManager: lockManager,
+    instanceGroupManager: instanceGroupManager,
+});
+
 async function startProcessingGroups() {
     logger.info('Start pooling..');
 
@@ -243,6 +249,7 @@ const h = new Handlers({
     groupReportGenerator: groupReportGenerator,
     lockManager: lockManager,
     audit: audit,
+    scalingManager: scalingManager,
 });
 
 const validator = new Validator({ instanceTracker, instanceGroupManager });
@@ -499,6 +506,43 @@ app.post(
                 return res.status(400).json({ errors: errors.array() });
             }
             await h.launchProtectedInstanceGroup(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+app.put(
+    '/groups/options/full-scaling',
+    body('options.minDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('options.maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('options.desiredCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('options.scaleUpQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('options.scaleDownQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('options.scaleUpThreshold').optional().isFloat({ min: 0 }).withMessage('Value must be positive'),
+    body('options.scaleDownThreshold').optional().isFloat({ min: 0 }).withMessage('Value must be positive'),
+    body('options.scalePeriod').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('options.scaleUpPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('options.scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('instanceType').custom(async (value) => {
+        if (!(await validator.supportedInstanceType(value))) {
+            throw new Error('Instance type not supported. Use jvb or jibri instead');
+        }
+        return true;
+    }),
+    body('direction').custom(async (value) => {
+        if (!(await validator.supportedScalingDirection(value))) {
+            throw new Error('Scaling direction not supported. Use up or down instead');
+        }
+        return true;
+    }),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.updateFullScalingOptionsForGroups(req, res);
         } catch (err) {
             next(err);
         }

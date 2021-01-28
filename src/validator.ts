@@ -47,4 +47,20 @@ export default class Validator {
         const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(name);
         return count + instanceGroup.scalingOptions.desiredCount <= instanceGroup.scalingOptions.maxDesired;
     }
+
+    async supportedInstanceType(instanceType: string): Promise<boolean> {
+        return (
+            instanceType !== null &&
+            instanceType !== '' &&
+            (instanceType.toLowerCase() == 'jibri' || instanceType.toLowerCase() == 'jvb')
+        );
+    }
+
+    async supportedScalingDirection(direction: string): Promise<boolean> {
+        return (
+            direction !== null &&
+            direction !== '' &&
+            (direction.toLowerCase() == 'up' || direction.toLowerCase() == 'down')
+        );
+    }
 }

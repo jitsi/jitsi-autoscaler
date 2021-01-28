@@ -14,6 +14,7 @@ import Redlock from 'redlock';
 import ShutdownManager from './shutdown_manager';
 import GroupReportGenerator from './group_report';
 import Audit from './audit';
+import ScalingManager from './scaling_options_manager';
 
 interface SidecarResponse {
     shutdown: boolean;
@@ -40,6 +41,43 @@ interface InstanceGroupScalingOptionsRequest {
     scaleUpPeriodsCount?: number;
     scaleDownPeriodsCount?: number;
 }
+export interface FullScalingOptions {
+    minDesired: number;
+    maxDesired: number;
+    desiredCount: number;
+    scaleUpQuantity: number;
+    scaleDownQuantity: number;
+    scaleUpThreshold: number;
+    scaleDownThreshold: number;
+    scalePeriod: number;
+    scaleUpPeriodsCount: number;
+    scaleDownPeriodsCount: number;
+}
+export interface FullScalingOptionsResponse {
+    groupsToBeUpdated: number;
+    groupsUpdated: number;
+}
+
+export interface FullScalingOptionsRequest {
+    direction: string;
+    region: string;
+    instanceType: string;
+    options: FullScalingOptions;
+}
+
+export interface ScalingOptionsRequest {
+    minDesired: number;
+    maxDesired: number;
+    desiredCount: number;
+    scaleUpQuantity: number;
+    scaleDownQuantity: number;
+    scaleUpThreshold: number;
+    scaleDownThreshold: number;
+    scalePeriod: number;
+    scaleUpPeriodsCount: number;
+    scaleDownPeriodsCount: number;
+}
+
 interface InstanceConfigurationUpdateRequest {
     instanceConfigurationId: string;
 }
@@ -51,6 +89,7 @@ interface HandlersOptions {
     instanceGroupManager: InstanceGroupManager;
     groupReportGenerator: GroupReportGenerator;
     lockManager: LockManager;
+    scalingManager: ScalingManager;
 }
 
 export interface JibriState {
@@ -67,6 +106,7 @@ class Handlers {
     private groupReportGenerator: GroupReportGenerator;
     private lockManager: LockManager;
     private audit: Audit;
+    private scalingManager: ScalingManager;
 
     constructor(options: HandlersOptions) {
         this.jibriStateWebhook = this.jibriStateWebhook.bind(this);
@@ -78,6 +118,7 @@ class Handlers {
         this.shutdownManager = options.shutdownManager;
         this.groupReportGenerator = options.groupReportGenerator;
         this.audit = options.audit;
+        this.scalingManager = options.scalingManager;
     }
 
     async jibriStateWebhook(req: Request, res: Response): Promise<void> {
@@ -420,6 +461,21 @@ class Handlers {
         } finally {
             await lock.unlock();
         }
+    }
+
+    async updateFullScalingOptionsForGroups(req: Request, res: Response): Promise<void> {
+        const request: FullScalingOptionsRequest = req.body;
+
+        const response: FullScalingOptionsResponse = await this.scalingManager.updateFullScalingOptionsForGroups(
+            request,
+            req.context,
+        );
+
+        res.status(response.groupsToBeUpdated == response.groupsUpdated ? 200 : 206);
+        res.send({
+            groupsToBeUpdated: response.groupsToBeUpdated,
+            groupsUpdated: response.groupsUpdated,
+        });
     }
 }
 

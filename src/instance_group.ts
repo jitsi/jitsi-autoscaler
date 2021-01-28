@@ -28,6 +28,7 @@ export interface InstanceGroup {
     protectedTTLSec: number;
     scalingOptions: ScalingOptions;
     cloud: string;
+    tags: { [id: string]: string };
 }
 
 export interface InstanceGroupManagerOptions {
@@ -174,6 +175,42 @@ export default class InstanceGroupManager {
             } ms`,
         );
         return instanceGroups;
+    }
+
+    async getAllInstanceGroupsFiltered(
+        ctx: Context,
+        expectedTags: { [id: string]: string },
+    ): Promise<Array<InstanceGroup>> {
+        const allGroups = await this.getAllInstanceGroups(ctx);
+
+        const filteredGroups = allGroups.filter((group) => InstanceGroupManager.filterGroups(ctx, group, expectedTags));
+        ctx.logger.info(`Found groups with tags: ${filteredGroups.length} `, { expectedTags });
+        return filteredGroups;
+    }
+
+    private static filterGroups(ctx: Context, group: InstanceGroup, expectedTags: { [id: string]: string }): boolean {
+        if (!expectedTags || Object.keys(expectedTags).length == 0) {
+            return true;
+        }
+
+        if (!group.tags) {
+            ctx.logger.debug(`Skipping group as it has no tags, for group ${group.name}`);
+            return false;
+        }
+
+        for (const expectedTagName in expectedTags) {
+            const expectedTagValue = expectedTags[expectedTagName];
+
+            if (!group.tags[expectedTagName] || !(group.tags[expectedTagName] === expectedTagValue)) {
+                ctx.logger.debug(
+                    `Skipping group due to invalid or missing tag, for group ${group.name}, expected tag key: ${expectedTagName}, expected value: ${expectedTagValue}, actual value: ${group.tags[expectedTagName]}`,
+                    { tags: group.tags },
+                );
+                return false;
+            }
+        }
+
+        return true;
     }
 
     async deleteInstanceGroup(ctx: Context, groupName: string): Promise<void> {

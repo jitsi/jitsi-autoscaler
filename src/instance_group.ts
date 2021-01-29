@@ -127,6 +127,22 @@ export default class InstanceGroupManager {
         }, new Map<string, InstanceGroup>());
     }
 
+    async getAllInstanceGroupsByTypeAndRegion(
+        ctx: Context,
+        type: string,
+        region: string,
+    ): Promise<Array<InstanceGroup>> {
+        const groups = await this.getAllInstanceGroups(ctx);
+
+        function byTypeAndRegion(group: InstanceGroup) {
+            return group.type.toLowerCase() == type.toLowerCase() && group.region.toLowerCase() == region.toLowerCase();
+        }
+
+        const instanceGroups = groups.filter(byTypeAndRegion);
+        ctx.logger.info(`Found ${instanceGroups.length} groups of type ${type} in region ${region}`);
+        return instanceGroups;
+    }
+
     async getAllInstanceGroupNames(ctx: Context): Promise<string[]> {
         const start = process.hrtime();
         const result = await this.redisClient.hkeys(this.GROUPS_HASH_NAME);

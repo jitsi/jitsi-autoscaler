@@ -48,6 +48,9 @@
         "scaleUpPeriodsCount": 2,
         "scaleDownPeriodsCount": 4
       },
+      "tags": {
+        "release_number": "150"
+      },
       "cloud": "oracle"
     }
   ]

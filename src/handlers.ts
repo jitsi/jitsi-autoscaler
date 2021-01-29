@@ -231,7 +231,17 @@ class Handlers {
     }
 
     async getInstanceGroups(req: Request, res: Response): Promise<void> {
-        const instanceGroups = await this.instanceGroupManager.getAllInstanceGroups(req.context);
+        const expectedTags: { [id: string]: string } = {};
+
+        for (const propertyName in req.query) {
+            if (propertyName.startsWith('tag.')) {
+                const key = propertyName.slice('tag.'.length);
+                const value = req.query[propertyName] as string;
+                expectedTags[key] = value;
+            }
+        }
+
+        const instanceGroups = await this.instanceGroupManager.getAllInstanceGroupsFiltered(req.context, expectedTags);
 
         const sortedInstanceGroups = instanceGroups.sort((groupA, groupB) => {
             if (!groupA) {

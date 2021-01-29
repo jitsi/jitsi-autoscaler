@@ -85,7 +85,6 @@ export default class MetricsLoop {
     async updateMetrics(): Promise<void> {
         try {
             const instanceGroups: InstanceGroup[] = await this.instanceGroupManager.getAllInstanceGroups(this.ctx);
-
             this.updateGroupLabelsAndFixMetrics(instanceGroups);
 
             await Promise.all(
@@ -121,7 +120,7 @@ export default class MetricsLoop {
                 }),
             );
         } catch (err) {
-            this.ctx.logger.warn(`[MetricsLoop] Error updating in memory metrics`, { err });
+            this.ctx.logger.warn(`[MetricsLoop] Error updating in memory metrics ${err}`, { err });
             return;
         }
     }

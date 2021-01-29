@@ -24,6 +24,7 @@ interface SidecarResponse {
 interface InstanceGroupScalingActivitiesRequest {
     enableAutoScale?: boolean;
     enableLaunch?: boolean;
+    enableScheduler?: boolean;
 }
 
 export interface InstanceGroupDesiredValuesRequest {
@@ -214,6 +215,7 @@ class Handlers {
 
     async updateScalingActivities(req: Request, res: Response): Promise<void> {
         const scalingActivitiesRequest: InstanceGroupScalingActivitiesRequest = req.body;
+
         const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
             const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
@@ -223,6 +225,9 @@ class Handlers {
                 }
                 if (scalingActivitiesRequest.enableLaunch != null) {
                     instanceGroup.enableLaunch = scalingActivitiesRequest.enableLaunch;
+                }
+                if (scalingActivitiesRequest.enableScheduler != null) {
+                    instanceGroup.enableScheduler = scalingActivitiesRequest.enableScheduler;
                 }
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 res.status(200);

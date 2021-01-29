@@ -24,6 +24,7 @@ export interface InstanceGroup {
     instanceConfigurationId: string;
     enableAutoScale: boolean;
     enableLaunch: boolean;
+    enableScheduler: boolean;
     gracePeriodTTLSec: number;
     protectedTTLSec: number;
     scalingOptions: ScalingOptions;

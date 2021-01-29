@@ -27,14 +27,19 @@ export default class ScalingManager {
             `Updating scaling options for groups of type ${request.instanceType} in region ${request.region}, scaling ${request.direction}`,
         );
 
-        const instanceGroups = await this.instanceGroupManager.getAllInstanceGroupsByTypeAndRegion(
+        const instanceGroupsByRegion = await this.instanceGroupManager.getAllInstanceGroupsByTypeAndRegion(
             ctx,
             request.instanceType,
             request.region,
         );
+        //If the scheduler is not explicitly disabled, consider it enabled
+        const instanceGroups = instanceGroupsByRegion.filter(
+            (group) => group.enableScheduler == null || group.enableScheduler == true,
+        );
         if (instanceGroups.length == 0) {
             ctx.logger.info(
-                `No groups of type ${request.instanceType} were found to update in region ${request.region}`,
+                `No groups of type ${request.instanceType} were found to update in region ${request.region}.
+                Found ${instanceGroupsByRegion.length} instance groups, but 0 instances have scheduler enabled`,
             );
             return {
                 groupsToBeUpdated: 0,

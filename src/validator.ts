@@ -43,9 +43,14 @@ export default class Validator {
         return this.groupHasValidDesiredValues(minDesired, maxDesired, desiredCount);
     }
 
-    async canLaunchInstances(name: string, count: number): Promise<boolean> {
+    async canLaunchInstances(name: string, count: number, newMaximum = 0): Promise<boolean> {
         const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(name);
-        return count + instanceGroup.scalingOptions.desiredCount <= instanceGroup.scalingOptions.maxDesired;
+        // take new maximum into consideration, if set
+        let max = newMaximum;
+        if (max == 0) {
+            max = instanceGroup.scalingOptions.maxDesired;
+        }
+        return count + instanceGroup.scalingOptions.desiredCount <= max;
     }
 
     async supportedInstanceType(instanceType: string): Promise<boolean> {

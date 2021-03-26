@@ -149,17 +149,9 @@ export default class OracleInstanceManager {
                 compartmentId: compartmentId,
             },
         );
-        return availabilityDomainsResponse.items
-            .filter((adResponse) => {
-                if (region.toString() == 'eu-frankfurt-1') {
-                    return adResponse.name.endsWith('1') || adResponse.name.endsWith('2');
-                } else {
-                    return true;
-                }
-            })
-            .map((adResponse) => {
-                return adResponse.name;
-            });
+        return availabilityDomainsResponse.items.map((adResponse) => {
+            return adResponse.name;
+        });
     }
 
     private async getFaultDomains(

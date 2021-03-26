@@ -136,7 +136,10 @@ export default class OracleInstanceManager {
 
             return launchResponse.instance.id;
         } catch (err) {
-            ctx.logger.error(`[oracle] Failed launching instance number ${index + 1} in group ${groupName}`, { err });
+            ctx.logger.error(
+                `[oracle] Failed launching instance number ${index + 1} in group ${groupName} with err ${err}`,
+                { err, availabilityDomain, faultDomain },
+            );
             return false;
         }
     }

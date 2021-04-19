@@ -1,13 +1,5 @@
 import { Request, Response } from 'express';
-import {
-    InstanceTracker,
-    InstanceState,
-    InstanceStatus,
-    StatsReport,
-    InstanceDetails,
-    JibriStatus,
-    InstanceMetadata,
-} from './instance_tracker';
+import { InstanceTracker, StatsReport, InstanceDetails } from './instance_tracker';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import Redlock from 'redlock';
@@ -93,13 +85,6 @@ interface HandlersOptions {
     scalingManager: ScalingManager;
 }
 
-export interface JibriState {
-    jibriId: string;
-    status: JibriStatus;
-    timestamp?: number;
-    metadata: InstanceMetadata;
-}
-
 class Handlers {
     private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
@@ -110,7 +95,6 @@ class Handlers {
     private scalingManager: ScalingManager;
 
     constructor(options: HandlersOptions) {
-        this.jibriStateWebhook = this.jibriStateWebhook.bind(this);
         this.sidecarPoll = this.sidecarPoll.bind(this);
 
         this.lockManager = options.lockManager;
@@ -120,31 +104,6 @@ class Handlers {
         this.groupReportGenerator = options.groupReportGenerator;
         this.audit = options.audit;
         this.scalingManager = options.scalingManager;
-    }
-
-    async jibriStateWebhook(req: Request, res: Response): Promise<void> {
-        const instate: JibriState = req.body;
-        if (!instate.status) {
-            res.sendStatus(400);
-            return;
-        }
-        if (!instate.jibriId) {
-            res.sendStatus(400);
-            return;
-        }
-        const state = <InstanceState>{
-            instanceId: instate.jibriId,
-            instanceType: 'jibri',
-            timestamp: instate.timestamp,
-            metadata: instate.metadata,
-            status: <InstanceStatus>{
-                jibriStatus: instate.status,
-                provisioning: false,
-            },
-        };
-
-        await this.instanceTracker.track(req.context, state);
-        res.sendStatus(200);
     }
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {

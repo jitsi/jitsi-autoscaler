@@ -118,6 +118,7 @@ export default class GroupReportGenerator {
             }
             switch (group.type) {
                 case 'jibri':
+                case 'sip-jibri':
                     if (instanceReport.scaleStatus == JibriStatusState.Idle) {
                         groupReport.availableCount++;
                     }
@@ -162,6 +163,7 @@ export default class GroupReportGenerator {
             } else {
                 switch (group.type) {
                     case 'jibri':
+                    case 'sip-jibri':
                         instanceReport.scaleStatus = 'SIDECAR_RUNNING';
                         if (instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus) {
                             instanceReport.scaleStatus = instanceState.status.jibriStatus.busyStatus.toString();

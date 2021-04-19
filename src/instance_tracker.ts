@@ -164,6 +164,7 @@ export class InstanceTracker {
             let jibriStatusReport: JibriStatusReport;
             switch (report.instance.instanceType) {
                 case 'jibri':
+                case 'sip-jibri':
                     jibriStatusReport = <JibriStatusReport>report.stats;
                     instanceState.status.jibriStatus = jibriStatusReport.status;
                     break;
@@ -215,6 +216,7 @@ export class InstanceTracker {
             let trackMetric = true;
             switch (state.instanceType) {
                 case 'jibri':
+                case 'sip-jibri':
                     if (state.status.jibriStatus && state.status.jibriStatus.busyStatus == JibriStatusState.Idle) {
                         metricValue = 1;
                     }
@@ -257,6 +259,7 @@ export class InstanceTracker {
     ): Promise<Array<number>> {
         switch (group.type) {
             case 'jibri':
+            case 'sip-jibri':
                 return this.getAvailableMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
             case 'JVB':
                 return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);

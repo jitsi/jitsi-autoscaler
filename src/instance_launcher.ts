@@ -234,6 +234,7 @@ export default class InstanceLauncher {
         let listOfInstancesForScaleDown: Array<InstanceDetails> = [];
         switch (group.type) {
             case 'jibri':
+            case 'sip-jibri':
                 listOfInstancesForScaleDown = this.getJibrisForScaleDown(
                     ctx,
                     group,

@@ -181,19 +181,18 @@ export default class AutoscaleProcessor {
     private scaleUpChoice(group: InstanceGroup, count: number, value: number): boolean {
         switch (group.type) {
             case 'jibri':
+            case 'sip-jibri':
                 // in the jibri case only scale up if value (available count) is below threshold
                 return (
                     (count < group.scalingOptions.maxDesired && value < group.scalingOptions.scaleUpThreshold) ||
                     count < group.scalingOptions.minDesired
                 );
-                break;
             case 'JVB':
                 // in the case of JVB scale up only if value (average stress level) is above or equal to threshhold
                 return (
                     (count < group.scalingOptions.maxDesired && value >= group.scalingOptions.scaleUpThreshold) ||
                     count < group.scalingOptions.minDesired
                 );
-                break;
         }
         return false;
     }
@@ -201,6 +200,7 @@ export default class AutoscaleProcessor {
     private scaleDownChoice(group: InstanceGroup, count: number, value: number): boolean {
         switch (group.type) {
             case 'jibri':
+            case 'sip-jibri':
                 // in the jibri case only scale up if value (available count) is above threshold
                 return count > group.scalingOptions.minDesired && value > group.scalingOptions.scaleDownThreshold;
             case 'JVB':

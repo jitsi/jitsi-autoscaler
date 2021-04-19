@@ -253,7 +253,7 @@ const h = new Handlers({
 });
 
 const validator = new Validator({ instanceTracker, instanceGroupManager });
-const loggedPaths = ['/hook/v1/status', '/sidecar*', '/groups*'];
+const loggedPaths = ['/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use('/', context.injectContext);
 app.use(loggedPaths, context.accessLogger);
@@ -298,14 +298,6 @@ if (config.ProtectedApi) {
 } else {
     logger.warn('starting in unprotected api mode');
 }
-
-app.post('/hook/v1/status', async (req, res, next) => {
-    try {
-        await h.jibriStateWebhook(req, res);
-    } catch (err) {
-        next(err);
-    }
-});
 
 app.post('/sidecar/poll', async (req, res, next) => {
     try {
@@ -526,7 +518,7 @@ app.put(
     body('options.scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('instanceType').custom(async (value) => {
         if (!(await validator.supportedInstanceType(value))) {
-            throw new Error('Instance type not supported. Use jvb or jibri instead');
+            throw new Error('Instance type not supported. Use jvb, jibri or sip-jibri instead');
         }
         return true;
     }),

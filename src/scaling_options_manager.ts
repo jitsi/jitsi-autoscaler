@@ -24,13 +24,14 @@ export default class ScalingManager {
         ctx: Context,
     ): Promise<FullScalingOptionsResponse> {
         ctx.logger.info(
-            `Updating scaling options for groups of type ${request.instanceType} in region ${request.region}, scaling ${request.direction}`,
+            `Updating scaling options for groups environment ${request.environment} of type ${request.instanceType} in region ${request.region}, scaling ${request.direction}`,
         );
 
         const instanceGroupsByRegion = await this.instanceGroupManager.getAllInstanceGroupsByTypeAndRegion(
             ctx,
             request.instanceType,
             request.region,
+            request.environment,
         );
         //If the scheduler is not explicitly disabled, consider it enabled
         const instanceGroups = instanceGroupsByRegion.filter(

@@ -132,15 +132,22 @@ export default class InstanceGroupManager {
         ctx: Context,
         type: string,
         region: string,
+        environment: string,
     ): Promise<Array<InstanceGroup>> {
         const groups = await this.getAllInstanceGroups(ctx);
 
         function byTypeAndRegion(group: InstanceGroup) {
-            return group.type.toLowerCase() == type.toLowerCase() && group.region.toLowerCase() == region.toLowerCase();
+            return (
+                group.type.toLowerCase() == type.toLowerCase() &&
+                group.region.toLowerCase() == region.toLowerCase() &&
+                group.environment.toLowerCase() == environment.toLowerCase()
+            );
         }
 
         const instanceGroups = groups.filter(byTypeAndRegion);
-        ctx.logger.info(`Found ${instanceGroups.length} groups of type ${type} in region ${region}`);
+        ctx.logger.info(
+            `Found ${instanceGroups.length} groups environment ${environment} of type ${type} in region ${region}`,
+        );
         return instanceGroups;
     }
 

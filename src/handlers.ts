@@ -60,6 +60,7 @@ export interface FullScalingOptionsResponse {
 }
 
 export interface FullScalingOptionsRequest {
+    environment: string;
     direction: string;
     region: string;
     instanceType: string;

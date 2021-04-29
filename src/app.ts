@@ -495,11 +495,7 @@ app.post(
     body('count').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('count').custom(async (value, { req }) => {
-        let max = 0;
-        if (req.body.maxDesired) {
-            max = req.body.maxDesired;
-        }
-        if (!(await validator.canLaunchInstances(req.params.name, value, max))) {
+        if (!(await validator.canLaunchInstances(req, value))) {
             throw new Error(`Max desired value must be increased first if you want to launch ${value} new instances.`);
         }
         return true;

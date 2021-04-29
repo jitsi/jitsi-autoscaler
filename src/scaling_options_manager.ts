@@ -27,7 +27,7 @@ export default class ScalingManager {
             `Updating scaling options for groups environment ${request.environment} of type ${request.instanceType} in region ${request.region}, scaling ${request.direction}`,
         );
 
-        const instanceGroupsByRegion = await this.instanceGroupManager.getAllInstanceGroupsByTypeAndRegion(
+        const instanceGroupsByRegion = await this.instanceGroupManager.getAllInstanceGroupsByTypeRegionEnvironment(
             ctx,
             request.instanceType,
             request.region,
@@ -39,7 +39,7 @@ export default class ScalingManager {
         );
         if (instanceGroups.length == 0) {
             ctx.logger.info(
-                `No groups of type ${request.instanceType} were found to update in region ${request.region}.
+                `No groups of type ${request.instanceType} were found to update in environment ${request.environment} region ${request.region}.
                 Found ${instanceGroupsByRegion.length} instance groups, but 0 instances have scheduler enabled`,
             );
             return {
@@ -57,7 +57,7 @@ export default class ScalingManager {
                 }),
             );
             ctx.logger.info(
-                `Groups of type ${request.instanceType} from region ${request.region} are now updated with the new scaling options`,
+                `Groups of type ${request.instanceType} from environment ${request.environment} region  ${request.region} are now updated with the new scaling options`,
                 { instanceType: request.instanceType },
                 { region: request.region },
                 { fullScalingOptions: request.options },

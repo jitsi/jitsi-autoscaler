@@ -128,7 +128,7 @@ export default class InstanceGroupManager {
         }, new Map<string, InstanceGroup>());
     }
 
-    async getAllInstanceGroupsByTypeAndRegion(
+    async getAllInstanceGroupsByTypeRegionEnvironment(
         ctx: Context,
         type: string,
         region: string,

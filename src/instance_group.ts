@@ -136,7 +136,7 @@ export default class InstanceGroupManager {
     ): Promise<Array<InstanceGroup>> {
         const groups = await this.getAllInstanceGroups(ctx);
 
-        function byTypeAndRegion(group: InstanceGroup) {
+        function byTypeRegionEnvironment(group: InstanceGroup) {
             return (
                 group.type.toLowerCase() == type.toLowerCase() &&
                 group.region.toLowerCase() == region.toLowerCase() &&
@@ -144,7 +144,7 @@ export default class InstanceGroupManager {
             );
         }
 
-        const instanceGroups = groups.filter(byTypeAndRegion);
+        const instanceGroups = groups.filter(byTypeRegionEnvironment);
         ctx.logger.info(
             `Found ${instanceGroups.length} groups environment ${environment} of type ${type} in region ${region}`,
         );

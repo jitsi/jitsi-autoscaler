@@ -487,7 +487,7 @@ app.post(
     body('count').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('count').custom(async (value, { req }) => {
-        if (!(await validator.canLaunchInstances(req, value))) {
+        if (!(await validator.canLaunchInstances(<express.Request>req, value))) {
             throw new Error(`Max desired value must be increased first if you want to launch ${value} new instances.`);
         }
         return true;

@@ -485,8 +485,9 @@ app.post('/groups/actions/reset', async (req, res, next) => {
 app.post(
     '/groups/:name/actions/launch-protected',
     body('count').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('count').custom(async (value, { req }) => {
-        if (!(await validator.canLaunchInstances(req.params.name, value))) {
+        if (!(await validator.canLaunchInstances(req, value))) {
             throw new Error(`Max desired value must be increased first if you want to launch ${value} new instances.`);
         }
         return true;

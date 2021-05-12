@@ -368,6 +368,9 @@ class Handlers {
                 if (requestBody.instanceConfigurationId != null) {
                     group.instanceConfigurationId = requestBody.instanceConfigurationId;
                 }
+                if (requestBody.maxDesired != null) {
+                    group.scalingOptions.maxDesired = requestBody.maxDesired;
+                }
                 group.scalingOptions.desiredCount = group.scalingOptions.desiredCount + requestBody.count;
                 group.protectedTTLSec = scaleDownProtectedTTL;
 

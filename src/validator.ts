@@ -1,5 +1,6 @@
 import { InstanceTracker } from './instance_tracker';
 import { Context } from './context';
+import { Request } from 'express';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import { InstanceGroupDesiredValuesRequest } from './handlers';
 
@@ -43,9 +44,21 @@ export default class Validator {
         return this.groupHasValidDesiredValues(minDesired, maxDesired, desiredCount);
     }
 
-    async canLaunchInstances(name: string, count: number): Promise<boolean> {
-        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(name);
-        return count + instanceGroup.scalingOptions.desiredCount <= instanceGroup.scalingOptions.maxDesired;
+    async canLaunchInstances(req: Request, count: number): Promise<boolean> {
+        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+        // take new maximum into consideration, if set
+        let max = 0;
+        if (req.body.maxDesired != null) {
+            if (max > instanceGroup.scalingOptions.maxDesired) {
+                max = req.body.maxDesired;
+            } else {
+                max = instanceGroup.scalingOptions.maxDesired;
+            }
+        } else {
+            max = instanceGroup.scalingOptions.maxDesired;
+        }
+
+        return count + instanceGroup.scalingOptions.desiredCount <= max;
     }
 
     async supportedInstanceType(instanceType: string): Promise<boolean> {

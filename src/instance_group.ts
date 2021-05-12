@@ -128,19 +128,26 @@ export default class InstanceGroupManager {
         }, new Map<string, InstanceGroup>());
     }
 
-    async getAllInstanceGroupsByTypeAndRegion(
+    async getAllInstanceGroupsByTypeRegionEnvironment(
         ctx: Context,
         type: string,
         region: string,
+        environment: string,
     ): Promise<Array<InstanceGroup>> {
         const groups = await this.getAllInstanceGroups(ctx);
 
-        function byTypeAndRegion(group: InstanceGroup) {
-            return group.type.toLowerCase() == type.toLowerCase() && group.region.toLowerCase() == region.toLowerCase();
+        function byTypeRegionEnvironment(group: InstanceGroup) {
+            return (
+                group.type.toLowerCase() == type.toLowerCase() &&
+                group.region.toLowerCase() == region.toLowerCase() &&
+                group.environment.toLowerCase() == environment.toLowerCase()
+            );
         }
 
-        const instanceGroups = groups.filter(byTypeAndRegion);
-        ctx.logger.info(`Found ${instanceGroups.length} groups of type ${type} in region ${region}`);
+        const instanceGroups = groups.filter(byTypeRegionEnvironment);
+        ctx.logger.info(
+            `Found ${instanceGroups.length} groups environment ${environment} of type ${type} in region ${region}`,
+        );
         return instanceGroups;
     }
 

@@ -187,6 +187,7 @@ export default class AutoscaleProcessor {
                     (count < group.scalingOptions.maxDesired && value < group.scalingOptions.scaleUpThreshold) ||
                     count < group.scalingOptions.minDesired
                 );
+            case 'jigasi':
             case 'JVB':
                 // in the case of JVB scale up only if value (average stress level) is above or equal to threshhold
                 return (
@@ -203,6 +204,7 @@ export default class AutoscaleProcessor {
             case 'sip-jibri':
                 // in the jibri case only scale up if value (available count) is above threshold
                 return count > group.scalingOptions.minDesired && value > group.scalingOptions.scaleDownThreshold;
+            case 'jigasi':
             case 'JVB':
                 // in the case of JVB scale down only if value (average stress level) is below threshhold
                 return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;

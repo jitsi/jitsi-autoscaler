@@ -129,6 +129,7 @@ export default class GroupReportGenerator {
                         groupReport.expiredCount++;
                     }
                     break;
+                case 'jigasi':
                 case 'JVB':
                     // @TODO: implement JVB instance counting
                     break;
@@ -167,6 +168,16 @@ export default class GroupReportGenerator {
                         instanceReport.scaleStatus = 'SIDECAR_RUNNING';
                         if (instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus) {
                             instanceReport.scaleStatus = instanceState.status.jibriStatus.busyStatus.toString();
+                        }
+                        break;
+                    case 'jigasi':
+                        // @TODO: convert Jigasi stats into more explict statuses
+                        instanceReport.scaleStatus = 'ONLINE';
+                        if (instanceState.status.jigasiStatus && instanceState.status.jigasiStatus.participants) {
+                            instanceReport.scaleStatus = 'IN USE';
+                        }
+                        if (instanceState.status.jigasiStatus && instanceState.status.jigasiStatus.graceful_shutdown) {
+                            instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
                         }
                         break;
                     case 'JVB':

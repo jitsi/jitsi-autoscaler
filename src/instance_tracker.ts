@@ -45,6 +45,15 @@ export interface JVBStatus {
     graceful_shutdown: boolean;
 }
 
+export interface JigasiStatus {
+    stress_level: number;
+    // muc_clients_configured: number;
+    // muc_clients_connected: number;
+    conferences: number;
+    participants: number;
+    // largest_conference: number;
+    graceful_shutdown: boolean;
+}
 export interface InstanceDetails {
     instanceId: string;
     instanceType: string;
@@ -71,6 +80,7 @@ export interface InstanceStatus {
     provisioning: boolean;
     jibriStatus?: JibriStatus;
     jvbStatus?: JVBStatus;
+    jigasiStatus?: JigasiStatus;
 }
 
 export interface InstanceMetric {
@@ -168,6 +178,9 @@ export class InstanceTracker {
                     jibriStatusReport = <JibriStatusReport>report.stats;
                     instanceState.status.jibriStatus = jibriStatusReport.status;
                     break;
+                case 'jigasi':
+                    instanceState.status.jigasiStatus = <JigasiStatus>report.stats;
+                    break;
                 case 'JVB':
                     instanceState.status.jvbStatus = <JVBStatus>report.stats;
                     break;
@@ -222,6 +235,14 @@ export class InstanceTracker {
                     }
                     // If Jibri is not up, the available metric is tracked with value 0
                     break;
+                case 'jigasi':
+                    if (!state.status.jigasiStatus) {
+                        // If JVB is not up, we should not use it to compute average stress level across jvbs
+                        trackMetric = false;
+                    } else if (state.status.jigasiStatus.stress_level) {
+                        metricValue = state.status.jigasiStatus.stress_level;
+                    }
+                    break;
                 case 'JVB':
                     if (!state.status.jvbStatus) {
                         // If JVB is not up, we should not use it to compute average stress level across jvbs
@@ -261,6 +282,7 @@ export class InstanceTracker {
             case 'jibri':
             case 'sip-jibri':
                 return this.getAvailableMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+            case 'jigasi':
             case 'JVB':
                 return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
         }

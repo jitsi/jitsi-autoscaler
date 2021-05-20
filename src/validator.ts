@@ -67,6 +67,7 @@ export default class Validator {
             instanceType !== '' &&
             (instanceType.toLowerCase() == 'jibri' ||
                 instanceType.toLowerCase() == 'sip-jibri' ||
+                instanceType.toLowerCase() == 'jigasi' ||
                 instanceType.toLowerCase() == 'jvb')
         );
     }

@@ -146,6 +146,38 @@ export default class InstanceLauncher {
         return true;
     }
 
+    getJigasisForScaleDown(
+        ctx: Context,
+        group: InstanceGroup,
+        unprotectedInstances: Array<InstanceState>,
+        desiredScaleDownQuantity: number,
+    ): Array<InstanceDetails> {
+        // first sort by participant count
+        unprotectedInstances.sort((a, b) => {
+            const aParticipants = a.status.jigasiStatus ? a.status.jigasiStatus.participants : 0;
+            const bParticipants = b.status.jigasiStatus ? b.status.jigasiStatus.participants : 0;
+            return aParticipants - bParticipants;
+        });
+        const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
+        if (actualScaleDownQuantity < desiredScaleDownQuantity) {
+            ctx.logger.error(
+                '[Launcher] Nr of Jigasi instances in group for scale down is less than desired scale down quantity',
+                { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
+            );
+        }
+        // Try to not scale down the running instances unless needed
+        // This is needed in case of scale up problems, when we should terminate the provisioning instances first
+        let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
+        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
+            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
+                this.getRunningInstances(unprotectedInstances),
+            );
+        }
+
+        // now return first N instances, least loaded first
+        return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
+    }
+
     getJVBsForScaleDown(
         ctx: Context,
         group: InstanceGroup,
@@ -242,6 +274,14 @@ export default class InstanceLauncher {
                     desiredScaleDownQuantity,
                 );
                 break;
+            case 'jigasi':
+                listOfInstancesForScaleDown = this.getJigasisForScaleDown(
+                    ctx,
+                    group,
+                    unprotectedInstances,
+                    desiredScaleDownQuantity,
+                );
+                break;
             case 'JVB':
                 listOfInstancesForScaleDown = this.getJVBsForScaleDown(
                     ctx,
@@ -271,7 +311,9 @@ export default class InstanceLauncher {
     private getProvisioningOrWithoutStatusInstances(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
         const states = instanceStates.filter((instanceState) => {
             return (
-                (!instanceState.status.jibriStatus && !instanceState.status.jvbStatus) ||
+                (!instanceState.status.jibriStatus &&
+                    !instanceState.status.jvbStatus &&
+                    !instanceState.status.jigasiStatus) ||
                 instanceState.status.provisioning == true
             );
         });

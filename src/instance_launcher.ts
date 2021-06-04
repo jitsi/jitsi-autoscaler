@@ -323,7 +323,9 @@ export default class InstanceLauncher {
     private getRunningInstances(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
         const states = instanceStates.filter((instanceState) => {
             return (
-                (instanceState.status.jibriStatus || instanceState.status.jvbStatus) &&
+                (instanceState.status.jibriStatus ||
+                    instanceState.status.jvbStatus ||
+                    instanceState.status.jigasiStatus) &&
                 instanceState.status.provisioning == false
             );
         });

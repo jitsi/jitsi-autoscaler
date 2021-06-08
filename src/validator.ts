@@ -47,13 +47,9 @@ export default class Validator {
     async canLaunchInstances(req: Request, count: number): Promise<boolean> {
         const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
         // take new maximum into consideration, if set
-        let max = 0;
+        let max;
         if (req.body.maxDesired != null) {
-            if (max > instanceGroup.scalingOptions.maxDesired) {
-                max = req.body.maxDesired;
-            } else {
-                max = instanceGroup.scalingOptions.maxDesired;
-            }
+            max = req.body.maxDesired;
         } else {
             max = instanceGroup.scalingOptions.maxDesired;
         }

@@ -1,5 +1,7 @@
 import OracleCloudManager from './oracle_instance_manager';
 import OracleInstanceManager from './oracle_instance_manager';
+import CustomInstanceManager from './custom_instance_manager';
+
 import { InstanceGroup } from './instance_group';
 import { InstanceTracker, InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
@@ -31,6 +33,7 @@ export interface CloudInstance {
 export default class CloudManager {
     private instanceTracker: InstanceTracker;
     private oracleInstanceManager: OracleInstanceManager;
+    private customInstanceManager: CustomInstanceManager;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
     private isDryRun: boolean;
@@ -108,6 +111,18 @@ export default class CloudManager {
                     quantity,
                 );
                 break;
+            case 'custom':
+                if (!this.customInstanceManager) {
+                    ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
+                    return 0;
+                }
+                scaleUpResult = await this.customInstanceManager.launchInstances(
+                    ctx,
+                    group,
+                    groupCurrentCount,
+                    quantity,
+                );
+                break;
             default:
                 ctx.logger.error(`Cloud type not supported: ${group.cloud}`);
                 return 0;
@@ -139,6 +154,20 @@ export default class CloudManager {
         group: InstanceGroup,
         cloudRetryStrategy: CloudRetryStrategy,
     ): Promise<Array<CloudInstance>> {
+        if (group.cloud === 'oracle') {
+            return this.getOracleInstances(ctx, group, cloudRetryStrategy);
+        }
+        if (group.cloud === 'custom') {
+            return this.getCustomInstances();
+        }
+        return [];
+    }
+
+    async getOracleInstances(
+        ctx: Context,
+        group: InstanceGroup,
+        cloudRetryStrategy: CloudRetryStrategy,
+    ): Promise<Array<CloudInstance>> {
         if (!this.oracleInstanceManager) {
             return [];
         }
@@ -154,5 +183,14 @@ export default class CloudManager {
             .filter(function (instance) {
                 return instance.cloudStatus !== 'Terminated';
             });
+    }
+
+    async getCustomInstances(): Promise<Array<CloudInstance>> {
+        if (!this.customInstanceManager) {
+            return [];
+        }
+        const customInstances = await this.customInstanceManager.getInstances();
+
+        return customInstances;
     }
 }

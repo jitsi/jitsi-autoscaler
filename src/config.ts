@@ -53,12 +53,21 @@ const env = envalid.cleanEnv(process.env, {
     JOBS_CREATION_LOCK_TTL_MS: envalid.num({ default: 30000 }), // job creation lock ensures only one instance at a time can produce jobs
     SANITY_LOOP_PROCESSING_TIMEOUT_MS: envalid.num({ default: 180000 }), // max time allowed for a sanity job to finish processing until it times out - in ms
     METRICS_LOOP_INTERVAL_MS: envalid.num({ default: 60000 }), // time in ms
-    OCI_CONFIGURATION_FILE_PATH: envalid.str(),
-    OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),
     REPORT_EXT_CALL_MAX_TIME_IN_SECONDS: envalid.num({ default: 60 }),
     REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS: envalid.num({ default: 30 }),
     REPORT_EXT_CALL_RETRYABLE_STATUS_CODES: envalid.str({ default: '429 409' }), // Retry on Too Many Requests, Conflict
+    CLOUD_PROVIDER: envalid.str({ default: 'oracle' }),
+    OCI_CONFIGURATION_FILE_PATH: envalid.str({ default: '' }),
+    OCI_CONFIGURATION_PROFILE: envalid.str({ default: '' }),
 });
+
+if (env.CLOUD_PROVIDER === 'oracle') {
+    // ensure that oracle cloud envs are present
+    envalid.cleanEnv(process.env, {
+        OCI_CONFIGURATION_FILE_PATH: envalid.str(),
+        OCI_CONFIGURATION_PROFILE: envalid.str(),
+    });
+}
 
 const groupsJsonRaw: string = fs.readFileSync(env.GROUP_CONFIG_FILE, { encoding: 'utf-8' });
 const groupList: Array<InstanceGroup> = JSON.parse(groupsJsonRaw)['groupEntries'];
@@ -112,6 +121,7 @@ export default {
     // metrics loop
     MetricsLoopIntervalMs: env.METRICS_LOOP_INTERVAL_MS,
     // other
+    cloudProvider: env.CLOUD_PROVIDER,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
     OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,
     ReportExtCallMaxTimeInSeconds: env.REPORT_EXT_CALL_MAX_TIME_IN_SECONDS,

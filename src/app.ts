@@ -100,6 +100,7 @@ const cloudManager = new CloudManager({
     ociConfigurationProfile: config.OciConfigurationProfile,
     instanceTracker: instanceTracker,
     audit: audit,
+    cloudProvider: config.cloudProvider,
 });
 
 const lockManager: LockManager = new LockManager(logger, {

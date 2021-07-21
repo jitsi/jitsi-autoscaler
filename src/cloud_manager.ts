@@ -13,6 +13,7 @@ export interface CloudRetryStrategy {
 }
 
 export interface CloudManagerOptions {
+    cloudProvider: string;
     shutdownManager: ShutdownManager;
     isDryRun: boolean;
     instanceTracker: InstanceTracker;
@@ -36,11 +37,13 @@ export default class CloudManager {
 
     constructor(options: CloudManagerOptions) {
         this.isDryRun = options.isDryRun;
-        this.oracleInstanceManager = new OracleCloudManager({
-            isDryRun: options.isDryRun,
-            ociConfigurationFilePath: options.ociConfigurationFilePath,
-            ociConfigurationProfile: options.ociConfigurationProfile,
-        });
+        if (options.cloudProvider === 'oracle') {
+            this.oracleInstanceManager = new OracleCloudManager({
+                isDryRun: options.isDryRun,
+                ociConfigurationFilePath: options.ociConfigurationFilePath,
+                ociConfigurationProfile: options.ociConfigurationProfile,
+            });
+        }
         this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
@@ -94,6 +97,10 @@ export default class CloudManager {
 
         switch (group.cloud) {
             case 'oracle':
+                if (!this.oracleInstanceManager) {
+                    ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
+                    return 0;
+                }
                 scaleUpResult = await this.oracleInstanceManager.launchInstances(
                     ctx,
                     group,
@@ -132,6 +139,9 @@ export default class CloudManager {
         group: InstanceGroup,
         cloudRetryStrategy: CloudRetryStrategy,
     ): Promise<Array<CloudInstance>> {
+        if (!this.oracleInstanceManager) {
+            return [];
+        }
         const oracleInstances = await this.oracleInstanceManager.getInstances(ctx, group, cloudRetryStrategy);
         return oracleInstances
             .map((resourceSummary) => {

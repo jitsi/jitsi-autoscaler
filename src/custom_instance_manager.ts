@@ -14,8 +14,6 @@ function makeRandomString(length: number) {
 
 export interface CustomInstanceManagerOptions {
     isDryRun: boolean;
-    ociConfigurationFilePath: string;
-    ociConfigurationProfile: string;
 }
 
 export default class CustomInstanceManager {
@@ -69,8 +67,9 @@ export default class CustomInstanceManager {
         try {
             const launchResponse = await this.execLaunch({ displayName, groupName, region: group.region });
             ctx.logger.info(
-                `[custom] Got launch response for instance number ${index + 1} in group ${groupName}`,
-                launchResponse,
+                `[custom] Got launch response for instance number ${
+                    index + 1
+                } in group ${groupName}: ${launchResponse}`,
             );
 
             return launchResponse;
@@ -97,14 +96,17 @@ export default class CustomInstanceManager {
         region: string;
     }): Promise<string> {
         return new Promise(function (resolve, reject) {
-            exec(`launch.sh --name ${displayName} --groupName ${groupName} --region ${region}`, (error, stdout) => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
+            exec(
+                `./scripts/custom-launch.sh --name ${displayName} --groupName ${groupName} --region ${region}`,
+                (error, stdout) => {
+                    if (error) {
+                        reject(error);
+                        return;
+                    }
 
-                resolve(stdout.trim());
-            });
+                    resolve(stdout.trim().split('\n').pop());
+                },
+            );
         });
     }
 }

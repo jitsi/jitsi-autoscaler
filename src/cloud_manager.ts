@@ -46,6 +46,10 @@ export default class CloudManager {
                 ociConfigurationFilePath: options.ociConfigurationFilePath,
                 ociConfigurationProfile: options.ociConfigurationProfile,
             });
+        } else if (options.cloudProvider === 'custom') {
+            this.customInstanceManager = new CustomInstanceManager({
+                isDryRun: options.isDryRun,
+            });
         }
         this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;

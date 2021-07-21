@@ -35,14 +35,14 @@ export default class SanityLoop {
     async reportUntrackedInstances(ctx: Context, groupName: string): Promise<boolean> {
         const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(groupName);
         if (group) {
-            const oracleStart = process.hrtime();
-            ctx.logger.info(`Retrieving oracle instances for ${groupName}`);
+            const cloudStart = process.hrtime();
+            ctx.logger.info(`Retrieving ${group.cloud} instances for ${groupName}`);
             const cloudInstances = await this.cloudManager.getInstances(ctx, group, this.reportExtCallRetryStrategy);
-            const oracleDelta = process.hrtime(oracleStart);
+            const cloudDelta = process.hrtime(cloudStart);
             const cloudInstancesSize = cloudInstances ? cloudInstances.length : 0;
             ctx.logger.info(
-                `Successfully retrieved ${cloudInstancesSize} oracle instances for ${groupName} in ${
-                    oracleDelta[0] * 1000 + oracleDelta[1] / 1000000
+                `Successfully retrieved ${cloudInstancesSize} ${group.cloud} instances for ${groupName} in ${
+                    cloudDelta[0] * 1000 + cloudDelta[1] / 1000000
                 } ms`,
             );
 

@@ -65,7 +65,12 @@ export default class CustomInstanceManager {
             return true;
         }
         try {
-            const launchResponse = await this.execLaunch({ displayName, groupName, region: group.region });
+            const launchResponse = await this.execLaunch({
+                displayName,
+                groupName,
+                region: group.region,
+                type: group.type,
+            });
             ctx.logger.info(
                 `[custom] Got launch response for instance number ${
                     index + 1
@@ -90,14 +95,16 @@ export default class CustomInstanceManager {
         displayName,
         groupName,
         region,
+        type,
     }: {
         displayName: string;
         groupName: string;
         region: string;
+        type: string;
     }): Promise<string> {
         return new Promise(function (resolve, reject) {
             exec(
-                `./scripts/custom-launch.sh --name ${displayName} --groupName ${groupName} --region ${region}`,
+                `./scripts/custom-launch.sh --type ${type} --name ${displayName} --groupName ${groupName} --region ${region} `,
                 (error, stdout) => {
                     if (error) {
                         reject(error);

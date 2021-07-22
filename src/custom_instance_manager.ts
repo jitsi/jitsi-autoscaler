@@ -16,9 +16,15 @@ export interface CustomInstanceManagerOptions {
     isDryRun: boolean;
 }
 
+export interface CustomCloudInstance {
+    instanceId: string;
+    displayName: string;
+    cloudStatus: string;
+}
+
 export default class CustomInstanceManager {
     private isDryRun: boolean;
-
+    private instances: Record<string, CustomCloudInstance>;
     constructor(options: CustomInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
 
@@ -87,8 +93,9 @@ export default class CustomInstanceManager {
         }
     }
 
-    async getInstances(): Promise<[]> {
-        return [];
+    async getInstances(): Promise<CustomCloudInstance[]> {
+        // TODO we might need another script to fetch the current instance status
+        return Object.values(this.instances);
     }
 
     execLaunch({
@@ -111,7 +118,13 @@ export default class CustomInstanceManager {
                         return;
                     }
 
-                    resolve(stdout.trim().split('\n').pop());
+                    const instanceId = stdout.trim().split('\n').pop();
+                    this.instances[instanceId] = {
+                        instanceId: instanceId,
+                        displayName: displayName,
+                        cloudStatus: 'Provisioning',
+                    };
+                    resolve(instanceId);
                 },
             );
         });

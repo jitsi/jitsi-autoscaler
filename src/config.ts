@@ -59,6 +59,9 @@ const env = envalid.cleanEnv(process.env, {
     CLOUD_PROVIDER: envalid.str({ default: 'oracle' }),
     OCI_CONFIGURATION_FILE_PATH: envalid.str({ default: '' }),
     OCI_CONFIGURATION_PROFILE: envalid.str({ default: '' }),
+
+    DIGITALOCEAN_CONFIGURATION_FILE_PATH: envalid.str({ default: '' }),
+    DIGITALOCEAN_API_TOKEN: envalid.str({ default: '' }),
 });
 
 if (env.CLOUD_PROVIDER === 'oracle') {
@@ -66,6 +69,12 @@ if (env.CLOUD_PROVIDER === 'oracle') {
     envalid.cleanEnv(process.env, {
         OCI_CONFIGURATION_FILE_PATH: envalid.str(),
         OCI_CONFIGURATION_PROFILE: envalid.str(),
+    });
+} else if (env.CLOUD_PROVIDER === 'digitalocean') {
+    // ensure that oracle cloud envs are present
+    envalid.cleanEnv(process.env, {
+        DIGITALOCEAN_CONFIGURATION_FILE_PATH: envalid.str(),
+        DIGITALOCEAN_API_TOKEN: envalid.str(),
     });
 }
 
@@ -124,6 +133,8 @@ export default {
     cloudProvider: env.CLOUD_PROVIDER,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
     OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,
+    DigitalOceanConfigurationFilePath: env.DIGITALOCEAN_CONFIGURATION_FILE_PATH,
+    DigitalOceanAPIToken: env.DIGITALOCEAN_API_TOKEN,
     ReportExtCallMaxTimeInSeconds: env.REPORT_EXT_CALL_MAX_TIME_IN_SECONDS,
     ReportExtCallMaxDelayInSeconds: env.REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS,
     ReportExtCallRetryableStatusCodes: env.REPORT_EXT_CALL_RETRYABLE_STATUS_CODES.split(' ').map(

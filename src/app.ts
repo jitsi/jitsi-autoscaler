@@ -98,6 +98,9 @@ const cloudManager = new CloudManager({
     isDryRun: config.DryRun,
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
+    digitalOceanAPIToken: config.DigitalOceanAPIToken,
+    digitalOceanConfigurationFilePath: config.DigitalOceanConfigurationFilePath,
+
     instanceTracker: instanceTracker,
     audit: audit,
     cloudProvider: config.cloudProvider,

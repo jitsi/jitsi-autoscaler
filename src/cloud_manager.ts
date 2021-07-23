@@ -1,6 +1,7 @@
 import OracleCloudManager from './oracle_instance_manager';
 import OracleInstanceManager from './oracle_instance_manager';
 import CustomInstanceManager from './custom_instance_manager';
+import DigitalOceanInstanceManager from './digital_ocean_instance_manager';
 
 import { InstanceGroup } from './instance_group';
 import { InstanceTracker, InstanceDetails, InstanceState } from './instance_tracker';
@@ -21,6 +22,10 @@ export interface CloudManagerOptions {
     instanceTracker: InstanceTracker;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
+
+    digitalOceanAPIToken: string;
+    digitalOceanConfigurationFilePath: string;
+
     audit: Audit;
 }
 
@@ -34,6 +39,8 @@ export default class CloudManager {
     private instanceTracker: InstanceTracker;
     private oracleInstanceManager: OracleInstanceManager;
     private customInstanceManager: CustomInstanceManager;
+    private digitalOceanInstanceManager: DigitalOceanInstanceManager;
+
     private shutdownManager: ShutdownManager;
     private audit: Audit;
     private isDryRun: boolean;
@@ -49,6 +56,12 @@ export default class CloudManager {
         } else if (options.cloudProvider === 'custom') {
             this.customInstanceManager = new CustomInstanceManager({
                 isDryRun: options.isDryRun,
+            });
+        } else if (options.cloudProvider === 'digitalocean') {
+            this.digitalOceanInstanceManager = new DigitalOceanInstanceManager({
+                isDryRun: options.isDryRun,
+                digitalOceanAPIToken: options.digitalOceanAPIToken,
+                digitalOceanConfigurationFilePath: options.digitalOceanConfigurationFilePath,
             });
         }
         this.instanceTracker = options.instanceTracker;
@@ -127,6 +140,18 @@ export default class CloudManager {
                     quantity,
                 );
                 break;
+            case 'digitalocean':
+                if (!this.customInstanceManager) {
+                    ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
+                    return 0;
+                }
+                scaleUpResult = await this.digitalOceanInstanceManager.launchInstances(
+                    ctx,
+                    group,
+                    groupCurrentCount,
+                    quantity,
+                );
+                break;
             default:
                 ctx.logger.error(`Cloud type not supported: ${group.cloud}`);
                 return 0;
@@ -164,6 +189,9 @@ export default class CloudManager {
         if (group.cloud === 'custom') {
             return this.getCustomInstances();
         }
+        if (group.cloud === 'custom') {
+            return this.getDigitalOceanInstances();
+        }
         return [];
     }
 
@@ -196,5 +224,15 @@ export default class CloudManager {
         const customInstances = await this.customInstanceManager.getInstances();
 
         return customInstances;
+    }
+
+    async getDigitalOceanInstances(): Promise<Array<CloudInstance>> {
+        if (!this.oracleInstanceManager) {
+            return [];
+        }
+        const digitaloceanInstances = await this.digitalOceanInstanceManager.getInstances();
+        return digitaloceanInstances.filter(function (instance) {
+            return instance.cloudStatus !== 'Terminated';
+        });
     }
 }

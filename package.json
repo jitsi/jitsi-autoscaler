@@ -16,6 +16,7 @@
     "@types/sshpk": "^1.10.4",
     "bee-queue": "^1.2.3",
     "dotenv": "^8.2.0",
+    "dots-wrapper": "^3.5.7",
     "envalid": "^6.0.2",
     "express": "^4.17.1",
     "express-jwt": "^6.0.0",

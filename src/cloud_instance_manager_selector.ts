@@ -11,6 +11,9 @@ export interface CloudInstanceManagerSelectorOptions {
 
     digitalOceanAPIToken: string;
     digitalOceanConfigurationFilePath: string;
+
+    customConfigurationLaunchScriptPath: string;
+    customConfigurationLaunchScriptTimeoutMs: number;
 }
 
 export class CloudInstanceManagerSelector {
@@ -30,6 +33,8 @@ export class CloudInstanceManagerSelector {
         if (options.cloudProviders.includes('custom')) {
             this.customInstanceManager = new CustomInstanceManager({
                 isDryRun: options.isDryRun,
+                customConfigurationLaunchScriptPath: options.customConfigurationLaunchScriptPath,
+                customConfigurationLaunchScriptTimeoutMs: options.customConfigurationLaunchScriptTimeoutMs,
             });
         }
         if (options.cloudProviders.includes('digitalocean')) {

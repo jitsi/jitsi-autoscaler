@@ -64,6 +64,9 @@ const env = envalid.cleanEnv(process.env, {
 
     DIGITALOCEAN_CONFIGURATION_FILE_PATH: envalid.str({ default: '' }),
     DIGITALOCEAN_API_TOKEN: envalid.str({ default: '' }),
+
+    CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_TIMEOUT_MS: envalid.num({ default: 60000 }),
+    CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_FILE_PATH: envalid.str({ default: './scripts/custom-launch.sh' }),
 });
 
 const cloudProviders = env.CLOUD_PROVIDERS ? (env.CLOUD_PROVIDERS as string).split(',') : [env.CLOUD_PROVIDER];
@@ -136,11 +139,15 @@ export default {
     // metrics loop
     MetricsLoopIntervalMs: env.METRICS_LOOP_INTERVAL_MS,
     // other
-    cloudProviders,
+    CloudProviders: cloudProviders,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
     OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,
     DigitalOceanConfigurationFilePath: env.DIGITALOCEAN_CONFIGURATION_FILE_PATH,
     DigitalOceanAPIToken: env.DIGITALOCEAN_API_TOKEN,
+
+    CustomConfigurationLaunchScriptTimeoutMs: env.CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_TIMEOUT_MS,
+    CustomConfigurationLaunchScriptPath: env.CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_FILE_PATH,
+
     ReportExtCallMaxTimeInSeconds: env.REPORT_EXT_CALL_MAX_TIME_IN_SECONDS,
     ReportExtCallMaxDelayInSeconds: env.REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS,
     ReportExtCallRetryableStatusCodes: env.REPORT_EXT_CALL_RETRYABLE_STATUS_CODES.split(' ').map(

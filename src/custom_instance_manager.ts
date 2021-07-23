@@ -1,10 +1,12 @@
 import { execFile } from 'child_process';
 import { InstanceGroup } from './instance_group';
 import { Context } from './context';
-import { AbstractCloudInstanceManager, CloudInstanceManager } from './cloud_instance_manager';
+import { AbstractCloudInstanceManager } from './cloud_instance_manager';
 
 export interface CustomInstanceManagerOptions {
     isDryRun: boolean;
+    customConfigurationLaunchScriptPath: string;
+    customConfigurationLaunchScriptTimeoutMs: number;
 }
 
 export interface CustomCloudInstance {
@@ -15,11 +17,17 @@ export interface CustomCloudInstance {
 
 export default class CustomInstanceManager extends AbstractCloudInstanceManager {
     private isDryRun: boolean;
+    private customConfigurationLaunchScriptPath: string;
+    private customConfigurationLaunchScriptTimeoutMs: number;
+
     constructor(options: CustomInstanceManagerOptions) {
         super();
         this.isDryRun = options.isDryRun;
+        this.customConfigurationLaunchScriptPath = options.customConfigurationLaunchScriptPath;
+        this.customConfigurationLaunchScriptTimeoutMs = options.customConfigurationLaunchScriptTimeoutMs;
 
         this.launchInstances = this.launchInstances.bind(this);
+        this.execLaunch = this.execLaunch.bind(this);
     }
 
     async launchInstances(
@@ -98,10 +106,11 @@ export default class CustomInstanceManager extends AbstractCloudInstanceManager 
         region: string;
         type: string;
     }): Promise<string> {
-        return new Promise(function (resolve, reject) {
+        return new Promise((resolve, reject) => {
             execFile(
-                './scripts/custom-launch.sh',
+                this.customConfigurationLaunchScriptPath,
                 [`--type ${type}`, `--name ${displayName}`, `--groupName ${groupName}`, `--region ${region}`],
+                { timeout: this.customConfigurationLaunchScriptTimeoutMs },
                 (error, stdout) => {
                     if (error) {
                         ctx.logger.error(
@@ -113,11 +122,6 @@ export default class CustomInstanceManager extends AbstractCloudInstanceManager 
                     }
 
                     const instanceId = stdout.trim().split('\n').pop();
-                    this.instances[instanceId] = {
-                        instanceId: instanceId,
-                        displayName: displayName,
-                        cloudStatus: 'Provisioning',
-                    };
                     resolve(instanceId);
                 },
             );

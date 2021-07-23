@@ -1,0 +1,10 @@
+{
+    "jvb": { 
+        "size": "s-2vcpu-4gb",
+        "image": "INSERT_HERE_YOUR_SNAPSHOT_ID",
+        "ssh_keys": [],
+        "backups": false,
+        "ipv6": false,
+        "tags": ["test", "jisti", "jvb"]
+     }
+}

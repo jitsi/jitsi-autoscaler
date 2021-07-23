@@ -55,7 +55,10 @@ export default class DigitalOceanInstanceManager extends AbstractCloudInstanceMa
         this.isDryRun = options.isDryRun;
         this.doClient = createApiClient({ token: options.digitalOceanAPIToken });
 
-        this.digitalOceanConfig = require(path.join('..', options.digitalOceanConfigurationFilePath));
+        const fullPath = options.digitalOceanConfigurationFilePath.startsWith('/')
+            ? options.digitalOceanConfigurationFilePath
+            : path.join(process.cwd(), options.digitalOceanConfigurationFilePath);
+        this.digitalOceanConfig = require(fullPath);
     }
 
     async launchInstance(ctx: Context, index: number, group: InstanceGroup): Promise<string | boolean> {

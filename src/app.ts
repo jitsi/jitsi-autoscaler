@@ -103,7 +103,7 @@ const cloudManager = new CloudManager({
 
     instanceTracker: instanceTracker,
     audit: audit,
-    cloudProvider: config.cloudProvider,
+    cloudProviders: config.cloudProviders,
 });
 
 const lockManager: LockManager = new LockManager(logger, {

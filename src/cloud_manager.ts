@@ -1,13 +1,9 @@
-import OracleCloudManager from './oracle_instance_manager';
-import OracleInstanceManager from './oracle_instance_manager';
-import CustomInstanceManager from './custom_instance_manager';
-import DigitalOceanInstanceManager from './digital_ocean_instance_manager';
-
 import { InstanceGroup } from './instance_group';
 import { InstanceTracker, InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
+import { CloudInstanceManagerSelector, CloudInstanceManagerSelectorOptions } from './cloud_instance_manager_selector';
 
 export interface CloudRetryStrategy {
     maxTimeInSeconds: number;
@@ -15,17 +11,9 @@ export interface CloudRetryStrategy {
     retryableStatusCodes: Array<number>;
 }
 
-export interface CloudManagerOptions {
-    cloudProvider: string;
+export interface CloudManagerOptions extends CloudInstanceManagerSelectorOptions {
     shutdownManager: ShutdownManager;
-    isDryRun: boolean;
     instanceTracker: InstanceTracker;
-    ociConfigurationFilePath: string;
-    ociConfigurationProfile: string;
-
-    digitalOceanAPIToken: string;
-    digitalOceanConfigurationFilePath: string;
-
     audit: Audit;
 }
 
@@ -37,9 +25,7 @@ export interface CloudInstance {
 
 export default class CloudManager {
     private instanceTracker: InstanceTracker;
-    private oracleInstanceManager: OracleInstanceManager;
-    private customInstanceManager: CustomInstanceManager;
-    private digitalOceanInstanceManager: DigitalOceanInstanceManager;
+    private cloudInstanceManagerSelector: CloudInstanceManagerSelector;
 
     private shutdownManager: ShutdownManager;
     private audit: Audit;
@@ -47,23 +33,9 @@ export default class CloudManager {
 
     constructor(options: CloudManagerOptions) {
         this.isDryRun = options.isDryRun;
-        if (options.cloudProvider === 'oracle') {
-            this.oracleInstanceManager = new OracleCloudManager({
-                isDryRun: options.isDryRun,
-                ociConfigurationFilePath: options.ociConfigurationFilePath,
-                ociConfigurationProfile: options.ociConfigurationProfile,
-            });
-        } else if (options.cloudProvider === 'custom') {
-            this.customInstanceManager = new CustomInstanceManager({
-                isDryRun: options.isDryRun,
-            });
-        } else if (options.cloudProvider === 'digitalocean') {
-            this.digitalOceanInstanceManager = new DigitalOceanInstanceManager({
-                isDryRun: options.isDryRun,
-                digitalOceanAPIToken: options.digitalOceanAPIToken,
-                digitalOceanConfigurationFilePath: options.digitalOceanConfigurationFilePath,
-            });
-        }
+
+        this.cloudInstanceManagerSelector = new CloudInstanceManagerSelector(options);
+
         this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
@@ -112,50 +84,14 @@ export default class CloudManager {
     ): Promise<number> {
         const groupName = group.name;
         ctx.logger.info('[CloudManager] Scaling up', { groupName, quantity });
-        // TODO: get the instance manager by cloud
-        let scaleUpResult: Array<boolean | string>;
 
-        switch (group.cloud) {
-            case 'oracle':
-                if (!this.oracleInstanceManager) {
-                    ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
-                    return 0;
-                }
-                scaleUpResult = await this.oracleInstanceManager.launchInstances(
-                    ctx,
-                    group,
-                    groupCurrentCount,
-                    quantity,
-                );
-                break;
-            case 'custom':
-                if (!this.customInstanceManager) {
-                    ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
-                    return 0;
-                }
-                scaleUpResult = await this.customInstanceManager.launchInstances(
-                    ctx,
-                    group,
-                    groupCurrentCount,
-                    quantity,
-                );
-                break;
-            case 'digitalocean':
-                if (!this.digitalOceanInstanceManager) {
-                    ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
-                    return 0;
-                }
-                scaleUpResult = await this.digitalOceanInstanceManager.launchInstances(
-                    ctx,
-                    group,
-                    groupCurrentCount,
-                    quantity,
-                );
-                break;
-            default:
-                ctx.logger.error(`Cloud type not supported: ${group.cloud}`);
-                return 0;
+        const instanceManager = this.cloudInstanceManagerSelector.selectInstanceManager(group.cloud);
+        if (!instanceManager) {
+            ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
+            return 0;
         }
+
+        const scaleUpResult = await instanceManager.launchInstances(ctx, group, groupCurrentCount, quantity);
 
         let scaleUpCount = 0;
         await Promise.all(
@@ -183,47 +119,14 @@ export default class CloudManager {
         group: InstanceGroup,
         cloudRetryStrategy: CloudRetryStrategy,
     ): Promise<Array<CloudInstance>> {
-        if (group.cloud === 'oracle') {
-            return this.getOracleInstances(ctx, group, cloudRetryStrategy);
-        }
-        if (group.cloud === 'custom') {
-            return this.getCustomInstances();
-        }
-        if (group.cloud === 'custom') {
-            return this.getDigitalOceanInstances();
-        }
-        return [];
-    }
-
-    async getOracleInstances(
-        ctx: Context,
-        group: InstanceGroup,
-        cloudRetryStrategy: CloudRetryStrategy,
-    ): Promise<Array<CloudInstance>> {
-        if (!this.oracleInstanceManager) {
+        const instanceManager = this.cloudInstanceManagerSelector.selectInstanceManager(group.cloud);
+        if (!instanceManager) {
+            ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
             return [];
         }
-        const oracleInstances = await this.oracleInstanceManager.getInstances(ctx, group, cloudRetryStrategy);
-        return oracleInstances.filter(function (instance) {
-            return instance.cloudStatus !== 'Terminated';
-        });
-    }
 
-    async getCustomInstances(): Promise<Array<CloudInstance>> {
-        if (!this.customInstanceManager) {
-            return [];
-        }
-        const customInstances = await this.customInstanceManager.getInstances();
-
-        return customInstances;
-    }
-
-    async getDigitalOceanInstances(): Promise<Array<CloudInstance>> {
-        if (!this.oracleInstanceManager) {
-            return [];
-        }
-        const digitaloceanInstances = await this.digitalOceanInstanceManager.getInstances();
-        return digitaloceanInstances.filter(function (instance) {
+        const instances = await instanceManager.getInstances(ctx, group, cloudRetryStrategy);
+        return instances.filter(function (instance) {
             return instance.cloudStatus !== 'Terminated';
         });
     }

@@ -80,7 +80,7 @@ if (cloudProviders.includes('oracle')) {
 }
 
 if (cloudProviders.includes('digitalocean')) {
-    // ensure that oracle cloud envs are present
+    // ensure that digitalocean cloud envs are present
     envalid.cleanEnv(process.env, {
         DIGITALOCEAN_CONFIGURATION_FILE_PATH: envalid.str(),
         DIGITALOCEAN_API_TOKEN: envalid.str(),

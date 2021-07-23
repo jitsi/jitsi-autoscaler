@@ -1,16 +1,7 @@
 import { execFile } from 'child_process';
 import { InstanceGroup } from './instance_group';
 import { Context } from './context';
-
-function makeRandomString(length: number) {
-    let result = '';
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const charactersLength = characters.length;
-    for (let i = 0; i < length; i++) {
-        result += characters.charAt(Math.floor(Math.random() * charactersLength));
-    }
-    return result;
-}
+import { AbstractCloudInstanceManager, CloudInstanceManager } from './cloud_instance_manager';
 
 export interface CustomInstanceManagerOptions {
     isDryRun: boolean;
@@ -22,10 +13,10 @@ export interface CustomCloudInstance {
     cloudStatus: string;
 }
 
-export default class CustomInstanceManager {
+export default class CustomInstanceManager extends AbstractCloudInstanceManager {
     private isDryRun: boolean;
-    private instances: Record<string, CustomCloudInstance>;
     constructor(options: CustomInstanceManagerOptions) {
+        super();
         this.isDryRun = options.isDryRun;
 
         this.launchInstances = this.launchInstances.bind(this);
@@ -58,7 +49,7 @@ export default class CustomInstanceManager {
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
 
-        const displayName = groupName + '-' + makeRandomString(5);
+        const displayName = groupName + '-' + AbstractCloudInstanceManager.makeRandomString(5);
 
         ctx.logger.info(`[custom] Launching instance number ${index + 1} in group ${groupName} with properties`, {
             groupName,
@@ -92,11 +83,6 @@ export default class CustomInstanceManager {
             );
             return false;
         }
-    }
-
-    async getInstances(): Promise<CustomCloudInstance[]> {
-        // TODO we might need another script to fetch the current instance status
-        return Object.values(this.instances);
     }
 
     execLaunch({

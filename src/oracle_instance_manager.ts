@@ -6,16 +6,7 @@ import { Context } from './context';
 import { ResourceSearchClient } from 'oci-resourcesearch';
 import * as resourceSearch from 'oci-resourcesearch';
 import { CloudRetryStrategy } from './cloud_manager';
-
-function makeRandomString(length: number) {
-    let result = '';
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const charactersLength = characters.length;
-    for (let i = 0; i < length; i++) {
-        result += characters.charAt(Math.floor(Math.random() * charactersLength));
-    }
-    return result;
-}
+import { AbstractCloudInstanceManager, CloudInstanceManager, CloudInstance } from './cloud_instance_manager';
 
 export interface OracleInstanceManagerOptions {
     isDryRun: boolean;
@@ -23,7 +14,7 @@ export interface OracleInstanceManagerOptions {
     ociConfigurationProfile: string;
 }
 
-export default class OracleInstanceManager {
+export default class OracleInstanceManager implements CloudInstanceManager {
     private isDryRun: boolean;
     private provider: common.ConfigFileAuthenticationDetailsProvider;
     private identityClient: identity.IdentityClient;
@@ -78,15 +69,14 @@ export default class OracleInstanceManager {
                 const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
                 const faultDomain = faultDomains[fdIndex];
 
-                return this.launchInstance(ctx, index, group, availabilityDomain, faultDomain);
+                return this.launchOracleInstance(ctx, index, group, availabilityDomain, faultDomain);
             }),
         );
         ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
 
         return result;
     }
-
-    async launchInstance(
+    async launchOracleInstance(
         ctx: Context,
         index: number,
         group: InstanceGroup,
@@ -96,7 +86,7 @@ export default class OracleInstanceManager {
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
 
-        const displayName = groupName + '-' + makeRandomString(5);
+        const displayName = groupName + '-' + AbstractCloudInstanceManager.makeRandomString(5);
         const freeformTags = {
             group: groupName,
         };
@@ -178,7 +168,7 @@ export default class OracleInstanceManager {
         ctx: Context,
         group: InstanceGroup,
         cloudRetryStrategy: CloudRetryStrategy,
-    ): Promise<Array<resourceSearch.models.ResourceSummary>> {
+    ): Promise<Array<CloudInstance>> {
         const instances: Array<resourceSearch.models.ResourceSummary> = [];
 
         const resourceSearchClient = new ResourceSearchClient({
@@ -223,6 +213,12 @@ export default class OracleInstanceManager {
             }
         }
 
-        return instances;
+        return instances.map((resourceSummary) => {
+            return {
+                instanceId: resourceSummary.identifier,
+                displayName: resourceSummary.displayName,
+                cloudStatus: resourceSummary.lifecycleState,
+            };
+        });
     }
 }

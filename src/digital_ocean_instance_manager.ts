@@ -3,6 +3,7 @@ import { Context } from './context';
 import { createApiClient } from 'dots-wrapper';
 import path from 'path';
 import { IDroplet } from 'dots-wrapper/dist/modules/droplet';
+import { AbstractCloudInstanceManager, CloudInstanceManager } from './cloud_instance_manager';
 
 function makeRandomString(length: number) {
     let result = '';
@@ -44,40 +45,17 @@ type DigitalOceanConfig = Record<string, DigitalOceanConfigLine>;
 
 type DoClient = ReturnType<typeof createApiClient>;
 
-export default class DigitalOceanInstanceManager {
+export default class DigitalOceanInstanceManager extends AbstractCloudInstanceManager {
     private isDryRun: boolean;
     private doClient: DoClient;
     private digitalOceanConfig: DigitalOceanConfig;
 
     constructor(options: DigitalOceanInstanceManagerOptions) {
+        super();
         this.isDryRun = options.isDryRun;
         this.doClient = createApiClient({ token: options.digitalOceanAPIToken });
 
         this.digitalOceanConfig = require(path.join('..', options.digitalOceanConfigurationFilePath));
-        this.launchInstances = this.launchInstances.bind(this);
-    }
-
-    async launchInstances(
-        ctx: Context,
-        group: InstanceGroup,
-        groupCurrentCount: number,
-        quantity: number,
-    ): Promise<Array<string | boolean>> {
-        ctx.logger.info(`[custom] Launching a batch of ${quantity} instances in group ${group.name}`);
-
-        const indexes: Array<number> = [];
-        for (let i = 0; i < quantity; i++) {
-            indexes.push(i);
-        }
-
-        const result = await Promise.all(
-            indexes.map(async (index) => {
-                return this.launchInstance(ctx, index, group);
-            }),
-        );
-        ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
-
-        return result;
     }
 
     async launchInstance(ctx: Context, index: number, group: InstanceGroup): Promise<string | boolean> {

@@ -204,17 +204,9 @@ export default class CloudManager {
             return [];
         }
         const oracleInstances = await this.oracleInstanceManager.getInstances(ctx, group, cloudRetryStrategy);
-        return oracleInstances
-            .map((resourceSummary) => {
-                return {
-                    instanceId: resourceSummary.identifier,
-                    displayName: resourceSummary.displayName,
-                    cloudStatus: resourceSummary.lifecycleState,
-                };
-            })
-            .filter(function (instance) {
-                return instance.cloudStatus !== 'Terminated';
-            });
+        return oracleInstances.filter(function (instance) {
+            return instance.cloudStatus !== 'Terminated';
+        });
     }
 
     async getCustomInstances(): Promise<Array<CloudInstance>> {

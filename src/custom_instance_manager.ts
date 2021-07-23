@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 
@@ -72,6 +72,7 @@ export default class CustomInstanceManager {
         }
         try {
             const launchResponse = await this.execLaunch({
+                ctx,
                 displayName,
                 groupName,
                 region: group.region,
@@ -99,21 +100,28 @@ export default class CustomInstanceManager {
     }
 
     execLaunch({
+        ctx,
         displayName,
         groupName,
         region,
         type,
     }: {
+        ctx: Context;
         displayName: string;
         groupName: string;
         region: string;
         type: string;
     }): Promise<string> {
         return new Promise(function (resolve, reject) {
-            exec(
-                `./scripts/custom-launch.sh --type ${type} --name ${displayName} --groupName ${groupName} --region ${region} `,
+            execFile(
+                './scripts/custom-launch.sh',
+                [`--type ${type}`, `--name ${displayName}`, `--groupName ${groupName}`, `--region ${region}`],
                 (error, stdout) => {
                     if (error) {
+                        ctx.logger.error(
+                            `[custom] Failed executing launch file for type ${type}, name ${displayName},  groupName ${groupName} and region ${region} with error: ${error}`,
+                            { error },
+                        );
                         reject(error);
                         return;
                     }

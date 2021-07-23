@@ -53,7 +53,7 @@ export default class DigitalOceanInstanceManager {
         this.isDryRun = options.isDryRun;
         this.doClient = createApiClient({ token: options.digitalOceanAPIToken });
 
-        this.digitalOceanConfig = require(path.join('..', '..', options.digitalOceanConfigurationFilePath));
+        this.digitalOceanConfig = require(path.join('..', options.digitalOceanConfigurationFilePath));
         this.launchInstances = this.launchInstances.bind(this);
     }
 

@@ -141,7 +141,7 @@ export default class CloudManager {
                 );
                 break;
             case 'digitalocean':
-                if (!this.customInstanceManager) {
+                if (!this.digitalOceanInstanceManager) {
                     ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
                     return 0;
                 }

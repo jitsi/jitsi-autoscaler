@@ -9,12 +9,6 @@ export interface CustomInstanceManagerOptions {
     customConfigurationLaunchScriptTimeoutMs: number;
 }
 
-export interface CustomCloudInstance {
-    instanceId: string;
-    displayName: string;
-    cloudStatus: string;
-}
-
 export default class CustomInstanceManager extends AbstractCloudInstanceManager {
     private isDryRun: boolean;
     private customConfigurationLaunchScriptPath: string;

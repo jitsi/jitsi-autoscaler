@@ -1,30 +1,16 @@
+import path from 'path';
+import { createApiClient } from 'dots-wrapper';
+import { IDroplet } from 'dots-wrapper/dist/modules/droplet';
+
 import { InstanceGroup } from './instance_group';
 import { Context } from './context';
-import { createApiClient } from 'dots-wrapper';
-import path from 'path';
-import { IDroplet } from 'dots-wrapper/dist/modules/droplet';
-import { AbstractCloudInstanceManager, CloudInstanceManager } from './cloud_instance_manager';
-
-function makeRandomString(length: number) {
-    let result = '';
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const charactersLength = characters.length;
-    for (let i = 0; i < length; i++) {
-        result += characters.charAt(Math.floor(Math.random() * charactersLength));
-    }
-    return result;
-}
+import { AbstractCloudInstanceManager, CloudInstance } from './cloud_instance_manager';
+import { CloudRetryStrategy } from './cloud_manager';
 
 export interface DigitalOceanInstanceManagerOptions {
     isDryRun: boolean;
     digitalOceanAPIToken: string;
     digitalOceanConfigurationFilePath: string;
-}
-
-export interface DigitalOceanCloudInstance {
-    instanceId: string;
-    displayName: string;
-    cloudStatus: string;
 }
 
 interface DigitalOceanConfigLine {
@@ -65,7 +51,7 @@ export default class DigitalOceanInstanceManager extends AbstractCloudInstanceMa
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
 
-        const displayName = groupName + '-' + makeRandomString(5);
+        const displayName = groupName + '-' + AbstractCloudInstanceManager.makeRandomString(5);
 
         ctx.logger.info(`[custom] Launching instance number ${index + 1} in group ${groupName} with properties`, {
             groupName,
@@ -79,6 +65,7 @@ export default class DigitalOceanInstanceManager extends AbstractCloudInstanceMa
         }
         try {
             const typeConfig = this.digitalOceanConfig[group.type];
+
             if (!typeConfig) {
                 ctx.logger.error(
                     `[custom] Failed launching instance number ${
@@ -87,10 +74,12 @@ export default class DigitalOceanInstanceManager extends AbstractCloudInstanceMa
                 );
                 return false;
             }
+            const tags = [...(typeConfig.tags || []), `group:${group.name}`];
             const options = {
                 name: displayName,
                 region: group.region,
                 ...typeConfig,
+                tags,
             };
 
             const {
@@ -111,11 +100,16 @@ export default class DigitalOceanInstanceManager extends AbstractCloudInstanceMa
         }
     }
 
-    async getInstances(): Promise<DigitalOceanCloudInstance[]> {
+    async getInstances(
+        ctx: Context,
+        group: InstanceGroup,
+        _cloudRetryStrategy: CloudRetryStrategy,
+    ): Promise<CloudInstance[]> {
         const {
             data: { droplets },
         } = await this.doClient.droplet.listDroplets({
             per_page: 100,
+            tag_name: `group:${group.name}`,
         });
 
         return droplets.map((droplet: IDroplet) => ({

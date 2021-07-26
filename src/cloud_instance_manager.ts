@@ -2,10 +2,6 @@ import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { CloudRetryStrategy } from './cloud_manager';
 
-export interface CloudInstanceManagerOptions {
-    isDryRun: boolean;
-}
-
 export interface CloudInstance {
     instanceId: string;
     displayName: string;
@@ -59,7 +55,11 @@ export abstract class AbstractCloudInstanceManager implements CloudInstanceManag
 
     abstract launchInstance(ctx: Context, index: number, group: InstanceGroup): Promise<string | boolean>;
 
-    async getInstances(): Promise<CloudInstance[]> {
+    async getInstances(
+        _ctx: Context,
+        _group: InstanceGroup,
+        _cloudRetryStrategy: CloudRetryStrategy,
+    ): Promise<CloudInstance[]> {
         return [];
     }
 }

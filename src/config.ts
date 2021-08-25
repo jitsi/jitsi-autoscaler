@@ -53,12 +53,39 @@ const env = envalid.cleanEnv(process.env, {
     JOBS_CREATION_LOCK_TTL_MS: envalid.num({ default: 30000 }), // job creation lock ensures only one instance at a time can produce jobs
     SANITY_LOOP_PROCESSING_TIMEOUT_MS: envalid.num({ default: 180000 }), // max time allowed for a sanity job to finish processing until it times out - in ms
     METRICS_LOOP_INTERVAL_MS: envalid.num({ default: 60000 }), // time in ms
-    OCI_CONFIGURATION_FILE_PATH: envalid.str(),
-    OCI_CONFIGURATION_PROFILE: envalid.str({ default: 'DEFAULT' }),
     REPORT_EXT_CALL_MAX_TIME_IN_SECONDS: envalid.num({ default: 60 }),
     REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS: envalid.num({ default: 30 }),
     REPORT_EXT_CALL_RETRYABLE_STATUS_CODES: envalid.str({ default: '429 409' }), // Retry on Too Many Requests, Conflict
+    CLOUD_PROVIDER: envalid.str({ default: 'oracle' }),
+    CLOUD_PROVIDERS: envalid.str({ default: '' }),
+
+    OCI_CONFIGURATION_FILE_PATH: envalid.str({ default: '' }),
+    OCI_CONFIGURATION_PROFILE: envalid.str({ default: '' }),
+
+    DIGITALOCEAN_CONFIGURATION_FILE_PATH: envalid.str({ default: '' }),
+    DIGITALOCEAN_API_TOKEN: envalid.str({ default: '' }),
+
+    CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_TIMEOUT_MS: envalid.num({ default: 60000 }),
+    CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_FILE_PATH: envalid.str({ default: './scripts/custom-launch.sh' }),
 });
+
+const cloudProviders = env.CLOUD_PROVIDERS ? (env.CLOUD_PROVIDERS as string).split(',') : [env.CLOUD_PROVIDER];
+
+if (cloudProviders.includes('oracle')) {
+    // ensure that oracle cloud envs are present
+    envalid.cleanEnv(process.env, {
+        OCI_CONFIGURATION_FILE_PATH: envalid.str(),
+        OCI_CONFIGURATION_PROFILE: envalid.str(),
+    });
+}
+
+if (cloudProviders.includes('digitalocean')) {
+    // ensure that digitalocean cloud envs are present
+    envalid.cleanEnv(process.env, {
+        DIGITALOCEAN_CONFIGURATION_FILE_PATH: envalid.str(),
+        DIGITALOCEAN_API_TOKEN: envalid.str(),
+    });
+}
 
 const groupsJsonRaw: string = fs.readFileSync(env.GROUP_CONFIG_FILE, { encoding: 'utf-8' });
 const groupList: Array<InstanceGroup> = JSON.parse(groupsJsonRaw)['groupEntries'];
@@ -112,8 +139,15 @@ export default {
     // metrics loop
     MetricsLoopIntervalMs: env.METRICS_LOOP_INTERVAL_MS,
     // other
+    CloudProviders: cloudProviders,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
     OciConfigurationProfile: env.OCI_CONFIGURATION_PROFILE,
+    DigitalOceanConfigurationFilePath: env.DIGITALOCEAN_CONFIGURATION_FILE_PATH,
+    DigitalOceanAPIToken: env.DIGITALOCEAN_API_TOKEN,
+
+    CustomConfigurationLaunchScriptTimeoutMs: env.CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_TIMEOUT_MS,
+    CustomConfigurationLaunchScriptPath: env.CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_FILE_PATH,
+
     ReportExtCallMaxTimeInSeconds: env.REPORT_EXT_CALL_MAX_TIME_IN_SECONDS,
     ReportExtCallMaxDelayInSeconds: env.REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS,
     ReportExtCallRetryableStatusCodes: env.REPORT_EXT_CALL_RETRYABLE_STATUS_CODES.split(' ').map(

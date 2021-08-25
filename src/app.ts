@@ -98,8 +98,15 @@ const cloudManager = new CloudManager({
     isDryRun: config.DryRun,
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
+    digitalOceanAPIToken: config.DigitalOceanAPIToken,
+    digitalOceanConfigurationFilePath: config.DigitalOceanConfigurationFilePath,
+
     instanceTracker: instanceTracker,
     audit: audit,
+    cloudProviders: config.CloudProviders,
+
+    customConfigurationLaunchScriptPath: config.CustomConfigurationLaunchScriptPath,
+    customConfigurationLaunchScriptTimeoutMs: config.CustomConfigurationLaunchScriptTimeoutMs,
 });
 
 const lockManager: LockManager = new LockManager(logger, {

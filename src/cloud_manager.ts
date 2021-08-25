@@ -1,10 +1,9 @@
-import OracleCloudManager from './oracle_instance_manager';
-import OracleInstanceManager from './oracle_instance_manager';
 import { InstanceGroup } from './instance_group';
 import { InstanceTracker, InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
+import { CloudInstanceManagerSelector, CloudInstanceManagerSelectorOptions } from './cloud_instance_manager_selector';
 
 export interface CloudRetryStrategy {
     maxTimeInSeconds: number;
@@ -12,12 +11,9 @@ export interface CloudRetryStrategy {
     retryableStatusCodes: Array<number>;
 }
 
-export interface CloudManagerOptions {
+export interface CloudManagerOptions extends CloudInstanceManagerSelectorOptions {
     shutdownManager: ShutdownManager;
-    isDryRun: boolean;
     instanceTracker: InstanceTracker;
-    ociConfigurationFilePath: string;
-    ociConfigurationProfile: string;
     audit: Audit;
 }
 
@@ -29,18 +25,17 @@ export interface CloudInstance {
 
 export default class CloudManager {
     private instanceTracker: InstanceTracker;
-    private oracleInstanceManager: OracleInstanceManager;
+    private cloudInstanceManagerSelector: CloudInstanceManagerSelector;
+
     private shutdownManager: ShutdownManager;
     private audit: Audit;
     private isDryRun: boolean;
 
     constructor(options: CloudManagerOptions) {
         this.isDryRun = options.isDryRun;
-        this.oracleInstanceManager = new OracleCloudManager({
-            isDryRun: options.isDryRun,
-            ociConfigurationFilePath: options.ociConfigurationFilePath,
-            ociConfigurationProfile: options.ociConfigurationProfile,
-        });
+
+        this.cloudInstanceManagerSelector = new CloudInstanceManagerSelector(options);
+
         this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
@@ -89,22 +84,14 @@ export default class CloudManager {
     ): Promise<number> {
         const groupName = group.name;
         ctx.logger.info('[CloudManager] Scaling up', { groupName, quantity });
-        // TODO: get the instance manager by cloud
-        let scaleUpResult: Array<boolean | string>;
 
-        switch (group.cloud) {
-            case 'oracle':
-                scaleUpResult = await this.oracleInstanceManager.launchInstances(
-                    ctx,
-                    group,
-                    groupCurrentCount,
-                    quantity,
-                );
-                break;
-            default:
-                ctx.logger.error(`Cloud type not supported: ${group.cloud}`);
-                return 0;
+        const instanceManager = this.cloudInstanceManagerSelector.selectInstanceManager(group.cloud);
+        if (!instanceManager) {
+            ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
+            return 0;
         }
+
+        const scaleUpResult = await instanceManager.launchInstances(ctx, group, groupCurrentCount, quantity);
 
         let scaleUpCount = 0;
         await Promise.all(
@@ -132,17 +119,15 @@ export default class CloudManager {
         group: InstanceGroup,
         cloudRetryStrategy: CloudRetryStrategy,
     ): Promise<Array<CloudInstance>> {
-        const oracleInstances = await this.oracleInstanceManager.getInstances(ctx, group, cloudRetryStrategy);
-        return oracleInstances
-            .map((resourceSummary) => {
-                return {
-                    instanceId: resourceSummary.identifier,
-                    displayName: resourceSummary.displayName,
-                    cloudStatus: resourceSummary.lifecycleState,
-                };
-            })
-            .filter(function (instance) {
-                return instance.cloudStatus !== 'Terminated';
-            });
+        const instanceManager = this.cloudInstanceManagerSelector.selectInstanceManager(group.cloud);
+        if (!instanceManager) {
+            ctx.logger.error(`Cloud type not configured: ${group.cloud}`);
+            return [];
+        }
+
+        const instances = await instanceManager.getInstances(ctx, group, cloudRetryStrategy);
+        return instances.filter(function (instance) {
+            return instance.cloudStatus !== 'Terminated';
+        });
     }
 }

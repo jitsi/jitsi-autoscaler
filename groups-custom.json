@@ -1,0 +1,29 @@
+{
+  "groupEntries": [
+    {
+      "name": "custom-bridgeGroup1",
+      "type": "jvb",
+      "region": "FRA1",
+      "environment": "lonely",
+      "compartmentId": "",
+      "instanceConfigurationId": "",
+      "enableAutoScale": true,
+      "enableLaunch": true,
+      "gracePeriodTTLSec": 480,
+      "protectedTTLSec": 600,
+      "scalingOptions": {
+        "minDesired": 1,
+        "maxDesired": 2,
+        "desiredCount": 2,
+        "scaleUpQuantity": 1,
+        "scaleDownQuantity": 1,
+        "scaleUpThreshold": 1,
+        "scaleDownThreshold": 2,
+        "scalePeriod": 60,
+        "scaleUpPeriodsCount": 2,
+        "scaleDownPeriodsCount": 4
+      },
+      "cloud": "custom"
+    }
+  ]
+}

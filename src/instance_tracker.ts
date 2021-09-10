@@ -576,4 +576,14 @@ export class InstanceTracker {
         }
         return states.filter((instanceState, index) => !statesShutdownStatus[index]);
     }
+
+    mapToInstanceDetails(states: Array<InstanceState>): Array<InstanceDetails> {
+        return states.map((response) => {
+            return <InstanceDetails>{
+                instanceId: response.instanceId,
+                instanceType: response.instanceType,
+                group: response.metadata.group,
+            };
+        });
+    }
 }

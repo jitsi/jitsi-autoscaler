@@ -222,6 +222,32 @@ class Handlers {
         }
     }
 
+    async reconfigureInstanceGroup(req: Request, res: Response): Promise<void> {
+        const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+            if (instanceGroup) {
+                // found the group, so find the instances and act upon them
+                // build the list of current instances
+                const currentInventory = await this.instanceTracker.trimCurrent(req.context, req.params.name);
+                const instances = this.instanceTracker.mapToInstanceDetails(currentInventory)
+                // set their reconfigure status to the current date
+                const result = await this.shutdownManager.setReconfigureStatus(req.context, instances);
+                if (result) {
+                    res.status(200);
+                    res.send({ save: 'OK', instances });
+                } else {
+                    res.status(500)
+                    res.send({ save: false, error: 'Failed to trigger reconfiguration' });
+                }
+            } else {
+                res.sendStatus(404);
+            }
+        } finally {
+            await lock.unlock();
+        }
+    }
+
     async updateInstanceConfiguration(req: Request, res: Response): Promise<void> {
         const instanceConfigurationUpdateRequest: InstanceConfigurationUpdateRequest = req.body;
         const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, req.params.name);

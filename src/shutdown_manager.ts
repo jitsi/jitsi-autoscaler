@@ -35,8 +35,11 @@ export default class ShutdownManager {
     async setReconfigureStatus(
         ctx: Context,
         instanceDetails: Array<InstanceDetails>,
-        status = 'reconfigure',
+        status = <string>null,
     ): Promise<boolean> {
+        if (status == null) {
+            status = new Date().toUTCString();
+        }
         const pipeline = this.redisClient.pipeline();
         for (const instance of instanceDetails) {
             const key = this.reconfigureKey(instance.instanceId);

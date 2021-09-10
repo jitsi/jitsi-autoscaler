@@ -551,6 +551,18 @@ app.put(
     },
 );
 
+app.post('/groups/:name/actions/reconfigure-instances', async (req, res, next) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+        await h.reconfigureInstanceGroup(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 app.listen(config.HTTPServerPort, () => {
     logger.info(`...listening on :${config.HTTPServerPort}`);
 });

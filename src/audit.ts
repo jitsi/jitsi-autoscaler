@@ -46,6 +46,8 @@ export interface InstanceAuditResponse {
     requestToLaunch: string;
     latestStatus: string;
     requestToTerminate: string;
+    requestToReconfigure: string;
+    reconfigureComplete: string;
     latestStatusInfo?: InstanceState;
 }
 
@@ -116,6 +118,35 @@ export default class Audit {
             };
             pipeline.set(
                 `audit:${instance.group}:${instance.instanceId}:request-to-terminate`,
+                JSON.stringify(value),
+                'ex',
+                this.auditTTL,
+            );
+        }
+        await pipeline.exec();
+    }
+
+    async saveUnsetReconfigureEvents(instanceId: string, group: string): Promise<void> {
+        const pipeline = this.redisClient.pipeline();
+        const value: InstanceAudit = {
+            instanceId: instanceId,
+            type: 'complete-reconfigure',
+            timestamp: Date.now(),
+        };
+        pipeline.set(`audit:${group}:${instanceId}:complete-reconfigure`, JSON.stringify(value), 'ex', this.auditTTL);
+        await pipeline.exec();
+    }
+
+    async saveReconfigureEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
+        const pipeline = this.redisClient.pipeline();
+        for (const instance of instanceDetails) {
+            const value: InstanceAudit = {
+                instanceId: instance.instanceId,
+                type: 'request-to-reconfigure',
+                timestamp: Date.now(),
+            };
+            pipeline.set(
+                `audit:${instance.group}:${instance.instanceId}:request-to-reconfigure`,
                 JSON.stringify(value),
                 'ex',
                 this.auditTTL,
@@ -257,6 +288,8 @@ export default class Audit {
                 requestToLaunch: 'unknown',
                 latestStatus: 'unknown',
                 requestToTerminate: 'unknown',
+                requestToReconfigure: 'unknown',
+                reconfigureComplete: 'unknown',
             };
             instanceAuditResponseList.push(instanceAuditResponse);
         });
@@ -271,6 +304,12 @@ export default class Audit {
                         break;
                     case 'request-to-terminate':
                         instanceAuditResponse.requestToTerminate = new Date(instanceAudit.timestamp).toUTCString();
+                        break;
+                    case 'request-to-reconfigure':
+                        instanceAuditResponse.requestToReconfigure = new Date(instanceAudit.timestamp).toUTCString();
+                        break;
+                    case 'reconfigure-complete':
+                        instanceAuditResponse.reconfigureComplete = new Date(instanceAudit.timestamp).toUTCString();
                         break;
                     case 'latest-status':
                         instanceAuditResponse.latestStatus = new Date(instanceAudit.timestamp).toUTCString();

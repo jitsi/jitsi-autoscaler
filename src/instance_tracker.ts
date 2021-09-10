@@ -74,6 +74,7 @@ export interface StatsReport {
     shutdownError?: boolean;
     reconfigureError?: boolean;
     statsError?: boolean;
+    reconfigureComplete?: string;
 }
 
 export interface InstanceStatus {
@@ -109,6 +110,7 @@ export interface InstanceState {
     reconfigureError?: boolean;
     shutdownError?: boolean;
     statsError?: boolean;
+    lastReconfigured?: string;
 }
 
 export interface InstanceTrackerOptions {
@@ -151,7 +153,12 @@ export class InstanceTracker {
     }
 
     // @TODO: handle stats for instances
-    async stats(ctx: Context, report: StatsReport, shutdownStatus = false): Promise<boolean> {
+    async stats(
+        ctx: Context,
+        report: StatsReport,
+        shutdownStatus = false,
+        reconfigureValue = <string>null,
+    ): Promise<boolean> {
         ctx.logger.debug('Received report', { report });
         const instanceState = <InstanceState>{
             instanceId: report.instance.instanceId,
@@ -166,6 +173,11 @@ export class InstanceTracker {
             reconfigureError: report.reconfigureError,
             statsError: report.statsError,
         };
+
+        if (report.reconfigureComplete) {
+            instanceState.lastReconfigured = report.reconfigureComplete;
+        }
+
         if (isEmpty(report.stats) || report.statsError) {
             // empty stats report, this can happen either at provisioning when jibri is not yet up, or when the sidecar does not see a jibri
             ctx.logger.warn('Empty stats report, as it does not include jibri or jvb stats', { report });
@@ -187,7 +199,7 @@ export class InstanceTracker {
             }
         }
         ctx.logger.debug('Tracking instance state', { instanceState });
-        return await this.track(ctx, instanceState, shutdownStatus);
+        return await this.track(ctx, instanceState, shutdownStatus, reconfigureValue);
     }
 
     private getGroupInstancesStatesKey(groupName: string): string {
@@ -203,8 +215,16 @@ export class InstanceTracker {
         return result == 1;
     }
 
-    async track(ctx: Context, state: InstanceState, shutdownStatus = false): Promise<boolean> {
+    async track(
+        ctx: Context,
+        state: InstanceState,
+        shutdownStatus = false,
+        reconfigureValue = <string>null,
+    ): Promise<boolean> {
+        let returnReconfigureValue = false;
+
         let group = 'default';
+
         // pull the group from metadata if provided
         if (state.metadata && state.metadata.group) {
             group = state.metadata.group;
@@ -221,6 +241,19 @@ export class InstanceTracker {
             `${state.instanceId}`,
             JSON.stringify(state),
         );
+
+        if (reconfigureValue !== null) {
+            returnReconfigureValue = true;
+            // reconfigure was set, so check report for last reconfigured
+            if (state.lastReconfigured) {
+                const dLast = new Date(state.lastReconfigured);
+                const dValue = new Date(reconfigureValue);
+                if (dLast >= dValue) {
+                    await this.shutdownManager.unsetReconfigureStatus(ctx, state.instanceId, group);
+                    returnReconfigureValue = null;
+                }
+            }
+        }
 
         const isInstanceShuttingDown = state.shutdownStatus || shutdownStatus;
         // Store metric, but only for running instances
@@ -269,7 +302,7 @@ export class InstanceTracker {
 
         //monitor latest status
         await this.audit.saveLatestStatus(group, state.instanceId, state);
-        return true;
+        return returnReconfigureValue;
     }
 
     async getSummaryMetricPerPeriod(

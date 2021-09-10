@@ -87,6 +87,11 @@ interface HandlersOptions {
     scalingManager: ScalingManager;
 }
 
+// utility to ensure reconfiguration is checked the same way
+function checkReconfigureValue(value: string): boolean {
+    return value !== null;
+}
+
 class Handlers {
     private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
@@ -110,11 +115,15 @@ class Handlers {
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, details.instanceId);
-        // TODO: implement reconfiguration checks
-        const reconfigureStatus = false;
+        const [shutdownStatus, reconfigureValue] = await Promise.all([
+            this.shutdownManager.getShutdownStatus(req.context, details.instanceId),
+            this.shutdownManager.getReconfigureValue(req.context, details.instanceId),
+        ]);
 
-        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: reconfigureStatus };
+        const sendResponse: SidecarResponse = {
+            shutdown: shutdownStatus,
+            reconfigure: checkReconfigureValue(reconfigureValue),
+        };
 
         res.status(200);
         res.send(sendResponse);
@@ -122,8 +131,12 @@ class Handlers {
 
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
-        await this.instanceTracker.stats(req.context, report, shutdownStatus);
+        const [shutdownStatus, reconfigureValue] = await Promise.all([
+            this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
+            this.shutdownManager.getReconfigureValue(req.context, report.instance.instanceId),
+        ]);
+
+        await this.instanceTracker.stats(req.context, report, shutdownStatus, reconfigureValue);
 
         res.status(200);
         res.send({ save: 'OK' });
@@ -131,14 +144,18 @@ class Handlers {
 
     async sidecarStatus(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
+        const [shutdownStatus, reconfigureValue] = await Promise.all([
+            this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
+            this.shutdownManager.getReconfigureValue(req.context, report.instance.instanceId),
+        ]);
+
+        // by default return reconfigure only when value is not null
+        let reconfigureStatus = checkReconfigureValue(reconfigureValue);
         try {
-            await this.instanceTracker.stats(req.context, report, shutdownStatus);
+            reconfigureStatus = await this.instanceTracker.stats(req.context, report, shutdownStatus, reconfigureValue);
         } catch (err) {
             req.context.logger.error('Status handling error', { err });
         }
-        // TODO: implement reconfiguration checks
-        const reconfigureStatus = false;
 
         const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: reconfigureStatus };
 

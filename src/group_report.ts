@@ -13,6 +13,10 @@ export interface InstanceReport {
     cloudStatus?: string;
     isShuttingDown?: boolean;
     isScaleDownProtected?: boolean;
+    reconfigureScheduled?: string;
+    lastReconfigured?: string;
+    reconfigureError?: boolean;
+    shutdownError?: boolean;
     privateIp?: string;
     publicIp?: string;
     version?: string;
@@ -29,6 +33,9 @@ export interface GroupReport {
     cloudCount?: number;
     unTrackedCount?: number;
     shuttingDownCount?: number;
+    shutdownErrorCount?: number;
+    reconfigureErrorCount?: number;
+    reconfigureScheduledCount?: number;
     scaleDownProtectedCount?: number;
     instances?: Array<InstanceReport>;
 }
@@ -76,6 +83,9 @@ export default class GroupReportGenerator {
             expiredCount: 0,
             unTrackedCount: 0,
             shuttingDownCount: 0,
+            shutdownErrorCount: 0,
+            reconfigureErrorCount: 0,
+            reconfigureScheduledCount: 0,
             scaleDownProtectedCount: 0,
             instances: [],
         };
@@ -94,6 +104,7 @@ export default class GroupReportGenerator {
         });
 
         await this.addShutdownStatus(ctx, groupReport.instances);
+        await this.addReconfigureValue(ctx, groupReport.instances);
         await this.addShutdownProtectedStatus(ctx, groupReport.instances);
 
         groupReport.instances.forEach((instanceReport) => {
@@ -105,6 +116,15 @@ export default class GroupReportGenerator {
             }
             if (instanceReport.isScaleDownProtected) {
                 groupReport.scaleDownProtectedCount++;
+            }
+            if (instanceReport.reconfigureError) {
+                groupReport.reconfigureErrorCount++;
+            }
+            if (instanceReport.shutdownError) {
+                groupReport.shutdownErrorCount++;
+            }
+            if (instanceReport.reconfigureScheduled) {
+                groupReport.reconfigureScheduledCount++;
             }
             if (
                 instanceReport.scaleStatus == 'unknown' &&
@@ -155,6 +175,9 @@ export default class GroupReportGenerator {
                 cloudStatus: 'unknown',
                 version: 'unknown',
                 isShuttingDown: instanceState.shutdownStatus,
+                lastReconfigured: instanceState.lastReconfigured,
+                reconfigureError: instanceState.reconfigureError,
+                shutdownError: instanceState.shutdownError,
                 isScaleDownProtected: false,
             };
             if (instanceState.shutdownStatus) {
@@ -226,6 +249,19 @@ export default class GroupReportGenerator {
         });
 
         return instanceReports;
+    }
+
+    private async addReconfigureValue(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+        const reconfigureValues = await this.shutdownManager.getReconfigureValues(
+            ctx,
+            instanceReports.map((instanceReport) => {
+                return instanceReport.instanceId;
+            }),
+        );
+
+        for (let i = 0; i < instanceReports.length; i++) {
+            instanceReports[i].reconfigureScheduled = reconfigureValues[i];
+        }
     }
 
     private async addShutdownStatus(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {

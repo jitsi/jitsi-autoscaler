@@ -130,10 +130,10 @@ export default class Audit {
         const pipeline = this.redisClient.pipeline();
         const value: InstanceAudit = {
             instanceId: instanceId,
-            type: 'complete-reconfigure',
+            type: 'reconfigure-complete',
             timestamp: Date.now(),
         };
-        pipeline.set(`audit:${group}:${instanceId}:complete-reconfigure`, JSON.stringify(value), 'ex', this.auditTTL);
+        pipeline.set(`audit:${group}:${instanceId}:reconfigure-complete`, JSON.stringify(value), 'ex', this.auditTTL);
         await pipeline.exec();
     }
 

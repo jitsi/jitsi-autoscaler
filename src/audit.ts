@@ -300,19 +300,19 @@ export default class Audit {
             )) {
                 switch (instanceAudit.type) {
                     case 'request-to-launch':
-                        instanceAuditResponse.requestToLaunch = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.requestToLaunch = new Date(instanceAudit.timestamp).toISOString();
                         break;
                     case 'request-to-terminate':
-                        instanceAuditResponse.requestToTerminate = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.requestToTerminate = new Date(instanceAudit.timestamp).toISOString();
                         break;
                     case 'request-to-reconfigure':
-                        instanceAuditResponse.requestToReconfigure = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.requestToReconfigure = new Date(instanceAudit.timestamp).toISOString();
                         break;
                     case 'reconfigure-complete':
-                        instanceAuditResponse.reconfigureComplete = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.reconfigureComplete = new Date(instanceAudit.timestamp).toISOString();
                         break;
                     case 'latest-status':
-                        instanceAuditResponse.latestStatus = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.latestStatus = new Date(instanceAudit.timestamp).toISOString();
                         instanceAuditResponse.latestStatusInfo = instanceAudit.state;
                         break;
                 }
@@ -335,10 +335,10 @@ export default class Audit {
         for (const groupAudit of groupAudits) {
             switch (groupAudit.type) {
                 case 'last-launcher-run':
-                    groupAuditResponse.lastLauncherRun = new Date(groupAudit.timestamp).toUTCString();
+                    groupAuditResponse.lastLauncherRun = new Date(groupAudit.timestamp).toISOString();
                     break;
                 case 'last-autoScaler-run':
-                    groupAuditResponse.lastAutoScalerRun = new Date(groupAudit.timestamp).toUTCString();
+                    groupAuditResponse.lastAutoScalerRun = new Date(groupAudit.timestamp).toISOString();
                     break;
                 case 'launcher-action-item':
                     launcherActionItems.push(groupAudit.launcherActionItem);
@@ -351,12 +351,12 @@ export default class Audit {
         autoScalerActionItems
             .sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1))
             .map(function (key) {
-                key.timestamp = new Date(key.timestamp).toUTCString();
+                key.timestamp = new Date(key.timestamp).toISOString();
             });
         launcherActionItems
             .sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1))
             .map(function (key) {
-                key.timestamp = new Date(key.timestamp).toUTCString();
+                key.timestamp = new Date(key.timestamp).toISOString();
             });
 
         groupAuditResponse.autoScalerActionItems = autoScalerActionItems;

@@ -38,7 +38,7 @@ export default class ShutdownManager {
         status = <string>null,
     ): Promise<boolean> {
         if (status == null) {
-            status = new Date().toUTCString();
+            status = new Date().toISOString();
         }
         const pipeline = this.redisClient.pipeline();
         for (const instance of instanceDetails) {

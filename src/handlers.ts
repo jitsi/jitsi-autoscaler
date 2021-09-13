@@ -4,13 +4,14 @@ import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import Redlock from 'redlock';
 import ShutdownManager from './shutdown_manager';
+import ReconfigureManager from './reconfigure_manager';
 import GroupReportGenerator from './group_report';
 import Audit from './audit';
 import ScalingManager from './scaling_options_manager';
 
 interface SidecarResponse {
     shutdown: boolean;
-    reconfigure: boolean;
+    reconfigure: string;
 }
 
 interface InstanceGroupScalingActivitiesRequest {
@@ -81,20 +82,17 @@ interface HandlersOptions {
     instanceTracker: InstanceTracker;
     audit: Audit;
     shutdownManager: ShutdownManager;
+    reconfigureManager: ReconfigureManager;
     instanceGroupManager: InstanceGroupManager;
     groupReportGenerator: GroupReportGenerator;
     lockManager: LockManager;
     scalingManager: ScalingManager;
 }
 
-// utility to ensure reconfiguration is checked the same way
-function checkReconfigureValue(value: string): boolean {
-    return value !== null;
-}
-
 class Handlers {
     private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
+    private reconfigureManager: ReconfigureManager;
     private instanceGroupManager: InstanceGroupManager;
     private groupReportGenerator: GroupReportGenerator;
     private lockManager: LockManager;
@@ -108,6 +106,7 @@ class Handlers {
         this.instanceTracker = options.instanceTracker;
         this.instanceGroupManager = options.instanceGroupManager;
         this.shutdownManager = options.shutdownManager;
+        this.reconfigureManager = options.reconfigureManager;
         this.groupReportGenerator = options.groupReportGenerator;
         this.audit = options.audit;
         this.scalingManager = options.scalingManager;
@@ -115,14 +114,14 @@ class Handlers {
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
-        const [shutdownStatus, reconfigureValue] = await Promise.all([
+        const [shutdownStatus, reconfigureDate] = await Promise.all([
             this.shutdownManager.getShutdownStatus(req.context, details.instanceId),
-            this.shutdownManager.getReconfigureValue(req.context, details.instanceId),
+            this.reconfigureManager.getReconfigureDate(req.context, details.instanceId),
         ]);
 
         const sendResponse: SidecarResponse = {
             shutdown: shutdownStatus,
-            reconfigure: checkReconfigureValue(reconfigureValue),
+            reconfigure: reconfigureDate,
         };
 
         res.status(200);
@@ -131,12 +130,14 @@ class Handlers {
 
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        const [shutdownStatus, reconfigureValue] = await Promise.all([
+        const [shutdownStatus, reconfigureDate] = await Promise.all([
             this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
-            this.shutdownManager.getReconfigureValue(req.context, report.instance.instanceId),
+            this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
         ]);
 
-        await this.instanceTracker.stats(req.context, report, shutdownStatus, reconfigureValue);
+        await this.reconfigureManager.processInstanceReport(req.context, report, reconfigureDate);
+
+        await this.instanceTracker.stats(req.context, report, shutdownStatus);
 
         res.status(200);
         res.send({ save: 'OK' });
@@ -144,20 +145,24 @@ class Handlers {
 
     async sidecarStatus(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        const [shutdownStatus, reconfigureValue] = await Promise.all([
+        const [shutdownStatus, reconfigureDate] = await Promise.all([
             this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
-            this.shutdownManager.getReconfigureValue(req.context, report.instance.instanceId),
+            this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
         ]);
 
-        // by default return reconfigure only when value is not null
-        let reconfigureStatus = checkReconfigureValue(reconfigureValue);
+        let postReconfigureDate = reconfigureDate;
         try {
-            reconfigureStatus = await this.instanceTracker.stats(req.context, report, shutdownStatus, reconfigureValue);
+            postReconfigureDate = await this.reconfigureManager.processInstanceReport(
+                req.context,
+                report,
+                reconfigureDate,
+            );
+            await this.instanceTracker.stats(req.context, report, shutdownStatus);
         } catch (err) {
             req.context.logger.error('Status handling error', { err });
         }
 
-        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: reconfigureStatus };
+        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: postReconfigureDate };
 
         res.status(200);
         res.send(sendResponse);
@@ -230,14 +235,14 @@ class Handlers {
                 // found the group, so find the instances and act upon them
                 // build the list of current instances
                 const currentInventory = await this.instanceTracker.trimCurrent(req.context, req.params.name);
-                const instances = this.instanceTracker.mapToInstanceDetails(currentInventory)
+                const instances = this.instanceTracker.mapToInstanceDetails(currentInventory);
                 // set their reconfigure status to the current date
-                const result = await this.shutdownManager.setReconfigureStatus(req.context, instances);
+                const result = await this.reconfigureManager.setReconfigureDate(req.context, instances);
                 if (result) {
                     res.status(200);
                     res.send({ save: 'OK', instances });
                 } else {
-                    res.status(500)
+                    res.status(500);
                     res.send({ save: false, error: 'Failed to trigger reconfiguration' });
                 }
             } else {

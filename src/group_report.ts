@@ -4,6 +4,7 @@ import { InstanceGroup } from './instance_group';
 import { CloudInstance } from './cloud_manager';
 import ShutdownManager from './shutdown_manager';
 import MetricsLoop from './metrics_loop';
+import ReconfigureManager from './reconfigure_manager';
 
 export interface InstanceReport {
     instanceId: string;
@@ -43,17 +44,20 @@ export interface GroupReport {
 export interface GroupReportGeneratorOptions {
     instanceTracker: InstanceTracker;
     shutdownManager: ShutdownManager;
+    reconfigureManager: ReconfigureManager;
     metricsLoop: MetricsLoop;
 }
 
 export default class GroupReportGenerator {
     private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
+    private reconfigureManager: ReconfigureManager;
     private metricsLoop: MetricsLoop;
 
     constructor(options: GroupReportGeneratorOptions) {
         this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;
+        this.reconfigureManager = options.reconfigureManager;
         this.metricsLoop = options.metricsLoop;
 
         this.generateReport = this.generateReport.bind(this);
@@ -104,7 +108,7 @@ export default class GroupReportGenerator {
         });
 
         await this.addShutdownStatus(ctx, groupReport.instances);
-        await this.addReconfigureValue(ctx, groupReport.instances);
+        await this.addReconfigureDate(ctx, groupReport.instances);
         await this.addShutdownProtectedStatus(ctx, groupReport.instances);
 
         groupReport.instances.forEach((instanceReport) => {
@@ -251,8 +255,8 @@ export default class GroupReportGenerator {
         return instanceReports;
     }
 
-    private async addReconfigureValue(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
-        const reconfigureValues = await this.shutdownManager.getReconfigureValues(
+    private async addReconfigureDate(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+        const reconfigureDates = await this.reconfigureManager.getReconfigureDates(
             ctx,
             instanceReports.map((instanceReport) => {
                 return instanceReport.instanceId;
@@ -260,7 +264,7 @@ export default class GroupReportGenerator {
         );
 
         for (let i = 0; i < instanceReports.length; i++) {
-            instanceReports[i].reconfigureScheduled = reconfigureValues[i];
+            instanceReports[i].reconfigureScheduled = reconfigureDates[i];
         }
     }
 

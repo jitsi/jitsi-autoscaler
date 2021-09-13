@@ -28,61 +28,6 @@ export default class ShutdownManager {
         return `instance:scaleDownProtected:${instanceId}`;
     }
 
-    reconfigureKey(instanceId: string): string {
-        return `instance:reconfigure:${instanceId}`;
-    }
-
-    async setReconfigureStatus(
-        ctx: Context,
-        instanceDetails: Array<InstanceDetails>,
-        status = <string>null,
-    ): Promise<boolean> {
-        if (status == null) {
-            status = new Date().toISOString();
-        }
-        const pipeline = this.redisClient.pipeline();
-        for (const instance of instanceDetails) {
-            const key = this.reconfigureKey(instance.instanceId);
-            ctx.logger.debug('Writing reconfigure status', { key, status });
-            pipeline.set(key, status, 'ex', this.shutdownTTL);
-        }
-        await pipeline.exec();
-        await this.audit.saveReconfigureEvents(instanceDetails);
-        return true;
-    }
-
-    async unsetReconfigureStatus(ctx: Context, instanceId: string, group: string): Promise<boolean> {
-        const key = this.reconfigureKey(instanceId);
-        const res = await this.redisClient.del(key);
-        ctx.logger.debug('Remove reconfigure value', { key, res });
-        await this.audit.saveUnsetReconfigureEvents(instanceId, group);
-        return true;
-    }
-
-    async getReconfigureValues(ctx: Context, instanceIds: Array<string>): Promise<string[]> {
-        const pipeline = this.redisClient.pipeline();
-        instanceIds.forEach((instanceId) => {
-            const key = this.reconfigureKey(instanceId);
-            pipeline.get(key);
-        });
-        const instances = await pipeline.exec();
-        return instances.map((instance: any) => {
-            return instance[1];
-        });
-    }
-
-    async getReconfigureValue(ctx: Context, instanceId: string): Promise<string> {
-        const key = this.reconfigureKey(instanceId);
-        const res = await this.redisClient.get(key);
-        ctx.logger.debug('Read reconfigure value', { key, res });
-        return res;
-    }
-
-    async getReconfigureStatus(ctx: Context, instanceId: string): Promise<boolean> {
-        const res = await this.getReconfigureValue(ctx, instanceId);
-        return res !== null;
-    }
-
     async setShutdownStatus(
         ctx: Context,
         instanceDetails: Array<InstanceDetails>,

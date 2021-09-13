@@ -17,6 +17,7 @@ import InstanceLauncher from './instance_launcher';
 import LockManager from './lock_manager';
 import * as stats from './stats';
 import ShutdownManager from './shutdown_manager';
+import ReconfigureManager from './reconfigure_manager';
 import JobManager from './job_manager';
 import GroupReportGenerator from './group_report';
 import Audit from './audit';
@@ -78,7 +79,11 @@ const audit = new Audit({
 const shutdownManager = new ShutdownManager({
     redisClient,
     shutdownTTL: config.ShutDownTTL,
-    audit: audit,
+
+const reconfigureManager = new ReconfigureManager({
+    redisClient,
+    reconfigureTTL: config.ReconfigureTTL,
+    audit,
 });
 
 const instanceTracker = new InstanceTracker({
@@ -164,9 +169,10 @@ const instanceLauncher = new InstanceLauncher({
 });
 
 const groupReportGenerator = new GroupReportGenerator({
-    instanceTracker: instanceTracker,
-    shutdownManager: shutdownManager,
-    metricsLoop: metricsLoop,
+    instanceTracker,
+    shutdownManager,
+    reconfigureManager,
+    metricsLoop,
 });
 
 const sanityLoop = new SanityLoop({
@@ -252,13 +258,14 @@ async function pollForMetrics(metricsLoop: MetricsLoop) {
 }
 
 const h = new Handlers({
-    instanceTracker: instanceTracker,
-    instanceGroupManager: instanceGroupManager,
-    shutdownManager: shutdownManager,
-    groupReportGenerator: groupReportGenerator,
-    lockManager: lockManager,
-    audit: audit,
-    scalingManager: scalingManager,
+    instanceTracker,
+    instanceGroupManager,
+    shutdownManager,
+    reconfigureManager,
+    groupReportGenerator,
+    lockManager,
+    audit,
+    scalingManager,
 });
 
 const validator = new Validator({ instanceTracker, instanceGroupManager });

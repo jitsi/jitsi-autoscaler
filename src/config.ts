@@ -42,6 +42,7 @@ const env = envalid.cleanEnv(process.env, {
     IDLE_TTL_SEC: envalid.num({ default: 300 }), // seconds, default to 5 minutes
     PROVISIONING_TTL_SEC: envalid.num({ default: 900 }), // seconds
     SHUTDOWN_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
+    RECONFIGURE_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
     SHUTDOWN_STATUS_TTL_SEC: envalid.num({ default: 600 }), // default 10 minutes
     AUDIT_TTL_SEC: envalid.num({ default: 172800 }), // default 2 day
     MAX_THROTTLE_THRESHOLD: envalid.num({ default: 40 }), // default max of 40 untracked per group to throttle scale up
@@ -124,6 +125,7 @@ export default {
     IdleTTL: env.IDLE_TTL_SEC,
     ShutdownStatusTTL: env.SHUTDOWN_STATUS_TTL_SEC,
     ShutDownTTL: env.SHUTDOWN_TTL_SEC,
+    ReconfigureTTL: env.RECONFIGURE_TTL_SEC,
     AuditTTL: env.AUDIT_TTL_SEC,
     GroupRelatedDataTTL: env.GROUP_RELATED_DATA_TTL_SEC,
     // group processing lock

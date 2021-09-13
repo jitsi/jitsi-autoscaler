@@ -153,12 +153,7 @@ export class InstanceTracker {
     }
 
     // @TODO: handle stats for instances
-    async stats(
-        ctx: Context,
-        report: StatsReport,
-        shutdownStatus = false,
-        reconfigureValue = <string>null,
-    ): Promise<boolean> {
+    async stats(ctx: Context, report: StatsReport, shutdownStatus = false): Promise<void> {
         ctx.logger.debug('Received report', { report });
         const instanceState = <InstanceState>{
             instanceId: report.instance.instanceId,
@@ -199,7 +194,7 @@ export class InstanceTracker {
             }
         }
         ctx.logger.debug('Tracking instance state', { instanceState });
-        return await this.track(ctx, instanceState, shutdownStatus, reconfigureValue);
+        return await this.track(ctx, instanceState, shutdownStatus);
     }
 
     private getGroupInstancesStatesKey(groupName: string): string {
@@ -215,14 +210,7 @@ export class InstanceTracker {
         return result == 1;
     }
 
-    async track(
-        ctx: Context,
-        state: InstanceState,
-        shutdownStatus = false,
-        reconfigureValue = <string>null,
-    ): Promise<boolean> {
-        let returnReconfigureValue = false;
-
+    async track(ctx: Context, state: InstanceState, shutdownStatus = false): Promise<void> {
         let group = 'default';
 
         // pull the group from metadata if provided
@@ -241,19 +229,6 @@ export class InstanceTracker {
             `${state.instanceId}`,
             JSON.stringify(state),
         );
-
-        if (reconfigureValue !== null) {
-            returnReconfigureValue = true;
-            // reconfigure was set, so check report for last reconfigured
-            if (state.lastReconfigured) {
-                const dLast = new Date(state.lastReconfigured);
-                const dValue = new Date(reconfigureValue);
-                if (dLast >= dValue) {
-                    await this.shutdownManager.unsetReconfigureStatus(ctx, state.instanceId, group);
-                    returnReconfigureValue = null;
-                }
-            }
-        }
 
         const isInstanceShuttingDown = state.shutdownStatus || shutdownStatus;
         // Store metric, but only for running instances
@@ -302,7 +277,7 @@ export class InstanceTracker {
 
         //monitor latest status
         await this.audit.saveLatestStatus(group, state.instanceId, state);
-        return returnReconfigureValue;
+        return;
     }
 
     async getSummaryMetricPerPeriod(

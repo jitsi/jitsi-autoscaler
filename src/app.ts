@@ -70,7 +70,7 @@ if (config.RedisDb) {
 const redisClient = new Redis(redisOptions);
 
 const audit = new Audit({
-    redisClient: redisClient,
+    redisClient,
     redisScanCount: config.RedisScanCount,
     auditTTL: config.AuditTTL,
     groupRelatedDataTTL: config.GroupRelatedDataTTL,
@@ -79,6 +79,8 @@ const audit = new Audit({
 const shutdownManager = new ShutdownManager({
     redisClient,
     shutdownTTL: config.ShutDownTTL,
+    audit,
+});
 
 const reconfigureManager = new ReconfigureManager({
     redisClient,
@@ -89,8 +91,8 @@ const reconfigureManager = new ReconfigureManager({
 const instanceTracker = new InstanceTracker({
     redisClient,
     redisScanCount: config.RedisScanCount,
-    shutdownManager: shutdownManager,
-    audit: audit,
+    shutdownManager,
+    audit,
     idleTTL: config.IdleTTL,
     metricTTL: config.MetricTTL,
     provisioningTTL: config.ProvisioningTTL,
@@ -99,29 +101,27 @@ const instanceTracker = new InstanceTracker({
 });
 
 const cloudManager = new CloudManager({
-    shutdownManager: shutdownManager,
+    shutdownManager,
     isDryRun: config.DryRun,
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
     digitalOceanAPIToken: config.DigitalOceanAPIToken,
     digitalOceanConfigurationFilePath: config.DigitalOceanConfigurationFilePath,
-
-    instanceTracker: instanceTracker,
-    audit: audit,
+    instanceTracker,
+    audit,
     cloudProviders: config.CloudProviders,
-
     customConfigurationLaunchScriptPath: config.CustomConfigurationLaunchScriptPath,
     customConfigurationLaunchScriptTimeoutMs: config.CustomConfigurationLaunchScriptTimeoutMs,
 });
 
 const lockManager: LockManager = new LockManager(logger, {
-    redisClient: redisClient,
+    redisClient,
     jobCreationLockTTL: config.JobsCreationLockTTLMs,
     groupLockTTLMs: config.GroupLockTTLMs,
 });
 
 const instanceGroupManager = new InstanceGroupManager({
-    redisClient: redisClient,
+    redisClient,
     redisScanCount: config.RedisScanCount,
     initialGroupList: config.GroupList,
     groupJobsCreationGracePeriod: config.GroupJobsCreationGracePeriodSec,
@@ -140,12 +140,12 @@ instanceGroupManager.init(initCtx).catch((err) => {
 });
 
 const autoscaleProcessor = new AutoscaleProcessor({
-    instanceTracker: instanceTracker,
-    cloudManager: cloudManager,
-    instanceGroupManager: instanceGroupManager,
-    lockManager: lockManager,
+    instanceTracker,
+    cloudManager,
+    instanceGroupManager,
+    lockManager,
     redisClient,
-    audit: audit,
+    audit,
 });
 
 const metricsLoop = new MetricsLoop({
@@ -158,13 +158,13 @@ const metricsLoop = new MetricsLoop({
 
 const instanceLauncher = new InstanceLauncher({
     maxThrottleThreshold: config.MaxThrottleThreshold,
-    instanceTracker: instanceTracker,
-    cloudManager: cloudManager,
-    instanceGroupManager: instanceGroupManager,
-    lockManager: lockManager,
+    instanceTracker,
+    cloudManager,
+    instanceGroupManager,
+    lockManager,
     redisClient,
     shutdownManager,
-    audit: audit,
+    audit,
     metricsLoop,
 });
 
@@ -176,28 +176,28 @@ const groupReportGenerator = new GroupReportGenerator({
 });
 
 const sanityLoop = new SanityLoop({
-    redisClient: redisClient,
+    redisClient,
     metricsTTL: config.ServiceLevelMetricsTTL,
-    cloudManager: cloudManager,
+    cloudManager,
     reportExtCallRetryStrategy: {
         maxTimeInSeconds: config.ReportExtCallMaxTimeInSeconds,
         maxDelayInSeconds: config.ReportExtCallMaxDelayInSeconds,
         retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
     },
-    groupReportGenerator: groupReportGenerator,
-    instanceGroupManager: instanceGroupManager,
+    groupReportGenerator,
+    instanceGroupManager,
 });
 
 // Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
     queueRedisOptions: redisQueueOptions,
-    lockManager: lockManager,
-    instanceGroupManager: instanceGroupManager,
-    instanceLauncher: instanceLauncher,
+    lockManager,
+    instanceGroupManager,
+    instanceLauncher,
     autoscaler: autoscaleProcessor,
-    sanityLoop: sanityLoop,
-    metricsLoop: metricsLoop,
+    sanityLoop,
+    metricsLoop,
     autoscalerProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     launcherProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,

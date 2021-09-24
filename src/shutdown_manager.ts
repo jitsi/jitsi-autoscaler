@@ -51,7 +51,7 @@ export default class ShutdownManager {
             pipeline.get(key);
         });
         const instances = await pipeline.exec();
-        return instances.map((instance: any) => {
+        return instances.map((instance: string[]) => {
             return instance[1] == 'shutdown';
         });
     }
@@ -82,7 +82,7 @@ export default class ShutdownManager {
             pipeline.get(key);
         });
         const instances = await pipeline.exec();
-        return instances.map((instance: any) => {
+        return instances.map((instance: string[]) => {
             return instance[1] == 'isScaleDownProtected';
         });
     }

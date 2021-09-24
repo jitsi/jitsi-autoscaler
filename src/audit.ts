@@ -84,12 +84,23 @@ export default class Audit {
             this.auditTTL,
         );
         if (latestStatusSaved) {
-            this.increaseLaunchEventExpiration(groupName, instanceId);
-            this.increaseShutdownEventExpiration(groupName, instanceId);
+            this.increaseInstanceExpirations(groupName, instanceId);
         }
         return latestStatusSaved;
     }
 
+    async increaseInstanceExpirations(groupName: string, instanceId: string): Promise<boolean> {
+        const pipeline = this.redisClient.pipeline();
+
+        pipeline.expire(`audit:${groupName}:${instanceId}:request-to-launch`, this.auditTTL);
+        pipeline.expire(`audit:${groupName}:${instanceId}:request-to-terminate`, this.auditTTL);
+        pipeline.expire(`audit:${groupName}:${instanceId}:request-to-reconfigure`, this.auditTTL);
+        pipeline.expire(`audit:${groupName}:${instanceId}:reconfigure-complete`, this.auditTTL);
+
+        await pipeline.exec();
+
+        return true;
+    }
     async saveLaunchEvent(groupName: string, instanceId: string): Promise<boolean> {
         const value: InstanceAudit = {
             instanceId: instanceId,
@@ -97,15 +108,6 @@ export default class Audit {
             timestamp: Date.now(),
         };
         return this.setInstanceValue(`audit:${groupName}:${instanceId}:request-to-launch`, value, this.auditTTL);
-    }
-
-    private async increaseLaunchEventExpiration(groupName: string, instanceId: string): Promise<boolean> {
-        // we don't care if this fails (e.g. perhaps the event no longer is there)
-        const result = await this.redisClient.expire(
-            `audit:${groupName}:${instanceId}:request-to-launch`,
-            this.auditTTL,
-        );
-        return result == 1;
     }
 
     async saveShutdownEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
@@ -127,14 +129,17 @@ export default class Audit {
     }
 
     async saveUnsetReconfigureEvents(instanceId: string, group: string): Promise<void> {
-        const pipeline = this.redisClient.pipeline();
         const value: InstanceAudit = {
             instanceId: instanceId,
             type: 'reconfigure-complete',
             timestamp: Date.now(),
         };
-        pipeline.set(`audit:${group}:${instanceId}:reconfigure-complete`, JSON.stringify(value), 'ex', this.auditTTL);
-        await pipeline.exec();
+        await this.redisClient.set(
+            `audit:${group}:${instanceId}:reconfigure-complete`,
+            JSON.stringify(value),
+            'ex',
+            this.auditTTL,
+        );
     }
 
     async saveReconfigureEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
@@ -153,15 +158,6 @@ export default class Audit {
             );
         }
         await pipeline.exec();
-    }
-
-    private async increaseShutdownEventExpiration(groupName: string, instanceId: string): Promise<boolean> {
-        // we don't care if this fails (e.g. perhaps the event no longer is there)
-        const result = await this.redisClient.expire(
-            `audit:${groupName}:${instanceId}:request-to-terminate`,
-            this.auditTTL,
-        );
-        return result == 1;
     }
 
     async setInstanceValue(key: string, value: InstanceAudit, ttl: number): Promise<boolean> {

@@ -7,6 +7,7 @@ import { Context } from './context';
 import * as promClient from 'prom-client';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
+import MetricsLoop from './metrics_loop';
 
 const instancesLaunchedCounter = new promClient.Counter({
     name: 'autoscaling_instance_launched_total',
@@ -34,6 +35,7 @@ export interface InstanceLauncherOptions {
     redisClient: Redis.Redis;
     shutdownManager: ShutdownManager;
     audit: Audit;
+    metricsLoop: MetricsLoop;
 }
 
 export default class InstanceLauncher {
@@ -44,6 +46,7 @@ export default class InstanceLauncher {
     private lockManager: LockManager;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
+    private metricsLoop: MetricsLoop;
 
     constructor(options: InstanceLauncherOptions) {
         this.instanceTracker = options.instanceTracker;
@@ -53,6 +56,7 @@ export default class InstanceLauncher {
         this.redisClient = options.redisClient;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
+        this.metricsLoop = options.metricsLoop;
 
         this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
     }
@@ -84,7 +88,7 @@ export default class InstanceLauncher {
                 if (group.enableUntrackedThrottle == null || group.enableUntrackedThrottle == true) {
                     // use desired scaleUpQuantity to ensure we only scale up this many (plus one) until the previous batch are ready
                     const untrackedThrottleThreshold = group.scalingOptions.scaleUpQuantity + 1;
-                    const untrackedCount = await this.audit.getGroupUntrackedCount(ctx, group.name);
+                    const untrackedCount = await this.metricsLoop.getUnTrackedCount(group.name);
                     const allowedScaleUp = untrackedThrottleThreshold - untrackedCount;
 
                     ctx.logger.debug(

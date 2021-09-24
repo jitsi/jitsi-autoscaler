@@ -385,13 +385,4 @@ export default class Audit {
 
         return audit;
     }
-
-    async getGroupUntrackedCount(ctx: Context, groupName: string): Promise<number> {
-        const response = await this.redisClient.get(`service-metrics:${groupName}:untracked-count`);
-        if (response !== null && response.length > 0) {
-            return Number.parseFloat(response) || 0;
-        } else {
-            return 0;
-        }
-    }
 }

@@ -152,6 +152,7 @@ const metricsLoop = new MetricsLoop({
 });
 
 const instanceLauncher = new InstanceLauncher({
+    maxThrottleThreshold: config.MaxThrottleThreshold,
     instanceTracker: instanceTracker,
     cloudManager: cloudManager,
     instanceGroupManager: instanceGroupManager,

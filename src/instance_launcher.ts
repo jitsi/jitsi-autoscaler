@@ -28,6 +28,7 @@ const instanceErrorsCounter = new promClient.Counter({
 });
 
 export interface InstanceLauncherOptions {
+    maxThrottleThreshold?: number;
     instanceTracker: InstanceTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
@@ -39,6 +40,7 @@ export interface InstanceLauncherOptions {
 }
 
 export default class InstanceLauncher {
+    private maxThrottleThreshold = 40;
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
@@ -57,6 +59,10 @@ export default class InstanceLauncher {
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
         this.metricsLoop = options.metricsLoop;
+
+        if (options.maxThrottleThreshold) {
+            this.maxThrottleThreshold = options.maxThrottleThreshold;
+        }
 
         this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
     }
@@ -87,7 +93,11 @@ export default class InstanceLauncher {
                 // if untracked throttle enabled, only scale up if there aren't too many untracked instances
                 if (group.enableUntrackedThrottle == null || group.enableUntrackedThrottle == true) {
                     // use desired scaleUpQuantity to ensure we only scale up this many (plus one) until the previous batch are ready
-                    const untrackedThrottleThreshold = group.scalingOptions.maxDesired + 1;
+                    // ensure a maximum threshold from config (default of 40, much higher than ever seen except in cases in which throttling is desired)
+                    const untrackedThrottleThreshold = Math.min(
+                        group.scalingOptions.maxDesired + 1,
+                        this.maxThrottleThreshold,
+                    );
                     const untrackedCount = await this.metricsLoop.getUnTrackedCount(group.name);
                     // only allow scale up if untracked count is less than the threshold
                     const allowedScaleUp = untrackedCount < untrackedThrottleThreshold;

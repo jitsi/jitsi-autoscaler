@@ -81,38 +81,32 @@ export default class InstanceLauncher {
             if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
                 ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });
 
-                let actualScaleUpQuantity =
+                const actualScaleUpQuantity =
                     Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
 
                 // if untracked throttle enabled, only scale up if there aren't too many untracked instances
                 if (group.enableUntrackedThrottle == null || group.enableUntrackedThrottle == true) {
                     // use desired scaleUpQuantity to ensure we only scale up this many (plus one) until the previous batch are ready
-                    const untrackedThrottleThreshold = group.scalingOptions.scaleUpQuantity + 1;
+                    const untrackedThrottleThreshold = group.scalingOptions.maxDesired + 1;
                     const untrackedCount = await this.metricsLoop.getUnTrackedCount(group.name);
-                    const allowedScaleUp = untrackedThrottleThreshold - untrackedCount;
+                    // only allow scale up if untracked count is less than the threshold
+                    const allowedScaleUp = untrackedCount < untrackedThrottleThreshold;
 
                     ctx.logger.debug(
                         `[Launcher] Scaling throttle check for group ${groupName} with ${count} instances.`,
                         { actualScaleUpQuantity, untrackedThrottleThreshold, untrackedCount, allowedScaleUp },
                     );
-                    if (allowedScaleUp <= 0) {
+                    if (!allowedScaleUp) {
                         // not allow to scale at all, error out here
                         ctx.logger.error(
-                            `[Launcher] Scaling throttle launch of ANY new instances for group ${groupName} with ${count} instances.`,
+                            `[Launcher] Scaling throttle launch of ALL new instances for group ${groupName} with ${count} instances.`,
                             { untrackedCount, actualScaleUpQuantity, allowedScaleUp },
                         );
                         throw new Error(
-                            `[Launcher] Scaling throttled, failed to launch ANY new instances for group ${groupName}`,
+                            `[Launcher] Scaling throttled, failed to launch ALL new instances for group ${groupName}`,
                         );
                     } else {
-                        if (actualScaleUpQuantity > allowedScaleUp) {
-                            const throttleCount = actualScaleUpQuantity - allowedScaleUp;
-                            ctx.logger.error(
-                                `[Launcher] Scaling throttled launch count for group ${groupName} by ${throttleCount} instances.`,
-                                { untrackedCount, actualScaleUpQuantity, allowedScaleUp, throttleCount },
-                            );
-                            actualScaleUpQuantity = allowedScaleUp;
-                        }
+                        ctx.logger.debug(`[Launcher] Scaling throttle check passed for group ${groupName}.`);
                     }
                 } else {
                     ctx.logger.debug(`[Launcher] Scaling throttle disabled for group ${groupName}.`);

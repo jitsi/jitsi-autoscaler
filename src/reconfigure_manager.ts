@@ -24,19 +24,13 @@ export default class ReconfigureManager {
         return `instance:reconfigure:${instanceId}`;
     }
 
-    async setReconfigureDate(
-        ctx: Context,
-        instanceDetails: Array<InstanceDetails>,
-        status = <string>null,
-    ): Promise<boolean> {
-        if (status == null) {
-            status = new Date().toISOString();
-        }
+    async setReconfigureDate(ctx: Context, instanceDetails: Array<InstanceDetails>): Promise<boolean> {
+        const reconfigureDate = new Date().toISOString();
         const pipeline = this.redisClient.pipeline();
         for (const instance of instanceDetails) {
             const key = this.reconfigureKey(instance.instanceId);
-            ctx.logger.debug('Writing reconfigure status', { key, status });
-            pipeline.set(key, status, 'ex', this.reconfigureTTL);
+            ctx.logger.debug('Writing reconfigure date', { key, reconfigureDate });
+            pipeline.set(key, reconfigureDate, 'ex', this.reconfigureTTL);
         }
         await pipeline.exec();
         await this.audit.saveReconfigureEvents(instanceDetails);

@@ -236,6 +236,8 @@ class Handlers {
         const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
         if (instanceGroup) {
             if (instanceGroup.enableReconfiguration) {
+                // add audit item recording the request
+                await this.audit.updateLastReconfigureRequest(req.context, req.params.name);
                 // found the group, so find the instances and act upon them
                 // build the list of current instances
                 const currentInventory = await this.instanceTracker.trimCurrent(req.context, req.params.name);

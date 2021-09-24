@@ -37,6 +37,7 @@ export interface LauncherActionItem {
 export interface GroupAuditResponse {
     lastLauncherRun: string;
     lastAutoScalerRun: string;
+    lastReconfigureRequest: string;
     autoScalerActionItems?: AutoScalerActionItem[];
     launcherActionItems?: LauncherActionItem[];
 }
@@ -186,6 +187,17 @@ export default class Audit {
         return true;
     }
 
+    async updateLastReconfigureRequest(ctx: Context, groupName: string): Promise<boolean> {
+        const value: GroupAudit = {
+            groupName: groupName,
+            type: 'last-reconfigure-request',
+        };
+        const updateResponse = this.setGroupValue(groupName, value);
+        ctx.logger.info(`Updated last reconfiguration request for group ${groupName}`);
+
+        return updateResponse;
+    }
+
     async updateLastLauncherRun(ctx: Context, groupName: string): Promise<boolean> {
         const updateLastLaunchStart = process.hrtime();
 
@@ -324,6 +336,7 @@ export default class Audit {
         const groupAuditResponse: GroupAuditResponse = {
             lastLauncherRun: 'unknown',
             lastAutoScalerRun: 'unknown',
+            lastReconfigureRequest: 'unknown',
         };
 
         const autoScalerActionItems: AutoScalerActionItem[] = [];
@@ -335,6 +348,9 @@ export default class Audit {
                     break;
                 case 'last-autoScaler-run':
                     groupAuditResponse.lastAutoScalerRun = new Date(groupAudit.timestamp).toISOString();
+                    break;
+                case 'last-reconfigure-request':
+                    groupAuditResponse.lastReconfigureRequest = new Date(groupAudit.timestamp).toISOString();
                     break;
                 case 'launcher-action-item':
                     launcherActionItems.push(groupAudit.launcherActionItem);

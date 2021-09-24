@@ -143,7 +143,16 @@ const autoscaleProcessor = new AutoscaleProcessor({
     audit: audit,
 });
 
+const metricsLoop = new MetricsLoop({
+    redisClient: redisClient,
+    metricsTTL: config.ServiceLevelMetricsTTL,
+    instanceGroupManager: instanceGroupManager,
+    instanceTracker: instanceTracker,
+    ctx: initCtx,
+});
+
 const instanceLauncher = new InstanceLauncher({
+    maxThrottleThreshold: config.MaxThrottleThreshold,
     instanceTracker: instanceTracker,
     cloudManager: cloudManager,
     instanceGroupManager: instanceGroupManager,
@@ -151,14 +160,7 @@ const instanceLauncher = new InstanceLauncher({
     redisClient,
     shutdownManager,
     audit: audit,
-});
-
-const metricsLoop = new MetricsLoop({
-    redisClient: redisClient,
-    metricsTTL: config.ServiceLevelMetricsTTL,
-    instanceGroupManager: instanceGroupManager,
-    instanceTracker: instanceTracker,
-    ctx: initCtx,
+    metricsLoop,
 });
 
 const groupReportGenerator = new GroupReportGenerator({

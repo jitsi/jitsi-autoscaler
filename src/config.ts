@@ -44,6 +44,7 @@ const env = envalid.cleanEnv(process.env, {
     SHUTDOWN_TTL_SEC: envalid.num({ default: 86400 }), // default 1 day
     SHUTDOWN_STATUS_TTL_SEC: envalid.num({ default: 600 }), // default 10 minutes
     AUDIT_TTL_SEC: envalid.num({ default: 172800 }), // default 2 day
+    MAX_THROTTLE_THRESHOLD: envalid.num({ default: 40 }), // default max of 40 untracked per group to throttle scale up
     GROUP_RELATED_DATA_TTL_SEC: envalid.num({ default: 172800 }), // default 2 day; keep group related data max 2 days after the group is deleted or no action is performed on it
     GROUP_LOCK_TTL_MS: envalid.num({ default: 180000 }), // time in ms
     GROUP_JOBS_CREATION_INTERVAL_SEC: envalid.num({ default: 30 }), // with what interval this instance should try producing jobs for group processing
@@ -127,6 +128,8 @@ export default {
     GroupRelatedDataTTL: env.GROUP_RELATED_DATA_TTL_SEC,
     // group processing lock
     GroupLockTTLMs: env.GROUP_LOCK_TTL_MS,
+    // group untracked threshold
+    MaxThrottleThreshold: env.MAX_THROTTLE_THRESHOLD,
     // queue jobs producers
     GroupJobsCreationIntervalSec: env.GROUP_JOBS_CREATION_INTERVAL_SEC,
     SanityJobsCreationIntervalSec: env.SANITY_JOBS_CREATION_INTERVAL_SEC,

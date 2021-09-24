@@ -7,6 +7,7 @@ import { Context } from './context';
 import * as promClient from 'prom-client';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
+import MetricsLoop from './metrics_loop';
 
 const instancesLaunchedCounter = new promClient.Counter({
     name: 'autoscaling_instance_launched_total',
@@ -27,6 +28,7 @@ const instanceErrorsCounter = new promClient.Counter({
 });
 
 export interface InstanceLauncherOptions {
+    maxThrottleThreshold?: number;
     instanceTracker: InstanceTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
@@ -34,9 +36,11 @@ export interface InstanceLauncherOptions {
     redisClient: Redis.Redis;
     shutdownManager: ShutdownManager;
     audit: Audit;
+    metricsLoop: MetricsLoop;
 }
 
 export default class InstanceLauncher {
+    private maxThrottleThreshold = 40;
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
@@ -44,6 +48,7 @@ export default class InstanceLauncher {
     private lockManager: LockManager;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
+    private metricsLoop: MetricsLoop;
 
     constructor(options: InstanceLauncherOptions) {
         this.instanceTracker = options.instanceTracker;
@@ -53,6 +58,11 @@ export default class InstanceLauncher {
         this.redisClient = options.redisClient;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
+        this.metricsLoop = options.metricsLoop;
+
+        if (options.maxThrottleThreshold) {
+            this.maxThrottleThreshold = options.maxThrottleThreshold;
+        }
 
         this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
     }
@@ -79,6 +89,39 @@ export default class InstanceLauncher {
 
                 const actualScaleUpQuantity =
                     Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
+
+                // if untracked throttle enabled, only scale up if there aren't too many untracked instances
+                if (group.enableUntrackedThrottle == null || group.enableUntrackedThrottle == true) {
+                    // use desired scaleUpQuantity to ensure we only scale up this many (plus one) until the previous batch are ready
+                    // ensure a maximum threshold from config (default of 40, much higher than ever seen except in cases in which throttling is desired)
+                    const untrackedThrottleThreshold = Math.min(
+                        group.scalingOptions.maxDesired + 1,
+                        this.maxThrottleThreshold,
+                    );
+                    const untrackedCount = await this.metricsLoop.getUnTrackedCount(group.name);
+                    // only allow scale up if untracked count is less than the threshold
+                    const allowedScaleUp = untrackedCount < untrackedThrottleThreshold;
+
+                    ctx.logger.debug(
+                        `[Launcher] Scaling throttle check for group ${groupName} with ${count} instances.`,
+                        { actualScaleUpQuantity, untrackedThrottleThreshold, untrackedCount, allowedScaleUp },
+                    );
+                    if (!allowedScaleUp) {
+                        // not allow to scale at all, error out here
+                        ctx.logger.error(
+                            `[Launcher] Scaling throttle launch of ALL new instances for group ${groupName} with ${count} instances.`,
+                            { untrackedCount, actualScaleUpQuantity, allowedScaleUp },
+                        );
+                        throw new Error(
+                            `[Launcher] Scaling throttled, failed to launch ALL new instances for group ${groupName}`,
+                        );
+                    } else {
+                        ctx.logger.debug(`[Launcher] Scaling throttle check passed for group ${groupName}.`);
+                    }
+                } else {
+                    ctx.logger.debug(`[Launcher] Scaling throttle disabled for group ${groupName}.`);
+                }
+
                 const scaleDownProtected = await this.instanceGroupManager.isScaleDownProtected(group.name);
                 const scaleUpCount = await this.cloudManager.scaleUp(
                     ctx,

@@ -25,6 +25,7 @@ export interface InstanceGroup {
     enableAutoScale: boolean;
     enableLaunch: boolean;
     enableScheduler: boolean;
+    enableUntrackedThrottle: boolean;
     gracePeriodTTLSec: number;
     protectedTTLSec: number;
     scalingOptions: ScalingOptions;

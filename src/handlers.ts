@@ -17,6 +17,7 @@ interface InstanceGroupScalingActivitiesRequest {
     enableAutoScale?: boolean;
     enableLaunch?: boolean;
     enableScheduler?: boolean;
+    enableUntrackedThrottle?: boolean;
 }
 
 export interface InstanceGroupDesiredValuesRequest {
@@ -189,6 +190,10 @@ class Handlers {
                 if (scalingActivitiesRequest.enableScheduler != null) {
                     instanceGroup.enableScheduler = scalingActivitiesRequest.enableScheduler;
                 }
+                if (scalingActivitiesRequest.enableUntrackedThrottle != null) {
+                    instanceGroup.enableUntrackedThrottle = scalingActivitiesRequest.enableUntrackedThrottle;
+                }
+
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 res.status(200);
                 res.send({ save: 'OK' });

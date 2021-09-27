@@ -52,7 +52,7 @@ export default class ReconfigureManager {
             pipeline.get(key);
         });
         const instances = await pipeline.exec();
-        return instances.map((instance: any) => {
+        return instances.map((instance: string[]) => {
             return instance[1];
         });
     }

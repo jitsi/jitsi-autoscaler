@@ -17,6 +17,7 @@ import InstanceLauncher from './instance_launcher';
 import LockManager from './lock_manager';
 import * as stats from './stats';
 import ShutdownManager from './shutdown_manager';
+import ReconfigureManager from './reconfigure_manager';
 import JobManager from './job_manager';
 import GroupReportGenerator from './group_report';
 import Audit from './audit';
@@ -69,7 +70,7 @@ if (config.RedisDb) {
 const redisClient = new Redis(redisOptions);
 
 const audit = new Audit({
-    redisClient: redisClient,
+    redisClient,
     redisScanCount: config.RedisScanCount,
     auditTTL: config.AuditTTL,
     groupRelatedDataTTL: config.GroupRelatedDataTTL,
@@ -78,14 +79,20 @@ const audit = new Audit({
 const shutdownManager = new ShutdownManager({
     redisClient,
     shutdownTTL: config.ShutDownTTL,
-    audit: audit,
+    audit,
+});
+
+const reconfigureManager = new ReconfigureManager({
+    redisClient,
+    reconfigureTTL: config.ReconfigureTTL,
+    audit,
 });
 
 const instanceTracker = new InstanceTracker({
     redisClient,
     redisScanCount: config.RedisScanCount,
-    shutdownManager: shutdownManager,
-    audit: audit,
+    shutdownManager,
+    audit,
     idleTTL: config.IdleTTL,
     metricTTL: config.MetricTTL,
     provisioningTTL: config.ProvisioningTTL,
@@ -94,29 +101,27 @@ const instanceTracker = new InstanceTracker({
 });
 
 const cloudManager = new CloudManager({
-    shutdownManager: shutdownManager,
+    shutdownManager,
     isDryRun: config.DryRun,
     ociConfigurationFilePath: config.OciConfigurationFilePath,
     ociConfigurationProfile: config.OciConfigurationProfile,
     digitalOceanAPIToken: config.DigitalOceanAPIToken,
     digitalOceanConfigurationFilePath: config.DigitalOceanConfigurationFilePath,
-
-    instanceTracker: instanceTracker,
-    audit: audit,
+    instanceTracker,
+    audit,
     cloudProviders: config.CloudProviders,
-
     customConfigurationLaunchScriptPath: config.CustomConfigurationLaunchScriptPath,
     customConfigurationLaunchScriptTimeoutMs: config.CustomConfigurationLaunchScriptTimeoutMs,
 });
 
 const lockManager: LockManager = new LockManager(logger, {
-    redisClient: redisClient,
+    redisClient,
     jobCreationLockTTL: config.JobsCreationLockTTLMs,
     groupLockTTLMs: config.GroupLockTTLMs,
 });
 
 const instanceGroupManager = new InstanceGroupManager({
-    redisClient: redisClient,
+    redisClient,
     redisScanCount: config.RedisScanCount,
     initialGroupList: config.GroupList,
     groupJobsCreationGracePeriod: config.GroupJobsCreationGracePeriodSec,
@@ -135,12 +140,12 @@ instanceGroupManager.init(initCtx).catch((err) => {
 });
 
 const autoscaleProcessor = new AutoscaleProcessor({
-    instanceTracker: instanceTracker,
-    cloudManager: cloudManager,
-    instanceGroupManager: instanceGroupManager,
-    lockManager: lockManager,
+    instanceTracker,
+    cloudManager,
+    instanceGroupManager,
+    lockManager,
     redisClient,
-    audit: audit,
+    audit,
 });
 
 const metricsLoop = new MetricsLoop({
@@ -153,45 +158,46 @@ const metricsLoop = new MetricsLoop({
 
 const instanceLauncher = new InstanceLauncher({
     maxThrottleThreshold: config.MaxThrottleThreshold,
-    instanceTracker: instanceTracker,
-    cloudManager: cloudManager,
-    instanceGroupManager: instanceGroupManager,
-    lockManager: lockManager,
+    instanceTracker,
+    cloudManager,
+    instanceGroupManager,
+    lockManager,
     redisClient,
     shutdownManager,
-    audit: audit,
+    audit,
     metricsLoop,
 });
 
 const groupReportGenerator = new GroupReportGenerator({
-    instanceTracker: instanceTracker,
-    shutdownManager: shutdownManager,
-    metricsLoop: metricsLoop,
+    instanceTracker,
+    shutdownManager,
+    reconfigureManager,
+    metricsLoop,
 });
 
 const sanityLoop = new SanityLoop({
-    redisClient: redisClient,
+    redisClient,
     metricsTTL: config.ServiceLevelMetricsTTL,
-    cloudManager: cloudManager,
+    cloudManager,
     reportExtCallRetryStrategy: {
         maxTimeInSeconds: config.ReportExtCallMaxTimeInSeconds,
         maxDelayInSeconds: config.ReportExtCallMaxDelayInSeconds,
         retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
     },
-    groupReportGenerator: groupReportGenerator,
-    instanceGroupManager: instanceGroupManager,
+    groupReportGenerator,
+    instanceGroupManager,
 });
 
 // Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
     queueRedisOptions: redisQueueOptions,
-    lockManager: lockManager,
-    instanceGroupManager: instanceGroupManager,
-    instanceLauncher: instanceLauncher,
+    lockManager,
+    instanceGroupManager,
+    instanceLauncher,
     autoscaler: autoscaleProcessor,
-    sanityLoop: sanityLoop,
-    metricsLoop: metricsLoop,
+    sanityLoop,
+    metricsLoop,
     autoscalerProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     launcherProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,
@@ -252,13 +258,14 @@ async function pollForMetrics(metricsLoop: MetricsLoop) {
 }
 
 const h = new Handlers({
-    instanceTracker: instanceTracker,
-    instanceGroupManager: instanceGroupManager,
-    shutdownManager: shutdownManager,
-    groupReportGenerator: groupReportGenerator,
-    lockManager: lockManager,
-    audit: audit,
-    scalingManager: scalingManager,
+    instanceTracker,
+    instanceGroupManager,
+    shutdownManager,
+    reconfigureManager,
+    groupReportGenerator,
+    lockManager,
+    audit,
+    scalingManager,
 });
 
 const validator = new Validator({ instanceTracker, instanceGroupManager });
@@ -550,6 +557,18 @@ app.put(
         }
     },
 );
+
+app.post('/groups/:name/actions/reconfigure-instances', async (req, res, next) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+        await h.reconfigureInstanceGroup(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
 
 app.listen(config.HTTPServerPort, () => {
     logger.info(`...listening on :${config.HTTPServerPort}`);

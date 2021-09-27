@@ -4,6 +4,7 @@ import { InstanceGroup } from './instance_group';
 import { CloudInstance } from './cloud_manager';
 import ShutdownManager from './shutdown_manager';
 import MetricsLoop from './metrics_loop';
+import ReconfigureManager from './reconfigure_manager';
 
 export interface InstanceReport {
     instanceId: string;
@@ -13,6 +14,10 @@ export interface InstanceReport {
     cloudStatus?: string;
     isShuttingDown?: boolean;
     isScaleDownProtected?: boolean;
+    reconfigureScheduled?: string;
+    lastReconfigured?: string;
+    reconfigureError?: boolean;
+    shutdownError?: boolean;
     privateIp?: string;
     publicIp?: string;
     version?: string;
@@ -29,6 +34,9 @@ export interface GroupReport {
     cloudCount?: number;
     unTrackedCount?: number;
     shuttingDownCount?: number;
+    shutdownErrorCount?: number;
+    reconfigureErrorCount?: number;
+    reconfigureScheduledCount?: number;
     scaleDownProtectedCount?: number;
     instances?: Array<InstanceReport>;
 }
@@ -36,17 +44,20 @@ export interface GroupReport {
 export interface GroupReportGeneratorOptions {
     instanceTracker: InstanceTracker;
     shutdownManager: ShutdownManager;
+    reconfigureManager: ReconfigureManager;
     metricsLoop: MetricsLoop;
 }
 
 export default class GroupReportGenerator {
     private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
+    private reconfigureManager: ReconfigureManager;
     private metricsLoop: MetricsLoop;
 
     constructor(options: GroupReportGeneratorOptions) {
         this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;
+        this.reconfigureManager = options.reconfigureManager;
         this.metricsLoop = options.metricsLoop;
 
         this.generateReport = this.generateReport.bind(this);
@@ -76,6 +87,9 @@ export default class GroupReportGenerator {
             expiredCount: 0,
             unTrackedCount: 0,
             shuttingDownCount: 0,
+            shutdownErrorCount: 0,
+            reconfigureErrorCount: 0,
+            reconfigureScheduledCount: 0,
             scaleDownProtectedCount: 0,
             instances: [],
         };
@@ -94,6 +108,7 @@ export default class GroupReportGenerator {
         });
 
         await this.addShutdownStatus(ctx, groupReport.instances);
+        await this.addReconfigureDate(ctx, groupReport.instances);
         await this.addShutdownProtectedStatus(ctx, groupReport.instances);
 
         groupReport.instances.forEach((instanceReport) => {
@@ -105,6 +120,15 @@ export default class GroupReportGenerator {
             }
             if (instanceReport.isScaleDownProtected) {
                 groupReport.scaleDownProtectedCount++;
+            }
+            if (instanceReport.reconfigureError) {
+                groupReport.reconfigureErrorCount++;
+            }
+            if (instanceReport.shutdownError) {
+                groupReport.shutdownErrorCount++;
+            }
+            if (instanceReport.reconfigureScheduled) {
+                groupReport.reconfigureScheduledCount++;
             }
             if (
                 instanceReport.scaleStatus == 'unknown' &&
@@ -155,6 +179,9 @@ export default class GroupReportGenerator {
                 cloudStatus: 'unknown',
                 version: 'unknown',
                 isShuttingDown: instanceState.shutdownStatus,
+                lastReconfigured: instanceState.lastReconfigured,
+                reconfigureError: instanceState.reconfigureError,
+                shutdownError: instanceState.shutdownError,
                 isScaleDownProtected: false,
             };
             if (instanceState.shutdownStatus) {
@@ -226,6 +253,19 @@ export default class GroupReportGenerator {
         });
 
         return instanceReports;
+    }
+
+    private async addReconfigureDate(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+        const reconfigureDates = await this.reconfigureManager.getReconfigureDates(
+            ctx,
+            instanceReports.map((instanceReport) => {
+                return instanceReport.instanceId;
+            }),
+        );
+
+        for (let i = 0; i < instanceReports.length; i++) {
+            instanceReports[i].reconfigureScheduled = reconfigureDates[i];
+        }
     }
 
     private async addShutdownStatus(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {

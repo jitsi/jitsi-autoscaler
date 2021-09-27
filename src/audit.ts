@@ -37,6 +37,7 @@ export interface LauncherActionItem {
 export interface GroupAuditResponse {
     lastLauncherRun: string;
     lastAutoScalerRun: string;
+    lastReconfigureRequest: string;
     autoScalerActionItems?: AutoScalerActionItem[];
     launcherActionItems?: LauncherActionItem[];
 }
@@ -46,6 +47,8 @@ export interface InstanceAuditResponse {
     requestToLaunch: string;
     latestStatus: string;
     requestToTerminate: string;
+    requestToReconfigure: string;
+    reconfigureComplete: string;
     latestStatusInfo?: InstanceState;
 }
 
@@ -82,12 +85,23 @@ export default class Audit {
             this.auditTTL,
         );
         if (latestStatusSaved) {
-            this.increaseLaunchEventExpiration(groupName, instanceId);
-            this.increaseShutdownEventExpiration(groupName, instanceId);
+            this.increaseInstanceExpirations(groupName, instanceId);
         }
         return latestStatusSaved;
     }
 
+    async increaseInstanceExpirations(groupName: string, instanceId: string): Promise<boolean> {
+        const pipeline = this.redisClient.pipeline();
+
+        pipeline.expire(`audit:${groupName}:${instanceId}:request-to-launch`, this.auditTTL);
+        pipeline.expire(`audit:${groupName}:${instanceId}:request-to-terminate`, this.auditTTL);
+        pipeline.expire(`audit:${groupName}:${instanceId}:request-to-reconfigure`, this.auditTTL);
+        pipeline.expire(`audit:${groupName}:${instanceId}:reconfigure-complete`, this.auditTTL);
+
+        await pipeline.exec();
+
+        return true;
+    }
     async saveLaunchEvent(groupName: string, instanceId: string): Promise<boolean> {
         const value: InstanceAudit = {
             instanceId: instanceId,
@@ -95,15 +109,6 @@ export default class Audit {
             timestamp: Date.now(),
         };
         return this.setInstanceValue(`audit:${groupName}:${instanceId}:request-to-launch`, value, this.auditTTL);
-    }
-
-    private async increaseLaunchEventExpiration(groupName: string, instanceId: string): Promise<boolean> {
-        // we don't care if this fails (e.g. perhaps the event no longer is there)
-        const result = await this.redisClient.expire(
-            `audit:${groupName}:${instanceId}:request-to-launch`,
-            this.auditTTL,
-        );
-        return result == 1;
     }
 
     async saveShutdownEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
@@ -124,13 +129,36 @@ export default class Audit {
         await pipeline.exec();
     }
 
-    private async increaseShutdownEventExpiration(groupName: string, instanceId: string): Promise<boolean> {
-        // we don't care if this fails (e.g. perhaps the event no longer is there)
-        const result = await this.redisClient.expire(
-            `audit:${groupName}:${instanceId}:request-to-terminate`,
+    async saveUnsetReconfigureEvents(instanceId: string, group: string): Promise<void> {
+        const value: InstanceAudit = {
+            instanceId: instanceId,
+            type: 'reconfigure-complete',
+            timestamp: Date.now(),
+        };
+        await this.redisClient.set(
+            `audit:${group}:${instanceId}:reconfigure-complete`,
+            JSON.stringify(value),
+            'ex',
             this.auditTTL,
         );
-        return result == 1;
+    }
+
+    async saveReconfigureEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
+        const pipeline = this.redisClient.pipeline();
+        for (const instance of instanceDetails) {
+            const value: InstanceAudit = {
+                instanceId: instance.instanceId,
+                type: 'request-to-reconfigure',
+                timestamp: Date.now(),
+            };
+            pipeline.set(
+                `audit:${instance.group}:${instance.instanceId}:request-to-reconfigure`,
+                JSON.stringify(value),
+                'ex',
+                this.auditTTL,
+            );
+        }
+        await pipeline.exec();
     }
 
     async setInstanceValue(key: string, value: InstanceAudit, ttl: number): Promise<boolean> {
@@ -157,6 +185,17 @@ export default class Audit {
         }
         await this.redisClient.zadd(this.getGroupAuditActionsKey(groupName), timestamp, JSON.stringify(value));
         return true;
+    }
+
+    async updateLastReconfigureRequest(ctx: Context, groupName: string): Promise<boolean> {
+        const value: GroupAudit = {
+            groupName: groupName,
+            type: 'last-reconfigure-request',
+        };
+        const updateResponse = this.setGroupValue(groupName, value);
+        ctx.logger.info(`Updated last reconfiguration request for group ${groupName}`);
+
+        return updateResponse;
     }
 
     async updateLastLauncherRun(ctx: Context, groupName: string): Promise<boolean> {
@@ -257,6 +296,8 @@ export default class Audit {
                 requestToLaunch: 'unknown',
                 latestStatus: 'unknown',
                 requestToTerminate: 'unknown',
+                requestToReconfigure: 'unknown',
+                reconfigureComplete: 'unknown',
             };
             instanceAuditResponseList.push(instanceAuditResponse);
         });
@@ -267,13 +308,19 @@ export default class Audit {
             )) {
                 switch (instanceAudit.type) {
                     case 'request-to-launch':
-                        instanceAuditResponse.requestToLaunch = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.requestToLaunch = new Date(instanceAudit.timestamp).toISOString();
                         break;
                     case 'request-to-terminate':
-                        instanceAuditResponse.requestToTerminate = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.requestToTerminate = new Date(instanceAudit.timestamp).toISOString();
+                        break;
+                    case 'request-to-reconfigure':
+                        instanceAuditResponse.requestToReconfigure = new Date(instanceAudit.timestamp).toISOString();
+                        break;
+                    case 'reconfigure-complete':
+                        instanceAuditResponse.reconfigureComplete = new Date(instanceAudit.timestamp).toISOString();
                         break;
                     case 'latest-status':
-                        instanceAuditResponse.latestStatus = new Date(instanceAudit.timestamp).toUTCString();
+                        instanceAuditResponse.latestStatus = new Date(instanceAudit.timestamp).toISOString();
                         instanceAuditResponse.latestStatusInfo = instanceAudit.state;
                         break;
                 }
@@ -289,6 +336,7 @@ export default class Audit {
         const groupAuditResponse: GroupAuditResponse = {
             lastLauncherRun: 'unknown',
             lastAutoScalerRun: 'unknown',
+            lastReconfigureRequest: 'unknown',
         };
 
         const autoScalerActionItems: AutoScalerActionItem[] = [];
@@ -296,10 +344,13 @@ export default class Audit {
         for (const groupAudit of groupAudits) {
             switch (groupAudit.type) {
                 case 'last-launcher-run':
-                    groupAuditResponse.lastLauncherRun = new Date(groupAudit.timestamp).toUTCString();
+                    groupAuditResponse.lastLauncherRun = new Date(groupAudit.timestamp).toISOString();
                     break;
                 case 'last-autoScaler-run':
-                    groupAuditResponse.lastAutoScalerRun = new Date(groupAudit.timestamp).toUTCString();
+                    groupAuditResponse.lastAutoScalerRun = new Date(groupAudit.timestamp).toISOString();
+                    break;
+                case 'last-reconfigure-request':
+                    groupAuditResponse.lastReconfigureRequest = new Date(groupAudit.timestamp).toISOString();
                     break;
                 case 'launcher-action-item':
                     launcherActionItems.push(groupAudit.launcherActionItem);
@@ -312,12 +363,12 @@ export default class Audit {
         autoScalerActionItems
             .sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1))
             .map(function (key) {
-                key.timestamp = new Date(key.timestamp).toUTCString();
+                key.timestamp = new Date(key.timestamp).toISOString();
             });
         launcherActionItems
             .sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1))
             .map(function (key) {
-                key.timestamp = new Date(key.timestamp).toUTCString();
+                key.timestamp = new Date(key.timestamp).toISOString();
             });
 
         groupAuditResponse.autoScalerActionItems = autoScalerActionItems;

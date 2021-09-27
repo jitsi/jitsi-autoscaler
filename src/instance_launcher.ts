@@ -360,7 +360,7 @@ export default class InstanceLauncher {
                 instanceState.status.provisioning == true
             );
         });
-        return this.mapToInstanceDetails(states);
+        return this.instanceTracker.mapToInstanceDetails(states);
     }
 
     private getRunningInstances(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
@@ -372,7 +372,7 @@ export default class InstanceLauncher {
                 instanceState.status.provisioning == false
             );
         });
-        return this.mapToInstanceDetails(states);
+        return this.instanceTracker.mapToInstanceDetails(states);
     }
 
     private getAvailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
@@ -381,7 +381,7 @@ export default class InstanceLauncher {
                 instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Idle
             );
         });
-        return this.mapToInstanceDetails(states);
+        return this.instanceTracker.mapToInstanceDetails(states);
     }
 
     private getExpiredJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
@@ -391,7 +391,7 @@ export default class InstanceLauncher {
                 instanceState.status.jibriStatus.busyStatus == JibriStatusState.Expired
             );
         });
-        return this.mapToInstanceDetails(states);
+        return this.instanceTracker.mapToInstanceDetails(states);
     }
 
     private getBusyJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
@@ -400,16 +400,6 @@ export default class InstanceLauncher {
                 instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Busy
             );
         });
-        return this.mapToInstanceDetails(states);
-    }
-
-    private mapToInstanceDetails(states: Array<InstanceState>): Array<InstanceDetails> {
-        return states.map((response) => {
-            return <InstanceDetails>{
-                instanceId: response.instanceId,
-                instanceType: response.instanceType,
-                group: response.metadata.group,
-            };
-        });
+        return this.instanceTracker.mapToInstanceDetails(states);
     }
 }

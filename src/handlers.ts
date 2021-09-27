@@ -4,13 +4,14 @@ import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import Redlock from 'redlock';
 import ShutdownManager from './shutdown_manager';
+import ReconfigureManager from './reconfigure_manager';
 import GroupReportGenerator from './group_report';
 import Audit from './audit';
 import ScalingManager from './scaling_options_manager';
 
 interface SidecarResponse {
     shutdown: boolean;
-    reconfigure: boolean;
+    reconfigure: string;
 }
 
 interface InstanceGroupScalingActivitiesRequest {
@@ -18,6 +19,7 @@ interface InstanceGroupScalingActivitiesRequest {
     enableLaunch?: boolean;
     enableScheduler?: boolean;
     enableUntrackedThrottle?: boolean;
+    enableReconfiguration?: boolean;
 }
 
 export interface InstanceGroupDesiredValuesRequest {
@@ -81,6 +83,7 @@ interface HandlersOptions {
     instanceTracker: InstanceTracker;
     audit: Audit;
     shutdownManager: ShutdownManager;
+    reconfigureManager: ReconfigureManager;
     instanceGroupManager: InstanceGroupManager;
     groupReportGenerator: GroupReportGenerator;
     lockManager: LockManager;
@@ -90,6 +93,7 @@ interface HandlersOptions {
 class Handlers {
     private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
+    private reconfigureManager: ReconfigureManager;
     private instanceGroupManager: InstanceGroupManager;
     private groupReportGenerator: GroupReportGenerator;
     private lockManager: LockManager;
@@ -103,6 +107,7 @@ class Handlers {
         this.instanceTracker = options.instanceTracker;
         this.instanceGroupManager = options.instanceGroupManager;
         this.shutdownManager = options.shutdownManager;
+        this.reconfigureManager = options.reconfigureManager;
         this.groupReportGenerator = options.groupReportGenerator;
         this.audit = options.audit;
         this.scalingManager = options.scalingManager;
@@ -110,11 +115,15 @@ class Handlers {
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, details.instanceId);
-        // TODO: implement reconfiguration checks
-        const reconfigureStatus = false;
+        const [shutdownStatus, reconfigureDate] = await Promise.all([
+            this.shutdownManager.getShutdownStatus(req.context, details.instanceId),
+            this.reconfigureManager.getReconfigureDate(req.context, details.instanceId),
+        ]);
 
-        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: reconfigureStatus };
+        const sendResponse: SidecarResponse = {
+            shutdown: shutdownStatus,
+            reconfigure: reconfigureDate,
+        };
 
         res.status(200);
         res.send(sendResponse);
@@ -122,7 +131,13 @@ class Handlers {
 
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
+        const [shutdownStatus, reconfigureDate] = await Promise.all([
+            this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
+            this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
+        ]);
+
+        await this.reconfigureManager.processInstanceReport(req.context, report, reconfigureDate);
+
         await this.instanceTracker.stats(req.context, report, shutdownStatus);
 
         res.status(200);
@@ -131,16 +146,24 @@ class Handlers {
 
     async sidecarStatus(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        const shutdownStatus = await this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId);
+        const [shutdownStatus, reconfigureDate] = await Promise.all([
+            this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
+            this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
+        ]);
+
+        let postReconfigureDate = reconfigureDate;
         try {
+            postReconfigureDate = await this.reconfigureManager.processInstanceReport(
+                req.context,
+                report,
+                reconfigureDate,
+            );
             await this.instanceTracker.stats(req.context, report, shutdownStatus);
         } catch (err) {
             req.context.logger.error('Status handling error', { err });
         }
-        // TODO: implement reconfiguration checks
-        const reconfigureStatus = false;
 
-        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: reconfigureStatus };
+        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: postReconfigureDate };
 
         res.status(200);
         res.send(sendResponse);
@@ -194,6 +217,9 @@ class Handlers {
                     instanceGroup.enableUntrackedThrottle = scalingActivitiesRequest.enableUntrackedThrottle;
                 }
 
+                if (scalingActivitiesRequest.enableReconfiguration != null) {
+                    instanceGroup.enableReconfiguration = scalingActivitiesRequest.enableReconfiguration;
+                }
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 res.status(200);
                 res.send({ save: 'OK' });
@@ -202,6 +228,36 @@ class Handlers {
             }
         } finally {
             await lock.unlock();
+        }
+    }
+
+    async reconfigureInstanceGroup(req: Request, res: Response): Promise<void> {
+
+        const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+        if (instanceGroup) {
+            if (instanceGroup.enableReconfiguration) {
+                // add audit item recording the request
+                await this.audit.updateLastReconfigureRequest(req.context, req.params.name);
+                // found the group, so find the instances and act upon them
+                // build the list of current instances
+                const currentInventory = await this.instanceTracker.trimCurrent(req.context, req.params.name);
+                const instances = this.instanceTracker.mapToInstanceDetails(currentInventory);
+                // set their reconfigure status to the current date
+                try {
+                    await this.reconfigureManager.setReconfigureDate(req.context, instances);
+                    res.status(200);
+                    res.send({ save: 'OK', instances });
+                } catch (err) {
+                    req.context.logger.error('Error triggering instance reconfiguration', { err });
+                    res.status(500);
+                    res.send({ save: false, error: 'Failed to trigger reconfiguration' });
+                }
+            } else {
+                res.status(403);
+                res.send({ save: false, error: 'Reconfiguration disabled for group' });
+            }
+        } else {
+            res.sendStatus(404);
         }
     }
 

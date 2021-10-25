@@ -564,7 +564,7 @@ export class InstanceTracker {
 
         const statesShutdownStatus: boolean[] = [];
         for (let i = 0; i < states.length; i++) {
-            statesShutdownStatus.push(states[i].shutdownStatus || shutdownStatuses[i]);
+            statesShutdownStatus.push(this.shutdownStatusFromState(states[i]) || shutdownStatuses[i]);
         }
         return states.filter((instanceState, index) => !statesShutdownStatus[index]);
     }

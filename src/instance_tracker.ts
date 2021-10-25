@@ -230,7 +230,7 @@ export class InstanceTracker {
             JSON.stringify(state),
         );
 
-        const isInstanceShuttingDown = state.shutdownStatus || shutdownStatus;
+        const isInstanceShuttingDown = this.shutdownStatusFromState(state) || shutdownStatus;
         // Store metric, but only for running instances
         if (!state.status.provisioning && !isInstanceShuttingDown) {
             let metricValue = 0;
@@ -244,7 +244,7 @@ export class InstanceTracker {
                     // If Jibri is not up, the available metric is tracked with value 0
                     break;
                 case 'jigasi':
-                    if (!state.status.jigasiStatus || state.status.jigasiStatus.graceful_shutdown) {
+                    if (!state.status.jigasiStatus) {
                         // If Jigasi is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
                         trackMetric = false;
                     } else if (state.status.jigasiStatus.stress_level) {
@@ -252,7 +252,7 @@ export class InstanceTracker {
                     }
                     break;
                 case 'JVB':
-                    if (!state.status.jvbStatus || state.status.jvbStatus.graceful_shutdown) {
+                    if (!state.status.jvbStatus) {
                         // If JVB is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
                         trackMetric = false;
                     } else if (state.status.jvbStatus.stress_level) {
@@ -493,6 +493,23 @@ export class InstanceTracker {
         return instanceStatesResponse;
     }
 
+    private shutdownStatusFromState(state: InstanceState) {
+        let shutdownStatus = false;
+        shutdownStatus = state.shutdownStatus;
+        if (!shutdownStatus) {
+            // check whether jigasi or JVB reports graceful shutdown, treat as if sidecar has acknowledge shutdown command
+            if (
+                state.status &&
+                ((state.status.jvbStatus && state.status.jvbStatus.graceful_shutdown) ||
+                    (state.status.jigasiStatus && state.status.jigasiStatus.graceful_shutdown))
+            ) {
+                shutdownStatus = true;
+            }
+        }
+
+        return shutdownStatus;
+    }
+
     private async filterOutAndTrimExpiredStates(
         ctx: Context,
         groupInstancesStatesKey: string,
@@ -515,7 +532,7 @@ export class InstanceTracker {
                 statusTTL = this.provisioningTTL;
             }
 
-            const isInstanceShuttingDown = state.shutdownStatus || shutdownStatuses[i];
+            const isInstanceShuttingDown = this.shutdownStatusFromState(state) || shutdownStatuses[i];
             if (isInstanceShuttingDown) {
                 // We keep shutdown status a bit longer, to be consistent to Oracle Search API which has a delay in seeing Terminating status
                 statusTTL = this.shutdownStatusTTL;
@@ -547,7 +564,7 @@ export class InstanceTracker {
 
         const statesShutdownStatus: boolean[] = [];
         for (let i = 0; i < states.length; i++) {
-            statesShutdownStatus.push(states[i].shutdownStatus || shutdownStatuses[i]);
+            statesShutdownStatus.push(this.shutdownStatusFromState(states[i]) || shutdownStatuses[i]);
         }
         return states.filter((instanceState, index) => !statesShutdownStatus[index]);
     }

@@ -232,7 +232,6 @@ class Handlers {
     }
 
     async reconfigureInstanceGroup(req: Request, res: Response): Promise<void> {
-
         const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
         if (instanceGroup) {
             if (instanceGroup.enableReconfiguration) {

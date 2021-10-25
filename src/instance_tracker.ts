@@ -245,39 +245,18 @@ export class InstanceTracker {
                     break;
                 case 'jigasi':
                     if (!state.status.jigasiStatus || state.status.jigasiStatus.graceful_shutdown) {
-                        // If Jigasi is not up or is in graceful shutdown, we should not use it to compute average stress level across jvbs
+                        // If Jigasi is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
                         trackMetric = false;
                     } else if (state.status.jigasiStatus.stress_level) {
                         metricValue = state.status.jigasiStatus.stress_level;
                     }
-                        // If JVB is not up, we should not use it to compute average stress level across jvbs
-                        trackMetric = false;
-                    } else {
-                        // If Jigasi is in graceful shutdown, we should not use it to compute average stress level across jigasis
-                        if (!state.status.jigasiStatus.graceful_shutdown) {
-                            if (state.status.jigasiStatus.stress_level) {
-                                metricValue = state.status.jigasiStatus.stress_level;
-                            }
-                        } else {
-                            // graceful shutdown mode, so do not track metric
-                            trackMetric = false;
-                        }
-                    }
                     break;
                 case 'JVB':
-                    if (!state.status.jvbStatus) {
-                        // If JVB is not up, we should not use it to compute average stress level across jvbs
+                    if (!state.status.jvbStatus || state.status.jvbStatus.graceful_shutdown) {
+                        // If JVB is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
                         trackMetric = false;
-                    } else {
-                        // If JVB is in graceful shutdown, we should not use it to compute average stress level across jvbs
-                        if (!state.status.jvbStatus.graceful_shutdown) {
-                            if (state.status.jvbStatus.stress_level) {
-                                metricValue = state.status.jvbStatus.stress_level;
-                            }
-                        } else {
-                            // graceful shutdown mode, so do not track metric
-                            trackMetric = false;
-                        }
+                    } else if (state.status.jvbStatus.stress_level) {
+                        metricValue = state.status.jvbStatus.stress_level;
                     }
                     break;
             }

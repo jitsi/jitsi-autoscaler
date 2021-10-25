@@ -499,8 +499,9 @@ export class InstanceTracker {
         if (!shutdownStatus) {
             // check whether jigasi or JVB reports graceful shutdown, treat as if sidecar has acknowledge shutdown command
             if (
-                (state.status.jvbStatus && state.status.jvbStatus.graceful_shutdown) ||
-                (state.status.jigasiStatus && state.status.jigasiStatus.graceful_shutdown)
+                state.status &&
+                ((state.status.jvbStatus && state.status.jvbStatus.graceful_shutdown) ||
+                    (state.status.jigasiStatus && state.status.jigasiStatus.graceful_shutdown))
             ) {
                 shutdownStatus = true;
             }

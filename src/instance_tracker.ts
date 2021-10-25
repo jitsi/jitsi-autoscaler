@@ -244,7 +244,12 @@ export class InstanceTracker {
                     // If Jibri is not up, the available metric is tracked with value 0
                     break;
                 case 'jigasi':
-                    if (!state.status.jigasiStatus) {
+                    if (!state.status.jigasiStatus || state.status.jigasiStatus.graceful_shutdown) {
+                        // If Jigasi is not up or is in graceful shutdown, we should not use it to compute average stress level across jvbs
+                        trackMetric = false;
+                    } else if (state.status.jigasiStatus.stress_level) {
+                        metricValue = state.status.jigasiStatus.stress_level;
+                    }
                         // If JVB is not up, we should not use it to compute average stress level across jvbs
                         trackMetric = false;
                     } else {

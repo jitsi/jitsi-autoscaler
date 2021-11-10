@@ -7,6 +7,7 @@
     "url": "https://github.com/jitsi/jitsi-autoscaler"
   },
   "main": "src/index.js",
+  "private": true,
   "engines": {
     "node": ">=10"
   },

@@ -127,7 +127,7 @@ export default class CloudManager {
 
         const instances = await instanceManager.getInstances(ctx, group, cloudRetryStrategy);
         return instances.filter(function (instance) {
-            return instance.cloudStatus !== 'Terminated';
+            return instance.cloudStatus && instance.cloudStatus.toUpperCase() !== 'TERMINATED';
         });
     }
 }

@@ -112,7 +112,7 @@ export default class GroupReportGenerator {
         await this.addShutdownProtectedStatus(ctx, groupReport.instances);
 
         groupReport.instances.forEach((instanceReport) => {
-            if (instanceReport.cloudStatus === 'Provisioning' || instanceReport.cloudStatus === 'Running') {
+            if (this.isProvisioningOrRunningCloudInstance(instanceReport)) {
                 groupReport.cloudCount++;
             }
             if (instanceReport.isShuttingDown) {
@@ -130,10 +130,7 @@ export default class GroupReportGenerator {
             if (instanceReport.reconfigureScheduled) {
                 groupReport.reconfigureScheduledCount++;
             }
-            if (
-                instanceReport.scaleStatus == 'unknown' &&
-                (instanceReport.cloudStatus === 'Provisioning' || instanceReport.cloudStatus === 'Running')
-            ) {
+            if (instanceReport.scaleStatus == 'unknown' && this.isProvisioningOrRunningCloudInstance(instanceReport)) {
                 ctx.logger.info(`Adding untracked instance to group report ${groupName}: ${instanceReport.instanceId}`);
                 groupReport.unTrackedCount++;
             }
@@ -161,6 +158,15 @@ export default class GroupReportGenerator {
         });
 
         return groupReport;
+    }
+
+    private isProvisioningOrRunningCloudInstance(instanceReport: InstanceReport): boolean {
+        return (
+            instanceReport &&
+            instanceReport.cloudStatus &&
+            (instanceReport.cloudStatus.toUpperCase() === 'PROVISIONING' ||
+                instanceReport.cloudStatus.toUpperCase() === 'RUNNING')
+        );
     }
 
     private getInstanceReportsMap(

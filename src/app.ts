@@ -161,8 +161,6 @@ const instanceLauncher = new InstanceLauncher({
     instanceTracker,
     cloudManager,
     instanceGroupManager,
-    lockManager,
-    redisClient,
     shutdownManager,
     audit,
     metricsLoop,

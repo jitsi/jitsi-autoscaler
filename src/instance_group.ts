@@ -14,6 +14,10 @@ export interface ScalingOptions {
     scaleDownPeriodsCount: number;
 }
 
+export interface InstanceGroupTags {
+    [id: string]: string;
+}
+
 export interface InstanceGroup {
     id: string;
     name: string;
@@ -31,7 +35,7 @@ export interface InstanceGroup {
     protectedTTLSec: number;
     scalingOptions: ScalingOptions;
     cloud: string;
-    tags: { [id: string]: string };
+    tags: InstanceGroupTags;
 }
 
 export interface InstanceGroupManagerOptions {
@@ -203,10 +207,7 @@ export default class InstanceGroupManager {
         return instanceGroups;
     }
 
-    async getAllInstanceGroupsFiltered(
-        ctx: Context,
-        expectedTags: { [id: string]: string },
-    ): Promise<Array<InstanceGroup>> {
+    async getAllInstanceGroupsFiltered(ctx: Context, expectedTags: InstanceGroupTags): Promise<Array<InstanceGroup>> {
         const allGroups = await this.getAllInstanceGroups(ctx);
 
         const filteredGroups = allGroups.filter((group) => InstanceGroupManager.filterGroups(ctx, group, expectedTags));
@@ -214,7 +215,7 @@ export default class InstanceGroupManager {
         return filteredGroups;
     }
 
-    private static filterGroups(ctx: Context, group: InstanceGroup, expectedTags: { [id: string]: string }): boolean {
+    private static filterGroups(ctx: Context, group: InstanceGroup, expectedTags: InstanceGroupTags): boolean {
         if (!expectedTags || Object.keys(expectedTags).length == 0) {
             return true;
         }

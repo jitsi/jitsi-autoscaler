@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { InstanceTracker, StatsReport, InstanceDetails } from './instance_tracker';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager, { InstanceGroup, InstanceGroupTags } from './instance_group';
 import LockManager from './lock_manager';
 import Redlock from 'redlock';
 import ShutdownManager from './shutdown_manager';
@@ -297,7 +297,7 @@ class Handlers {
     }
 
     async getInstanceGroups(req: Request, res: Response): Promise<void> {
-        const expectedTags: { [id: string]: string } = {};
+        const expectedTags = <InstanceGroupTags>{};
 
         for (const propertyName in req.query) {
             if (propertyName.startsWith('tag.')) {
@@ -432,6 +432,17 @@ class Handlers {
                 if (requestBody.maxDesired != null) {
                     group.scalingOptions.maxDesired = requestBody.maxDesired;
                 }
+                if (requestBody.tags != null) {
+                    req.context.logger.debug('Updating group tags', {
+                        groupName,
+                        tags: requestBody.tags
+                    });
+                    if (!group.tags) group.tags = <InstanceGroupTags>{};
+                    for (const key in requestBody.tags) {
+                        group.tags[key] = requestBody.tags[key];
+                    }
+                }
+
                 group.scalingOptions.desiredCount = group.scalingOptions.desiredCount + requestBody.count;
                 group.protectedTTLSec = scaleDownProtectedTTL;
 

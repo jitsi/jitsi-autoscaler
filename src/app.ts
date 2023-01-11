@@ -8,7 +8,7 @@ import Redis from 'ioredis';
 import logger from './logger';
 import shortid from 'shortid';
 import { ASAPPubKeyFetcher } from './asap';
-import jwt from 'express-jwt';
+import { expressjwt } from 'express-jwt';
 import { InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
 import InstanceGroupManager from './instance_group';
@@ -275,8 +275,8 @@ app.use('/', context.injectContext);
 app.use(loggedPaths, context.accessLogger);
 stats.registerHandler(app, '/metrics');
 app.use(
-    jwt({
-        secret: asapFetcher.pubKeyCallback,
+    expressjwt({
+        secret: asapFetcher.secretCallback,
         audience: config.AsapJwtAcceptedAud,
         issuer: config.AsapJwtAcceptedHookIss,
         algorithms: ['RS256'],

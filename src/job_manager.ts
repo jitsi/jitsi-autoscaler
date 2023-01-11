@@ -141,7 +141,7 @@ export default class JobManager {
             console.log(`Job ${jobId} failed with error ${err.message} but is being retried!`);
         });
 
-        newQueue.process((job: Job, done: DoneCallback<boolean>) => {
+        newQueue.process((job: Job<JobData>, done: DoneCallback<boolean>) => {
             let ctx;
             const start = process.hrtime();
 
@@ -203,7 +203,7 @@ export default class JobManager {
 
     processJob(
         ctx: Context,
-        job: Job,
+        job: Job<JobData>,
         processingHandler: (ctx: context.Context, group: string) => Promise<boolean>,
         done: DoneCallback<boolean>,
     ): void {

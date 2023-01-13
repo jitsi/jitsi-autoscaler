@@ -171,22 +171,24 @@ export default class OracleInstanceManager implements CloudInstanceManager {
     ): Promise<Array<CloudInstance>> {
         const instances: Array<resourceSearch.models.ResourceSummary> = [];
 
-        const resourceSearchClient = new ResourceSearchClient({
-            authenticationDetailsProvider: this.provider,
-        });
-        resourceSearchClient.clientConfiguration = {
-            retryConfiguration: {
-                terminationStrategy: new common.MaxTimeTerminationStrategy(cloudRetryStrategy.maxTimeInSeconds),
-                delayStrategy: new common.ExponentialBackoffDelayStrategy(cloudRetryStrategy.maxDelayInSeconds),
-                retryCondition: (response) => {
-                    return (
-                        cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
-                            return response.statusCode === retryableStatusCode;
-                        }).length > 0
-                    );
+        const resourceSearchClient = new ResourceSearchClient(
+            {
+                authenticationDetailsProvider: this.provider,
+            },
+            {
+                retryConfiguration: {
+                    terminationStrategy: new common.MaxTimeTerminationStrategy(cloudRetryStrategy.maxTimeInSeconds),
+                    delayStrategy: new common.ExponentialBackoffDelayStrategy(cloudRetryStrategy.maxDelayInSeconds),
+                    retryCondition: (response) => {
+                        return (
+                            cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
+                                return response.statusCode === retryableStatusCode;
+                            }).length > 0
+                        );
+                    },
                 },
             },
-        };
+        );
         resourceSearchClient.regionId = group.region;
 
         const structuredSearch: resourceSearch.models.StructuredSearchDetails = {

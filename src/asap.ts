@@ -2,7 +2,7 @@ import got from 'got';
 import sha256 from 'sha256';
 import NodeCache from 'node-cache';
 import { Request } from 'express';
-import { secretType } from 'express-jwt';
+import jwt from 'jsonwebtoken';
 
 export class ASAPPubKeyFetcher {
     private baseUrl: string;
@@ -12,34 +12,26 @@ export class ASAPPubKeyFetcher {
     constructor(baseUrl: string, ttl: number) {
         this.baseUrl = baseUrl;
         this.cache = new NodeCache({ stdTTL: ttl });
-        this.pubKeyCallback = this.pubKeyCallback.bind(this);
+        this.secretCallback = this.secretCallback.bind(this);
     }
 
-    /* eslint-disable */
-    pubKeyCallback(req: Request, header: any, payload: any, done: (err: any, secret?: secretType) => void): void {
-        /* eslint-enable */
-        if (!header.kid) {
-            done(new Error('kid is required in header'), null);
-            return;
+    async secretCallback(req: Request, token: jwt.Jwt): Promise<jwt.Secret> {
+        if (!token.header.kid) {
+            throw new Error('kid is required in header');
         }
 
-        const pubKey: string = this.cache.get(header.kid);
+        let pubKey = <jwt.Secret>this.cache.get(token.header.kid);
 
         if (pubKey) {
             req.context.logger.debug('using pub key from cache');
-            done(null, pubKey);
+            return pubKey;
         }
 
         req.context.logger.debug('fetching pub key from key server');
-        fetchPublicKey(this.baseUrl, header.kid)
-            .then((pubKey) => {
-                this.cache.set(header.kid, pubKey);
-                done(null, pubKey);
-            })
-            .catch((err) => {
-                req.context.logger.error(`obtaining asap pub ${err}`);
-                done(err);
-            });
+        pubKey = <jwt.Secret>await fetchPublicKey(this.baseUrl, token.header.kid);
+        this.cache.set(token.header.kid, pubKey);
+
+        return pubKey;
     }
 }
 

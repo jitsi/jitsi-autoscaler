@@ -122,40 +122,60 @@ export default class AutoscaleProcessor {
         if (scaleMetrics && scaleMetrics.length > 0) {
             // check if we should scale up the group
             if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'up')) {
-                desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
-                if (desiredCount > group.scalingOptions.maxDesired) {
-                    desiredCount = group.scalingOptions.maxDesired;
+                if (await this.instanceGroupManager.allowAutoscalingByDirection(group.name, 'up')) {
+                    // only actually autoscale in this direction if we haven't done so recently within the grace period
+                    desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
+                    if (desiredCount > group.scalingOptions.maxDesired) {
+                        desiredCount = group.scalingOptions.maxDesired;
+                    }
+
+                    await this.audit.saveAutoScalerActionItem(group.name, {
+                        timestamp: Date.now(),
+                        actionType: 'increaseDesiredCount',
+                        count: count,
+                        oldDesiredCount: group.scalingOptions.desiredCount,
+                        newDesiredCount: desiredCount,
+                        scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleUpPeriodsCount),
+                    });
+
+                    await this.updateDesiredCount(ctx, desiredCount, group);
+                    await Promise.allSettled([
+                        this.instanceGroupManager.setAutoScaleGracePeriod(group),
+                        this.instanceGroupManager.setAutoScaleGracePeriodByDirection(group, 'up'),
+                    ]);
+                } else {
+                    ctx.logger.info(
+                        `[AutoScaler] Skipping autoscale to ${desiredCount} for group ${group.name} with ${count} instances, still in grace period`,
+                    );
                 }
-
-                await this.audit.saveAutoScalerActionItem(group.name, {
-                    timestamp: Date.now(),
-                    actionType: 'increaseDesiredCount',
-                    count: count,
-                    oldDesiredCount: group.scalingOptions.desiredCount,
-                    newDesiredCount: desiredCount,
-                    scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleUpPeriodsCount),
-                });
-
-                await this.updateDesiredCount(ctx, desiredCount, group);
-                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
             } else if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'down')) {
                 // next check if we should scale down the group
-                desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
-                if (desiredCount < group.scalingOptions.minDesired) {
-                    desiredCount = group.scalingOptions.minDesired;
+                if (await this.instanceGroupManager.allowAutoscalingByDirection(group.name, 'down')) {
+                    // only actually autoscale in this direction if we haven't done so recently within the grace period
+                    desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
+                    if (desiredCount < group.scalingOptions.minDesired) {
+                        desiredCount = group.scalingOptions.minDesired;
+                    }
+
+                    await this.audit.saveAutoScalerActionItem(group.name, {
+                        timestamp: Date.now(),
+                        actionType: 'decreaseDesiredCount',
+                        count: count,
+                        oldDesiredCount: group.scalingOptions.desiredCount,
+                        newDesiredCount: desiredCount,
+                        scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleDownPeriodsCount),
+                    });
+
+                    await this.updateDesiredCount(ctx, desiredCount, group);
+                    await Promise.allSettled([
+                        this.instanceGroupManager.setAutoScaleGracePeriod(group),
+                        this.instanceGroupManager.setAutoScaleGracePeriodByDirection(group, 'down'),
+                    ]);
+                } else {
+                    ctx.logger.info(
+                        `[AutoScaler] Skipping autoscale to ${desiredCount} for group ${group.name} with ${count} instances, still in grace period`,
+                    );
                 }
-
-                await this.audit.saveAutoScalerActionItem(group.name, {
-                    timestamp: Date.now(),
-                    actionType: 'decreaseDesiredCount',
-                    count: count,
-                    oldDesiredCount: group.scalingOptions.desiredCount,
-                    newDesiredCount: desiredCount,
-                    scaleMetrics: scaleMetrics.slice(0, group.scalingOptions.scaleDownPeriodsCount),
-                });
-
-                await this.updateDesiredCount(ctx, desiredCount, group);
-                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
             } else {
                 // otherwise neither action is needed
                 ctx.logger.info(

@@ -250,6 +250,24 @@ export default class InstanceGroupManager {
         return !(result !== null && result.length > 0);
     }
 
+    // keeps the autoscaling activity from occuring if we have scaled in this direction within the grace period
+    async allowAutoscalingByDirection(group: string, direction: string): Promise<boolean> {
+        const result = await this.redisClient.get(`autoScaleGracePeriodByDirection:${group}:${direction}`);
+        return !(result !== null && result.length > 0);
+    }
+
+    // starts autoscaling grace period after autoscaling has occurred in this direction
+    async setAutoScaleGracePeriodByDirection(group: InstanceGroup, direction: string): Promise<boolean> {
+        // count of periods in metric window from group based on direction
+        const scalePeriods =
+            direction == 'down' ? group.scalingOptions.scaleDownPeriodsCount : group.scalingOptions.scaleUpPeriodsCount;
+
+        // grace period is the greater of group grace period or metric window size
+        const directionalTTL = Math.max(group.gracePeriodTTLSec, scalePeriods * group.scalingOptions.scalePeriod);
+
+        return this.setValue(`setAutoScaleGracePeriodByDirection:${group.name}:${direction}`, directionalTTL);
+    }
+
     async setAutoScaleGracePeriod(group: InstanceGroup): Promise<boolean> {
         return this.setValue(`autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
     }

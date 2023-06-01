@@ -2,7 +2,7 @@ import Queue, { DoneCallback, Job } from 'bee-queue';
 import InstanceGroupManager from './instance_group';
 import * as context from './context';
 import shortid from 'shortid';
-import logger from './logger';
+import { Logger } from 'winston';
 import { ClientOpts } from 'redis';
 import InstanceLauncher from './instance_launcher';
 import AutoscaleProcessor from './autoscaler';
@@ -14,6 +14,7 @@ import MetricsLoop from './metrics_loop';
 import { Context } from './context';
 
 export interface JobManagerOptions {
+    logger: Logger;
     queueRedisOptions: ClientOpts;
     lockManager: LockManager;
     instanceGroupManager: InstanceGroupManager;
@@ -96,8 +97,10 @@ export default class JobManager {
     private autoscalerProcessingTimeoutMs: number;
     private launcherProcessingTimeoutMs: number;
     private sanityLoopProcessingTimeoutMs: number;
+    private logger: Logger;
 
     constructor(options: JobManagerOptions) {
+        this.logger = options.logger;
         this.lockManager = options.lockManager;
         this.instanceGroupManager = options.instanceGroupManager;
         this.instanceLauncher = options.instanceLauncher;
@@ -118,11 +121,11 @@ export default class JobManager {
             removeOnFailure: true,
         });
         newQueue.on('error', (err) => {
-            logger.error(`[QueueProcessor] A queue error happened in queue ${queueName}: ${err.message}`, { err });
+            this.logger.error(`[QueueProcessor] A queue error happened in queue ${queueName}: ${err.message}`, { err });
             queueErrorCounter.inc();
         });
         newQueue.on('failed', (job, err) => {
-            logger.error(
+            this.logger.error(
                 `[QueueProcessor] Failed processing job ${job.data.type}:${job.id} with error message ${err.message}`,
                 { err },
             );
@@ -131,14 +134,14 @@ export default class JobManager {
             jobProcessFailureCounter.inc({ type: jobData.type });
         });
         newQueue.on('stalled', (jobId) => {
-            logger.error(`[QueueProcessor] Stalled job ${jobId}; will be reprocessed`);
+            this.logger.error(`[QueueProcessor] Stalled job ${jobId}; will be reprocessed`);
             queueStalledCounter.inc();
         });
         newQueue.on('job succeeded', (jobId, result) => {
-            logger.info(`Job ${jobId} succeeded with result: ${result}`);
+            this.logger.info(`Job ${jobId} succeeded with result: ${result}`);
         });
         newQueue.on('job retrying', (jobId, err) => {
-            console.log(`Job ${jobId} failed with error ${err.message} but is being retried!`);
+            this.logger.info(`Job ${jobId} failed with error ${err.message} but is being retried!`);
         });
 
         newQueue.process((job: Job<JobData>, done: DoneCallback<boolean>) => {
@@ -148,7 +151,7 @@ export default class JobManager {
             try {
                 const start = Date.now();
                 const pollId = shortid.generate();
-                const pollLogger = logger.child({
+                const pollLogger = this.logger.child({
                     id: pollId,
                 });
                 ctx = new context.Context(pollLogger, start, pollId);

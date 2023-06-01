@@ -1,5 +1,4 @@
 import { Logger } from 'winston';
-import logger from './logger';
 import { Request, Response, NextFunction } from 'express';
 import shortid from 'shortid';
 
@@ -20,7 +19,7 @@ export class Context {
 // includes the start date, a request id and a handler specific logger.
 // This middleware should be registered before any middleware that make use of
 // context or anything it contains.
-export function injectContext(req: Request, res: Response, next: NextFunction): void {
+export function injectContext(logger: Logger, req: Request, res: Response, next: NextFunction): void {
     const start = Date.now();
     const reqId = shortid.generate();
     const reqLogger = logger.child({

@@ -8,14 +8,15 @@ module.exports = {
         ecmaVersion: 2020,
         sourceType: 'module',
     },
-    plugins: ['@typescript-eslint'],
+    plugins: ['@typescript-eslint', 'ava'],
     extends: [
         'eslint:recommended',
         'plugin:@typescript-eslint/recommended',
-        'prettier/@typescript-eslint',
+        'prettier',
         'plugin:prettier/recommended',
     ],
     rules: {
         '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+        "ava/assertion-arguments": "error",
     },
 };

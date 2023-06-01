@@ -137,11 +137,10 @@ export default class OracleInstanceManager implements CloudInstanceManager {
     //TODO in the future, the list of ADs/FDs per region will be loaded once at startup time
     private async getAvailabilityDomains(compartmentId: string, region: string): Promise<string[]> {
         this.identityClient.regionId = region;
-        const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse = await this.identityClient.listAvailabilityDomains(
-            {
+        const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse =
+            await this.identityClient.listAvailabilityDomains({
                 compartmentId: compartmentId,
-            },
-        );
+            });
         return availabilityDomainsResponse.items.map((adResponse) => {
             return adResponse.name;
         });
@@ -153,12 +152,11 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         availabilityDomain: string,
     ): Promise<string[]> {
         this.identityClient.regionId = region;
-        const faultDomainsResponse: identity.responses.ListFaultDomainsResponse = await this.identityClient.listFaultDomains(
-            {
+        const faultDomainsResponse: identity.responses.ListFaultDomainsResponse =
+            await this.identityClient.listFaultDomains({
                 compartmentId: compartmentId,
                 availabilityDomain: availabilityDomain,
-            },
-        );
+            });
         return faultDomainsResponse.items.map((fdResponse) => {
             return fdResponse.name;
         });
@@ -200,9 +198,8 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         const structuredSearchRequest: resourceSearch.requests.SearchResourcesRequest = {
             searchDetails: structuredSearch,
         };
-        const searchResourcesResponse: resourceSearch.responses.SearchResourcesResponse = await resourceSearchClient.searchResources(
-            structuredSearchRequest,
-        );
+        const searchResourcesResponse: resourceSearch.responses.SearchResourcesResponse =
+            await resourceSearchClient.searchResources(structuredSearchRequest);
         if (
             searchResourcesResponse.resourceSummaryCollection &&
             searchResourcesResponse.resourceSummaryCollection.items

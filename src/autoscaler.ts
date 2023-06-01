@@ -76,14 +76,13 @@ export default class AutoscaleProcessor {
                 group.scalingOptions.scaleUpPeriodsCount,
                 group.scalingOptions.scaleDownPeriodsCount,
             );
-            const metricInventoryPerPeriod: Array<Array<
-                InstanceMetric
-            >> = await this.instanceTracker.getMetricInventoryPerPeriod(
-                ctx,
-                group.name,
-                maxPeriodCount,
-                group.scalingOptions.scalePeriod,
-            );
+            const metricInventoryPerPeriod: Array<Array<InstanceMetric>> =
+                await this.instanceTracker.getMetricInventoryPerPeriod(
+                    ctx,
+                    group.name,
+                    maxPeriodCount,
+                    group.scalingOptions.scalePeriod,
+                );
 
             await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
         } finally {

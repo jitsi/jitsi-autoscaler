@@ -5,7 +5,7 @@ import * as context from './context';
 import Handlers from './handlers';
 import Validator from './validator';
 import Redis from 'ioredis';
-import logger from './logger';
+import AutoscalerLogger from './logger';
 import shortid from 'shortid';
 import { ASAPPubKeyFetcher } from './asap';
 import { expressjwt } from 'express-jwt';
@@ -31,6 +31,9 @@ import ScalingManager from './scaling_options_manager';
 //import * as meet from './meet_processor';
 
 //const jwtSigningKey = fs.readFileSync(meet.TokenSigningKeyFile);
+
+const asLogger = new AutoscalerLogger({ logLevel: config.LogLevel });
+const logger = asLogger.createLogger();
 
 const app = express();
 app.use(bodyParser.json());
@@ -191,6 +194,7 @@ const sanityLoop = new SanityLoop({
 // Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
+    logger,
     queueRedisOptions: redisQueueOptions,
     lockManager,
     instanceGroupManager,
@@ -271,7 +275,7 @@ const h = new Handlers({
 const validator = new Validator({ instanceTracker, instanceGroupManager });
 const loggedPaths = ['/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
-app.use('/', context.injectContext);
+app.use('/', context.injectContext.bind(logger));
 app.use(loggedPaths, context.accessLogger);
 stats.registerHandler(app, '/metrics');
 app.use(

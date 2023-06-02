@@ -1,6 +1,8 @@
 import { Logger } from 'winston';
 import { Request, Response, NextFunction } from 'express';
 import shortid from 'shortid';
+import AutoscalerLogger from './logger';
+import config from './config';
 
 declare global {
     // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -19,9 +21,12 @@ export class Context {
 // includes the start date, a request id and a handler specific logger.
 // This middleware should be registered before any middleware that make use of
 // context or anything it contains.
-export function injectContext(logger: Logger, req: Request, res: Response, next: NextFunction): void {
+export function injectContext(req: Request, res: Response, next: NextFunction): void {
     const start = Date.now();
     const reqId = shortid.generate();
+    const asLogger = new AutoscalerLogger({ logLevel: config.LogLevel });
+    const logger = asLogger.createLogger(config.LogLevel);
+
     const reqLogger = logger.child({
         rid: reqId,
         ref: req.get('referer'),

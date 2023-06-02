@@ -33,7 +33,7 @@ import ScalingManager from './scaling_options_manager';
 //const jwtSigningKey = fs.readFileSync(meet.TokenSigningKeyFile);
 
 const asLogger = new AutoscalerLogger({ logLevel: config.LogLevel });
-const logger = asLogger.createLogger();
+const logger = asLogger.createLogger(config.LogLevel);
 
 const app = express();
 app.use(bodyParser.json());
@@ -275,7 +275,7 @@ const h = new Handlers({
 const validator = new Validator({ instanceTracker, instanceGroupManager });
 const loggedPaths = ['/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
-app.use('/', context.injectContext.bind(logger));
+app.use('/', context.injectContext);
 app.use(loggedPaths, context.accessLogger);
 stats.registerHandler(app, '/metrics');
 app.use(

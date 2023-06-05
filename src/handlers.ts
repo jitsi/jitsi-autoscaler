@@ -429,6 +429,11 @@ class Handlers {
                 if (requestBody.instanceConfigurationId != null) {
                     group.instanceConfigurationId = requestBody.instanceConfigurationId;
                 }
+                if (requestBody.tags && requestBody.tags.length > 0) {
+                    Object.entries(requestBody.tags).forEach(([tag, value]) => {
+                        group.tags[tag] = <string>value;
+                    });
+                }
                 if (requestBody.maxDesired != null) {
                     group.scalingOptions.maxDesired = requestBody.maxDesired;
                 }

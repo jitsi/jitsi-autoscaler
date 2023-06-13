@@ -151,6 +151,7 @@ export default class GroupReportGenerator {
                     }
                     break;
                 case 'jigasi':
+                case 'nomad':
                 case 'JVB':
                     // @TODO: implement JVB instance counting
                     break;
@@ -201,6 +202,19 @@ export default class GroupReportGenerator {
                         instanceReport.scaleStatus = 'SIDECAR_RUNNING';
                         if (instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus) {
                             instanceReport.scaleStatus = instanceState.status.jibriStatus.busyStatus.toString();
+                        }
+                        break;
+                    case 'nomad':
+                        // @TODO: convert nomad stats into more explict statuses
+                        instanceReport.scaleStatus = 'SIDECAR_RUNNING';
+                        if (instanceState.status.nomadStatus && instanceState.status.nomadStatus.allocatedCPU > 1000) {
+                            instanceReport.scaleStatus = 'IN USE';
+                        }
+                        if (
+                            instanceState.status.jigasiStatus &&
+                            !instanceState.status.nomadStatus.eligibleForScheduling
+                        ) {
+                            instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
                         }
                         break;
                     case 'jigasi':

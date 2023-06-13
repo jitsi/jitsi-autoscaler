@@ -221,6 +221,37 @@ export default class InstanceLauncher {
         return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
     }
 
+    getNomadsForScaleDown(
+        ctx: Context,
+        group: InstanceGroup,
+        unprotectedInstances: Array<InstanceState>,
+        desiredScaleDownQuantity: number,
+    ): Array<InstanceDetails> {
+        // first sort by participant count
+        unprotectedInstances.sort((a, b) => {
+            const aAllocatedCPU = a.status.nomadStatus ? a.status.nomadStatus.allocatedCPU : 0;
+            const bAllocatedCPU = b.status.nomadStatus ? b.status.nomadStatus.allocatedCPU : 0;
+            return aAllocatedCPU - bAllocatedCPU;
+        });
+        const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
+        if (actualScaleDownQuantity < desiredScaleDownQuantity) {
+            ctx.logger.error(
+                '[Launcher] Nr of Nomad instances in group for scale down is less than desired scale down quantity',
+                { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
+            );
+        }
+        // Try to not scale down the running instances unless needed
+        // This is needed in case of scale up problems, when we should terminate the provisioning instances first
+        let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
+        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
+            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
+                this.getRunningInstances(unprotectedInstances),
+            );
+        }
+
+        // now return first N instances, least loaded first
+        return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
+    }
     getJVBsForScaleDown(
         ctx: Context,
         group: InstanceGroup,
@@ -325,6 +356,14 @@ export default class InstanceLauncher {
                     desiredScaleDownQuantity,
                 );
                 break;
+            case 'nomad':
+                listOfInstancesForScaleDown = this.getNomadsForScaleDown(
+                    ctx,
+                    group,
+                    unprotectedInstances,
+                    desiredScaleDownQuantity,
+                );
+                break;
             case 'JVB':
                 listOfInstancesForScaleDown = this.getJVBsForScaleDown(
                     ctx,
@@ -356,7 +395,8 @@ export default class InstanceLauncher {
             return (
                 (!instanceState.status.jibriStatus &&
                     !instanceState.status.jvbStatus &&
-                    !instanceState.status.jigasiStatus) ||
+                    !instanceState.status.jigasiStatus &&
+                    !instanceState.status.nomadStatus) ||
                 instanceState.status.provisioning == true
             );
         });
@@ -368,7 +408,8 @@ export default class InstanceLauncher {
             return (
                 (instanceState.status.jibriStatus ||
                     instanceState.status.jvbStatus ||
-                    instanceState.status.jigasiStatus) &&
+                    instanceState.status.jigasiStatus ||
+                    instanceState.status.nomadStatus) &&
                 instanceState.status.provisioning == false
             );
         });

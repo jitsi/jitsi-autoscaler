@@ -5,8 +5,8 @@
 ### High Level
 
 An autoscaler for Jitsi instances (`jibri`, `sip-jibri`, `jigasi`, `JVB`, `nomad`), which are deployed in one of the following ways:
+* as a parameterized Nomad batch job
 * as an Instance in Oracle Cloud
-* as a containerized parameterized nomad job
 * as a Droplet in Digital Ocean
 * custom deployment model
 

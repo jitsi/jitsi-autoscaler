@@ -96,7 +96,7 @@ export default class ScalingManager {
             if (instanceGroup) {
                 ScalingManager.setNewScalingOptions(ctx, request.options, instanceGroup, request.direction);
                 await this.instanceGroupManager.upsertInstanceGroup(ctx, instanceGroup);
-                await this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, instanceGroup);
             } else {
                 success = false;
             }

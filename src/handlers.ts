@@ -186,7 +186,7 @@ class Handlers {
                 }
 
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
-                await this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, instanceGroup);
                 res.status(200);
                 res.send({ save: 'OK' });
             } else {
@@ -288,7 +288,7 @@ class Handlers {
         const lock: Redlock.Lock = await this.lockManager.lockGroup(req.context, instanceGroup.name);
         try {
             await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
-            await this.instanceGroupManager.setAutoScaleGracePeriod(instanceGroup);
+            await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, instanceGroup);
             res.status(200);
             res.send({ save: 'OK' });
         } finally {
@@ -441,7 +441,7 @@ class Handlers {
                 group.protectedTTLSec = scaleDownProtectedTTL;
 
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
-                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, group);
                 await this.instanceGroupManager.setScaleDownProtected(group);
 
                 req.context.logger.info(

@@ -245,12 +245,17 @@ export default class InstanceGroupManager {
         ctx.logger.info(`Group ${groupName} is deleted`);
     }
 
-    async allowAutoscaling(group: string): Promise<boolean> {
+    async allowAutoscaling(ctx: Context, group: string): Promise<boolean> {
         const result = await this.redisClient.get(`autoScaleGracePeriod:${group}`);
+        ctx.logger.debug(`allowAutoscaling check: ${group}`, { result });
+
         return !(result !== null && result.length > 0);
     }
 
-    async setAutoScaleGracePeriod(group: InstanceGroup): Promise<boolean> {
+    async setAutoScaleGracePeriod(ctx: Context, group: InstanceGroup): Promise<boolean> {
+        ctx.logger.debug(`resetting autoscale grace period for group ${group.name}`, {
+            gracePeriodTTLSec: group.gracePeriodTTLSec,
+        });
         return this.setValue(`autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
     }
 

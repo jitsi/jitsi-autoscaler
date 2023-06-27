@@ -1,4 +1,5 @@
-FROM node:12
+FROM --platform=$TARGETPLATFORM node:16
+ARG TARGETPLATFORM
 
 # Create app directory
 WORKDIR /usr/src/app

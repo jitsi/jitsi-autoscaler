@@ -440,7 +440,7 @@ class Handlers {
                 if (requestBody.tags != null) {
                     req.context.logger.debug('Updating group tags', {
                         groupName,
-                        tags: requestBody.tags
+                        tags: requestBody.tags,
                     });
                     if (!group.tags) group.tags = <InstanceGroupTags>{};
                     for (const key in requestBody.tags) {

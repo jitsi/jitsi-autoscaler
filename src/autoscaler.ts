@@ -61,7 +61,7 @@ export default class AutoscaleProcessor {
                 ctx.logger.info(`[AutoScaler] Autoscaling not enabled for group ${group.name}`);
                 return false;
             }
-            const autoscalingAllowed = await this.instanceGroupManager.allowAutoscaling(group.name);
+            const autoscalingAllowed = await this.instanceGroupManager.allowAutoscaling(ctx, group.name);
             if (!autoscalingAllowed) {
                 ctx.logger.info(`[AutoScaler] Wait before allowing desired count adjustments for group ${group.name}`);
                 return false;
@@ -136,7 +136,7 @@ export default class AutoscaleProcessor {
                 });
 
                 await this.updateDesiredCount(ctx, desiredCount, group);
-                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, group);
             } else if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'down')) {
                 // next check if we should scale down the group
                 desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
@@ -154,7 +154,7 @@ export default class AutoscaleProcessor {
                 });
 
                 await this.updateDesiredCount(ctx, desiredCount, group);
-                await this.instanceGroupManager.setAutoScaleGracePeriod(group);
+                await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, group);
             } else {
                 // otherwise neither action is needed
                 ctx.logger.info(
@@ -187,6 +187,7 @@ export default class AutoscaleProcessor {
                     count < group.scalingOptions.minDesired
                 );
             case 'jigasi':
+            case 'nomad':
             case 'JVB':
                 // in the case of JVB scale up only if value (average stress level) is above or equal to threshhold
                 return (
@@ -204,6 +205,7 @@ export default class AutoscaleProcessor {
                 // in the jibri case only scale up if value (available count) is above threshold
                 return count > group.scalingOptions.minDesired && value > group.scalingOptions.scaleDownThreshold;
             case 'jigasi':
+            case 'nomad':
             case 'JVB':
                 // in the case of JVB scale down only if value (average stress level) is below threshhold
                 return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;

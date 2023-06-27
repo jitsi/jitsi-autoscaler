@@ -45,6 +45,34 @@ export interface JVBStatus {
     graceful_shutdown: boolean;
 }
 
+export interface NomadReportStats {
+    Gauges: NomadGauge[];
+}
+
+interface NomadLabels {
+    [key: string]: string;
+}
+
+interface NomadStats {
+    [key: string]: number;
+}
+
+interface NomadGauge {
+    Labels: NomadLabels;
+    Name: string;
+    Value: number;
+}
+
+export interface NomadStatus {
+    stress_level: number;
+    totalCPU: number;
+    eligibleForScheduling: boolean;
+    allocatedCPU: number;
+    allocatedMemory: number;
+    unallocatedCPU: number;
+    unallocatedMemory: number;
+}
+
 export interface JigasiStatus {
     stress_level: number;
     // muc_clients_configured: number;
@@ -82,6 +110,7 @@ export interface InstanceStatus {
     jibriStatus?: JibriStatus;
     jvbStatus?: JVBStatus;
     jigasiStatus?: JigasiStatus;
+    nomadStatus?: NomadStatus;
 }
 
 export interface InstanceMetric {
@@ -188,6 +217,9 @@ export class InstanceTracker {
                 case 'jigasi':
                     instanceState.status.jigasiStatus = <JigasiStatus>report.stats;
                     break;
+                case 'nomad':
+                    instanceState.status.nomadStatus = this.nomadStatusFromStats(<NomadReportStats>report.stats);
+                    break;
                 case 'JVB':
                     instanceState.status.jvbStatus = <JVBStatus>report.stats;
                     break;
@@ -195,6 +227,35 @@ export class InstanceTracker {
         }
         ctx.logger.debug('Tracking instance state', { instanceState });
         return await this.track(ctx, instanceState, shutdownStatus);
+    }
+
+    private nomadStatsFromReportGauges(gauges: NomadGauge[]): NomadStats {
+        const outStats = <NomadStats>{};
+        for (const g of gauges) {
+            outStats[g.Name] = g.Value;
+        }
+
+        return outStats;
+    }
+
+    private nomadLabelsFromReportGauges(gauges: NomadGauge[]): NomadLabels {
+        return gauges[0].Labels;
+    }
+
+    private nomadStatusFromStats(stats: NomadReportStats): NomadStatus {
+        const nomadStats = this.nomadStatsFromReportGauges(stats.Gauges);
+        const nomadLabels = this.nomadLabelsFromReportGauges(stats.Gauges);
+        const totalCPU = nomadStats['nomad.client.allocated.cpu'] + nomadStats['nomad.client.unallocated.cpu'];
+
+        return <NomadStatus>{
+            totalCPU,
+            stress_level: nomadStats['nomad.client.allocated.cpu'] / totalCPU,
+            eligibleForScheduling: nomadLabels['node_scheduling_eligibility'] == 'eligible',
+            allocatedCPU: nomadStats['nomad.client.allocated.cpu'],
+            allocatedMemory: nomadStats['nomad.client.allocated.memory'],
+            unallocatedCPU: nomadStats['nomad.client.unallocated.cpu'],
+            unallocatedMemory: nomadStats['nomad.client.unallocated.memory'],
+        };
     }
 
     private getGroupInstancesStatesKey(groupName: string): string {
@@ -251,6 +312,14 @@ export class InstanceTracker {
                         metricValue = state.status.jigasiStatus.stress_level;
                     }
                     break;
+                case 'nomad':
+                    if (!state.status.nomadStatus) {
+                        // If nomad node is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
+                        trackMetric = false;
+                    } else if (state.status.nomadStatus.stress_level) {
+                        metricValue = state.status.nomadStatus.stress_level;
+                    }
+                    break;
                 case 'JVB':
                     if (!state.status.jvbStatus) {
                         // If JVB is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
@@ -290,6 +359,7 @@ export class InstanceTracker {
             case 'jibri':
             case 'sip-jibri':
                 return this.getAvailableMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+            case 'nomad':
             case 'jigasi':
             case 'JVB':
                 return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
@@ -501,7 +571,8 @@ export class InstanceTracker {
             if (
                 state.status &&
                 ((state.status.jvbStatus && state.status.jvbStatus.graceful_shutdown) ||
-                    (state.status.jigasiStatus && state.status.jigasiStatus.graceful_shutdown))
+                    (state.status.jigasiStatus && state.status.jigasiStatus.graceful_shutdown) ||
+                    (state.status.nomadStatus && !state.status.nomadStatus.eligibleForScheduling))
             ) {
                 shutdownStatus = true;
             }

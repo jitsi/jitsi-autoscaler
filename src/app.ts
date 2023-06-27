@@ -349,6 +349,9 @@ app.put(
     body('scalingOptions.maxDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions.desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions').custom((value) => {
+        if (!validator.supportedInstanceType(value.type)) {
+            throw new Error(`Invalid type of instance: ${value.type}`);
+        }
         if (!validator.groupHasValidDesiredValues(value.minDesired, value.maxDesired, value.desiredCount)) {
             throw new Error('Desired count must be between min and max; min cannot be grater than max');
         }
@@ -539,7 +542,7 @@ app.put(
     body('options.scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('instanceType').custom(async (value) => {
         if (!(await validator.supportedInstanceType(value))) {
-            throw new Error('Instance type not supported. Use jvb, jigasi, jibri or sip-jibri instead');
+            throw new Error('Instance type not supported. Use jvb, jigasi, nomad, jibri or sip-jibri instead');
         }
         return true;
     }),

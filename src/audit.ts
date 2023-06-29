@@ -38,6 +38,7 @@ export interface GroupAuditResponse {
     lastLauncherRun: string;
     lastAutoScalerRun: string;
     lastReconfigureRequest: string;
+    lastScaleMetrics?: Array<number>;
     autoScalerActionItems?: AutoScalerActionItem[];
     launcherActionItems?: LauncherActionItem[];
 }
@@ -221,7 +222,7 @@ export default class Audit {
         return updateResponse;
     }
 
-    async updateLastAutoScalerRun(ctx: Context, groupName: string): Promise<boolean> {
+    async updateLastAutoScalerRun(ctx: Context, groupName: string, scaleMetrics: Array<number>): Promise<boolean> {
         const updateLastAutoScalerStart = process.hrtime();
 
         // Extend TTL longer enough for the key to be deleted only after the group is deleted or no action is performed on it
@@ -231,6 +232,14 @@ export default class Audit {
         const value: GroupAudit = {
             groupName: groupName,
             type: 'last-autoScaler-run',
+            autoScalerActionItem: {
+                timestamp: Date.now(),
+                actionType: 'last-scale-metrics',
+                count: 0,
+                oldDesiredCount: 0,
+                newDesiredCount: 0,
+                scaleMetrics,
+            },
         };
         const updateResponse = this.setGroupValue(groupName, value);
 
@@ -337,6 +346,7 @@ export default class Audit {
             lastLauncherRun: 'unknown',
             lastAutoScalerRun: 'unknown',
             lastReconfigureRequest: 'unknown',
+            lastScaleMetrics: [],
         };
 
         const autoScalerActionItems: AutoScalerActionItem[] = [];
@@ -347,6 +357,9 @@ export default class Audit {
                     groupAuditResponse.lastLauncherRun = new Date(groupAudit.timestamp).toISOString();
                     break;
                 case 'last-autoScaler-run':
+                    groupAuditResponse.lastScaleMetrics = groupAudit.autoScalerActionItem
+                        ? groupAudit.autoScalerActionItem.scaleMetrics
+                        : [];
                     groupAuditResponse.lastAutoScalerRun = new Date(groupAudit.timestamp).toISOString();
                     break;
                 case 'last-reconfigure-request':

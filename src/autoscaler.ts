@@ -66,7 +66,6 @@ export default class AutoscaleProcessor {
                 ctx.logger.info(`[AutoScaler] Wait before allowing desired count adjustments for group ${group.name}`);
                 return false;
             }
-            await this.audit.updateLastAutoScalerRun(ctx, group.name);
 
             ctx.logger.info(`[AutoScaler] Gathering metrics for desired count adjustments for group ${group.name}`);
             const currentInventory = await this.instanceTracker.trimCurrent(ctx, group.name);
@@ -84,7 +83,8 @@ export default class AutoscaleProcessor {
                     group.scalingOptions.scalePeriod,
                 );
 
-            await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
+            const scaleMetrics = await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
+            await this.audit.updateLastAutoScalerRun(ctx, group.name, scaleMetrics);
         } finally {
             await lock.unlock();
         }
@@ -97,7 +97,7 @@ export default class AutoscaleProcessor {
         group: InstanceGroup,
         count: number,
         metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
-    ) {
+    ): Promise<Array<number>> {
         ctx.logger.debug(
             `[AutoScaler] Begin desired count adjustments for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
         );
@@ -166,6 +166,8 @@ export default class AutoscaleProcessor {
                 `[AutoScaler] No metrics available, no desired count adjustments possible for group ${group.name} with ${count} instances`,
             );
         }
+
+        return scaleMetrics;
     }
 
     private async updateDesiredCount(ctx: Context, desiredCount: number, group: InstanceGroup) {

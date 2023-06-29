@@ -254,7 +254,7 @@ export default class InstanceGroupManager {
     }
 
     async setAutoScaleGracePeriod(ctx: Context, group: InstanceGroup): Promise<boolean> {
-        ctx.logger.debug(`resetting autoscale grace period for group ${group.name}`, {
+        ctx.logger.info(`resetting autoscale grace period for group ${group.name}: ${group.gracePeriodTTLSec}`, {
             gracePeriodTTLSec: group.gracePeriodTTLSec,
         });
         return this.setValue(`autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);

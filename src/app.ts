@@ -42,10 +42,6 @@ app.use(express.json());
 // TODO: unittesting
 // TODO: readme updates and docker compose allthethings
 
-app.get('/health', (req: express.Request, res: express.Response) => {
-    res.send('healthy!');
-});
-
 const redisOptions = <Redis.RedisOptions>{
     host: config.RedisHost,
     port: config.RedisPort,
@@ -71,6 +67,22 @@ if (config.RedisDb) {
 }
 
 const redisClient = new Redis(redisOptions);
+
+app.get('/health', (req: express.Request, res: express.Response) => {
+    logger.debug('Health check');
+    if (req.query['deep']) {
+        redisClient.ping((err, reply) => {
+            if (err) {
+                res.status(500).send('unhealthy');
+            } else {
+                logger.debug('Redis ping reply', { reply });
+                res.send('deeply healthy');
+            }
+        });
+    } else {
+        res.send('healthy!');
+    }
+});
 
 const audit = new Audit({
     redisClient,

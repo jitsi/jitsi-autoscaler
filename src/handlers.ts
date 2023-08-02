@@ -8,6 +8,17 @@ import ReconfigureManager from './reconfigure_manager';
 import GroupReportGenerator from './group_report';
 import Audit from './audit';
 import ScalingManager from './scaling_options_manager';
+import * as promClient from 'prom-client';
+
+const statsErrors = new promClient.Counter({
+    name: 'autoscaler_stats_errors',
+    help: 'Counter for stats errors',
+});
+
+const statsCounter = new promClient.Counter({
+    name: 'autoscaler_stats_handled',
+    help: 'Counter for sidecar requests handled',
+});
 
 interface SidecarResponse {
     shutdown: boolean;
@@ -116,58 +127,86 @@ class Handlers {
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
-        const [shutdownStatus, reconfigureDate] = await Promise.all([
-            this.shutdownManager.getShutdownStatus(req.context, details.instanceId),
-            this.reconfigureManager.getReconfigureDate(req.context, details.instanceId),
-        ]);
+        statsCounter.inc();
+        try {
+            const [shutdownStatus, reconfigureDate] = await Promise.all([
+                this.shutdownManager.getShutdownStatus(req.context, details.instanceId),
+                this.reconfigureManager.getReconfigureDate(req.context, details.instanceId),
+            ]);
 
-        const sendResponse: SidecarResponse = {
-            shutdown: shutdownStatus,
-            reconfigure: reconfigureDate,
-        };
+            const sendResponse: SidecarResponse = {
+                shutdown: shutdownStatus,
+                reconfigure: reconfigureDate,
+            };
 
-        res.status(200);
-        res.send(sendResponse);
+            res.status(200);
+            res.send(sendResponse);
+        } catch (err) {
+            req.context.logger.error('Poll handling error', { err });
+            statsErrors.inc();
+
+            res.status(500);
+            res.send({ save: 'ERROR' });
+        }
     }
 
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        const [shutdownStatus, reconfigureDate] = await Promise.all([
-            this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
-            this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
-        ]);
+        statsCounter.inc();
+        try {
+            const [shutdownStatus, reconfigureDate] = await Promise.all([
+                this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
+                this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
+            ]);
 
-        await this.reconfigureManager.processInstanceReport(req.context, report, reconfigureDate);
+            await this.reconfigureManager.processInstanceReport(req.context, report, reconfigureDate);
 
-        await this.instanceTracker.stats(req.context, report, shutdownStatus);
+            await this.instanceTracker.stats(req.context, report, shutdownStatus);
 
-        res.status(200);
-        res.send({ save: 'OK' });
+            res.status(200);
+            res.send({ save: 'OK' });
+        } catch (err) {
+            req.context.logger.error('Stats handling error', { err });
+            statsErrors.inc();
+
+            res.status(500);
+            res.send({ save: 'ERROR' });
+        }
     }
 
     async sidecarStatus(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
-        const [shutdownStatus, reconfigureDate] = await Promise.all([
-            this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
-            this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
-        ]);
-
-        let postReconfigureDate = reconfigureDate;
+        statsCounter.inc();
         try {
-            postReconfigureDate = await this.reconfigureManager.processInstanceReport(
-                req.context,
-                report,
-                reconfigureDate,
-            );
-            await this.instanceTracker.stats(req.context, report, shutdownStatus);
+            const [shutdownStatus, reconfigureDate] = await Promise.all([
+                this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
+                this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
+            ]);
+
+            let postReconfigureDate = reconfigureDate;
+            try {
+                postReconfigureDate = await this.reconfigureManager.processInstanceReport(
+                    req.context,
+                    report,
+                    reconfigureDate,
+                );
+                await this.instanceTracker.stats(req.context, report, shutdownStatus);
+            } catch (err) {
+                req.context.logger.error('Status handling error', { err });
+                statsErrors.inc();
+            }
+
+            const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: postReconfigureDate };
+
+            res.status(200);
+            res.send(sendResponse);
         } catch (err) {
-            req.context.logger.error('Status handling error', { err });
+            req.context.logger.error('Status overall error', { err });
+            statsErrors.inc();
+
+            res.status(500);
+            res.send({ save: 'ERROR' });
         }
-
-        const sendResponse: SidecarResponse = { shutdown: shutdownStatus, reconfigure: postReconfigureDate };
-
-        res.status(200);
-        res.send(sendResponse);
     }
 
     async updateDesiredCount(req: Request, res: Response): Promise<void> {

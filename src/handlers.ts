@@ -417,6 +417,32 @@ class Handlers {
         res.send({ audit });
     }
 
+    async getGroupMetrics(req: Request, res: Response): Promise<void> {
+        const groupName = req.params.name;
+        const ctx = req.context;
+        const group = await this.instanceGroupManager.getInstanceGroup(groupName);
+
+        if (!group) {
+            res.sendStatus(404);
+            return;
+        }
+
+        const maxPeriodCount = Math.max(
+            group.scalingOptions.scaleUpPeriodsCount,
+            group.scalingOptions.scaleDownPeriodsCount,
+        );
+
+        const metrics = await this.instanceTracker.getMetricInventoryPerPeriod(
+            ctx,
+            groupName,
+            maxPeriodCount,
+            group.scalingOptions.scalePeriod,
+        );
+
+        res.status(200);
+        res.send({ metrics });
+    }
+
     async resetInstanceGroups(req: Request, res: Response): Promise<void> {
         req.context.logger.info('Resetting instance groups');
         const ctx = req.context;

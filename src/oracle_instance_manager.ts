@@ -52,26 +52,41 @@ export default class OracleInstanceManager implements CloudInstanceManager {
             indexes.push(i);
         }
 
-        const result = await Promise.all(
-            indexes.map(async (index) => {
-                ctx.logger.info(
-                    `[oracle] Gathering properties for launching instance number ${index + 1} in group ${group.name}`,
-                );
+        const result = (
+            await Promise.allSettled(
+                indexes.map(async (index) => {
+                    ctx.logger.info(
+                        `[oracle] Gathering properties for launching instance number ${index + 1} in group ${
+                            group.name
+                        }`,
+                    );
 
-                const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
-                const availabilityDomain = availabilityDomains[adIndex];
-                //TODO get instance count per ADs, so that FD can be distributed evenly
-                const faultDomains: string[] = await this.getFaultDomains(
-                    group.compartmentId,
-                    group.region,
-                    availabilityDomain,
-                );
-                const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
-                const faultDomain = faultDomains[fdIndex];
+                    const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
+                    const availabilityDomain = availabilityDomains[adIndex];
+                    //TODO get instance count per ADs, so that FD can be distributed evenly
+                    const faultDomains: string[] = await this.getFaultDomains(
+                        group.compartmentId,
+                        group.region,
+                        availabilityDomain,
+                    );
+                    const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
+                    const faultDomain = faultDomains[fdIndex];
 
-                return this.launchOracleInstance(ctx, index, group, availabilityDomain, faultDomain);
-            }),
-        );
+                    return this.launchOracleInstance(ctx, index, group, availabilityDomain, faultDomain);
+                }),
+            )
+        ).map((result, index) => {
+            if (result.status === 'fulfilled') {
+                return result.value;
+            } else {
+                ctx.logger.error(
+                    `[oracle] Exception launching instance number ${index + 1} in group ${group.name}: ${
+                        result.reason
+                    }`,
+                );
+                return false;
+            }
+        });
         ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
 
         return result;

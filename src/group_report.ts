@@ -211,7 +211,7 @@ export default class GroupReportGenerator {
                             instanceReport.scaleStatus = 'IN USE';
                         }
                         if (
-                            instanceState.status.jigasiStatus &&
+                            instanceState.status.nomadStatus &&
                             !instanceState.status.nomadStatus.eligibleForScheduling
                         ) {
                             instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';

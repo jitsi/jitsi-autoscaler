@@ -2,7 +2,7 @@ import { Context } from './context';
 import Redis from 'ioredis';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
-import { InstanceGroup } from './instance_group';
+import { GroupMetric, InstanceGroup } from './instance_group';
 
 /* eslint-disable */
 function isEmpty(obj: any) {
@@ -82,6 +82,7 @@ export interface JigasiStatus {
     // largest_conference: number;
     graceful_shutdown: boolean;
 }
+
 export interface InstanceDetails {
     instanceId: string;
     instanceType: string;
@@ -352,19 +353,47 @@ export class InstanceTracker {
     async getSummaryMetricPerPeriod(
         ctx: Context,
         group: InstanceGroup,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric | GroupMetric>>,
         periodCount: number,
     ): Promise<Array<number>> {
         switch (group.type) {
             case 'jibri':
             case 'sip-jibri':
-                return this.getAvailableMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+                return this.getAvailableMetricPerPeriod(
+                    ctx,
+                    metricInventoryPerPeriod as Array<Array<InstanceMetric>>,
+                    periodCount,
+                );
             case 'nomad':
             case 'jigasi':
             case 'JVB':
-                return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+                return this.getAverageMetricPerPeriod(
+                    ctx,
+                    metricInventoryPerPeriod as Array<Array<InstanceMetric>>,
+                    periodCount,
+                );
+            case 'skynet':
+                return this.getSkynetGroupMetricPerPeriod(
+                    ctx,
+                    metricInventoryPerPeriod as Array<Array<GroupMetric>>,
+                    periodCount,
+                );
         }
         return;
+    }
+
+    async getSkynetGroupMetricPerPeriod(
+        ctx: Context,
+        metricInventoryPerPeriod: Array<Array<GroupMetric>>,
+        periodCount: number,
+    ): Promise<Array<number>> {
+        ctx.logger.debug(`Getting skynet group metric per period for ${periodCount} periods`, {
+            metricInventoryPerPeriod,
+        });
+
+        return metricInventoryPerPeriod
+            .slice(0, periodCount)
+            .map((groupMetrics: Array<GroupMetric>) => groupMetrics[0]?.value ?? 0);
     }
 
     async getAvailableMetricPerPeriod(

@@ -24,12 +24,14 @@ export interface JobManagerOptions {
     metricsLoop: MetricsLoop;
     autoscalerProcessingTimeoutMs: number;
     launcherProcessingTimeoutMs: number;
+    reportProcessingTimeoutMs: number;
     sanityLoopProcessingTimeoutMs: number;
 }
 
 export enum JobType {
     Autoscale = 'AUTOSCALE',
     Launch = 'LAUNCH',
+    FetchGroupMetrics = 'FETCH_GROUP_METRICS',
     Sanity = 'SANITY',
 }
 
@@ -40,6 +42,7 @@ const jobCreateFailureCounter = new promClient.Counter({
 });
 jobCreateFailureCounter.labels(JobType.Autoscale).inc(0);
 jobCreateFailureCounter.labels(JobType.Launch).inc(0);
+jobCreateFailureCounter.labels(JobType.FetchGroupMetrics).inc(0);
 jobCreateFailureCounter.labels(JobType.Sanity).inc(0);
 
 const jobCreateTotalCounter = new promClient.Counter({
@@ -49,6 +52,7 @@ const jobCreateTotalCounter = new promClient.Counter({
 });
 jobCreateTotalCounter.labels(JobType.Autoscale).inc(0);
 jobCreateTotalCounter.labels(JobType.Launch).inc(0);
+jobCreateTotalCounter.labels(JobType.FetchGroupMetrics).inc(0);
 jobCreateTotalCounter.labels(JobType.Sanity).inc(0);
 
 const jobProcessFailureCounter = new promClient.Counter({
@@ -58,6 +62,7 @@ const jobProcessFailureCounter = new promClient.Counter({
 });
 jobProcessFailureCounter.labels(JobType.Autoscale).inc(0);
 jobProcessFailureCounter.labels(JobType.Launch).inc(0);
+jobProcessFailureCounter.labels(JobType.FetchGroupMetrics).inc(0);
 jobProcessFailureCounter.labels(JobType.Sanity).inc(0);
 
 const jobProcessTotalCounter = new promClient.Counter({
@@ -67,6 +72,7 @@ const jobProcessTotalCounter = new promClient.Counter({
 });
 jobProcessTotalCounter.labels(JobType.Autoscale).inc(0);
 jobProcessTotalCounter.labels(JobType.Launch).inc(0);
+jobProcessTotalCounter.labels(JobType.FetchGroupMetrics).inc(0);
 jobProcessTotalCounter.labels(JobType.Sanity).inc(0);
 
 const queueErrorCounter = new promClient.Counter({
@@ -94,6 +100,7 @@ export default class JobManager {
     private sanityLoop: SanityLoop;
     private metricsLoop: MetricsLoop;
     private jobQueue: Queue;
+    private reportProcessingTimeoutMs: number;
     private autoscalerProcessingTimeoutMs: number;
     private launcherProcessingTimeoutMs: number;
     private sanityLoopProcessingTimeoutMs: number;
@@ -109,6 +116,7 @@ export default class JobManager {
         this.metricsLoop = options.metricsLoop;
         this.autoscalerProcessingTimeoutMs = options.autoscalerProcessingTimeoutMs;
         this.launcherProcessingTimeoutMs = options.launcherProcessingTimeoutMs;
+        this.reportProcessingTimeoutMs = options.reportProcessingTimeoutMs;
         this.sanityLoopProcessingTimeoutMs = options.sanityLoopProcessingTimeoutMs;
 
         this.jobQueue = this.createQueue(JobManager.jobQueueName, options.queueRedisOptions);
@@ -170,6 +178,14 @@ export default class JobManager {
                             ctx,
                             job,
                             (ctx, group) => this.instanceLauncher.launchOrShutdownInstancesByGroup(ctx, group),
+                            done,
+                        );
+                        break;
+                    case JobType.FetchGroupMetrics:
+                        this.processJob(
+                            ctx,
+                            job,
+                            (ctx, group) => this.instanceGroupManager.fetchGroupMetrics(ctx, group),
                             done,
                         );
                         break;
@@ -304,6 +320,14 @@ export default class JobManager {
             }
 
             const instanceGroupNames = await this.instanceGroupManager.getAllInstanceGroupNames(ctx);
+
+            await this.createJobs(
+                ctx,
+                instanceGroupNames,
+                this.jobQueue,
+                JobType.FetchGroupMetrics,
+                this.reportProcessingTimeoutMs,
+            );
             await this.createJobs(
                 ctx,
                 instanceGroupNames,

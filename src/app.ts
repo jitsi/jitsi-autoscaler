@@ -136,6 +136,7 @@ const lockManager: LockManager = new LockManager(logger, {
 });
 
 const instanceGroupManager = new InstanceGroupManager({
+    audit,
     redisClient,
     redisScanCount: config.RedisScanCount,
     initialGroupList: config.GroupList,
@@ -216,6 +217,7 @@ const jobManager = new JobManager({
     metricsLoop,
     autoscalerProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     launcherProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
+    reportProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,
 });
 
@@ -556,13 +558,13 @@ app.put(
     body('options.scaleUpPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('options.scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('instanceType').custom(async (value) => {
-        if (!(await validator.supportedInstanceType(value))) {
-            throw new Error('Instance type not supported. Use jvb, jigasi, nomad, jibri or sip-jibri instead');
+        if (!validator.supportedInstanceType(value)) {
+            throw new Error('Instance type not supported. Use jvb, jigasi, nomad, jibri, sip-jibri or skynet instead');
         }
         return true;
     }),
     body('direction').custom(async (value) => {
-        if (!(await validator.supportedScalingDirection(value))) {
+        if (!validator.supportedScalingDirection(value)) {
             throw new Error('Scaling direction not supported. Use up or down instead');
         }
         return true;

@@ -92,16 +92,12 @@ export default class NomadInstanceManager extends AbstractCloudInstanceManager {
         switch (status) {
             case 'pending':
                 return 'PROVISIONING';
-                break;
             case 'running':
                 return 'RUNNING';
-                break;
             case 'stopped':
                 return 'SHUTDOWN';
-                break;
             case 'dead':
                 return 'SHUTDOWN';
-                break;
         }
         return 'Unknown';
     }

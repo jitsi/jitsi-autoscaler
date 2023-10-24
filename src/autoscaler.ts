@@ -2,7 +2,7 @@ import { InstanceMetric, InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
 import Redlock from 'redlock';
 import Redis from 'ioredis';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager, { GroupMetric, InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
 import Audit from './audit';
@@ -75,13 +75,24 @@ export default class AutoscaleProcessor {
                 group.scalingOptions.scaleUpPeriodsCount,
                 group.scalingOptions.scaleDownPeriodsCount,
             );
-            const metricInventoryPerPeriod: Array<Array<InstanceMetric>> =
-                await this.instanceTracker.getMetricInventoryPerPeriod(
+
+            let metricInventoryPerPeriod = [];
+
+            if (group.metricsUrl) {
+                metricInventoryPerPeriod = await this.instanceGroupManager.getGroupMetricInventoryPerPeriod(
                     ctx,
                     group.name,
                     maxPeriodCount,
                     group.scalingOptions.scalePeriod,
                 );
+            } else {
+                metricInventoryPerPeriod = await this.instanceTracker.getMetricInventoryPerPeriod(
+                    ctx,
+                    group.name,
+                    maxPeriodCount,
+                    group.scalingOptions.scalePeriod,
+                );
+            }
 
             const scaleMetrics = await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
             await this.audit.updateLastAutoScalerRun(ctx, group.name, scaleMetrics);
@@ -96,7 +107,7 @@ export default class AutoscaleProcessor {
         ctx: Context,
         group: InstanceGroup,
         count: number,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        metricInventoryPerPeriod: Array<Array<InstanceMetric | GroupMetric>>,
     ): Promise<Array<number>> {
         ctx.logger.debug(
             `[AutoScaler] Begin desired count adjustments for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
@@ -191,6 +202,7 @@ export default class AutoscaleProcessor {
             case 'jigasi':
             case 'nomad':
             case 'JVB':
+            case 'skynet':
                 // in the case of JVB scale up only if value (average stress level) is above or equal to threshhold
                 return (
                     (count < group.scalingOptions.maxDesired && value >= group.scalingOptions.scaleUpThreshold) ||
@@ -209,6 +221,7 @@ export default class AutoscaleProcessor {
             case 'jigasi':
             case 'nomad':
             case 'JVB':
+            case 'skynet':
                 // in the case of JVB scale down only if value (average stress level) is below threshhold
                 return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;
         }

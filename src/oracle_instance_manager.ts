@@ -181,7 +181,9 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         ctx.logger.info(`[oracle] Launching instance number ${index + 1} in group ${groupName} with properties`, {
             groupName,
             availabilityDomain,
+            adRetryIndex,
             faultDomain,
+            fdRetryIndex,
             displayName,
             groupInstanceConfigurationId,
             overwriteComputeInstanceDetails,

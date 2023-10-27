@@ -8,6 +8,10 @@ import * as resourceSearch from 'oci-resourcesearch';
 import { CloudRetryStrategy } from './cloud_manager';
 import { AbstractCloudInstanceManager, CloudInstanceManager, CloudInstance } from './cloud_instance_manager';
 
+interface FaultDomainMap {
+    [key: string]: string[];
+}
+
 export interface OracleInstanceManagerOptions {
     isDryRun: boolean;
     ociConfigurationFilePath: string;
@@ -47,6 +51,8 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         this.computeManagementClient.regionId = group.region;
         const availabilityDomains: string[] = await this.getAvailabilityDomains(group.compartmentId, group.region);
 
+        const faultDomainsByAD = await this.getFaultDomainsByAD(group.compartmentId, group.region, availabilityDomains);
+
         const indexes: Array<number> = [];
         for (let i = 0; i < quantity; i++) {
             indexes.push(i);
@@ -58,31 +64,85 @@ export default class OracleInstanceManager implements CloudInstanceManager {
                     `[oracle] Gathering properties for launching instance number ${index + 1} in group ${group.name}`,
                 );
 
-                const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
-                const availabilityDomain = availabilityDomains[adIndex];
-                //TODO get instance count per ADs, so that FD can be distributed evenly
-                const faultDomains: string[] = await this.getFaultDomains(
-                    group.compartmentId,
-                    group.region,
-                    availabilityDomain,
+                return this.launchOracleInstance(
+                    ctx,
+                    index,
+                    group,
+                    groupCurrentCount,
+                    availabilityDomains,
+                    faultDomainsByAD,
                 );
-                const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
-                const faultDomain = faultDomains[fdIndex];
-
-                return this.launchOracleInstance(ctx, index, group, availabilityDomain, faultDomain);
             }),
         );
         ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
 
         return result;
     }
+
+    async getFaultDomainsByAD(
+        compartmentId: string,
+        region: string,
+        availabilityDomains: string[],
+    ): Promise<FaultDomainMap> {
+        const faultDomainsByAD: FaultDomainMap = {};
+        await Promise.allSettled(
+            availabilityDomains.map(async (availabilityDomain) => {
+                faultDomainsByAD[availabilityDomain] = await this.getFaultDomains(
+                    compartmentId,
+                    region,
+                    availabilityDomain,
+                );
+                return true;
+            }),
+        );
+
+        return faultDomainsByAD;
+    }
+
+    selectAvailabilityDomain(index: number, groupCurrentCount: number, availabilityDomains: string[]): string {
+        const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
+        const availabilityDomain = availabilityDomains[adIndex];
+
+        return availabilityDomain;
+    }
+
+    selectFaultDomain(
+        index: number,
+        groupCurrentCount: number,
+        availabilityDomain: string,
+        faultDomainsByAD: FaultDomainMap,
+    ): string {
+        //TODO get instance count per ADs, so that FD can be distributed evenly
+        const faultDomains = faultDomainsByAD[availabilityDomain];
+        const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
+        const faultDomain = faultDomains[fdIndex];
+
+        return faultDomain;
+    }
+
+    // count total number of fault domains
+    calcMaxRetries(faultDomains: FaultDomainMap) {
+        return Object.keys(faultDomains).reduce((acc, cur) => {
+            return (
+                acc +
+                faultDomains[cur].reduce((acc, _fd) => {
+                    return acc + 1;
+                }, 0)
+            );
+        }, 0);
+    }
+
     async launchOracleInstance(
         ctx: Context,
         index: number,
         group: InstanceGroup,
-        availabilityDomain: string,
-        faultDomain: string,
+        groupCurrentCount: number,
+        availabilityDomains: string[],
+        faultDomains: FaultDomainMap,
+        retries = 0,
     ): Promise<string | boolean> {
+        // allow one retry per AD/FD
+        const maxRetries = this.calcMaxRetries(faultDomains);
         const groupName = group.name;
         const groupInstanceConfigurationId = group.instanceConfigurationId;
 
@@ -90,6 +150,23 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         const freeformTags = {
             group: groupName,
         };
+
+        // for each retry, attempt to launch in the next AD/FD
+        const adRetryIndex = Math.floor(retries / availabilityDomains.length);
+        // should loop through the fds in the AD
+        const fdRetryIndex = retries % availabilityDomains.length;
+
+        const availabilityDomain = this.selectAvailabilityDomain(
+            index + adRetryIndex,
+            groupCurrentCount,
+            availabilityDomains,
+        );
+        const faultDomain = this.selectFaultDomain(
+            index + fdRetryIndex,
+            groupCurrentCount,
+            availabilityDomain,
+            faultDomains,
+        );
 
         const overwriteLaunchDetails: core.models.InstanceConfigurationLaunchInstanceDetails = {
                 availabilityDomain: availabilityDomain,
@@ -126,6 +203,20 @@ export default class OracleInstanceManager implements CloudInstanceManager {
 
             return launchResponse.instance.id;
         } catch (err) {
+            if (err.includes('Out of host capacity')) {
+                if (retries < maxRetries) {
+                    // if we have retries left try again
+                    return this.launchOracleInstance(
+                        ctx,
+                        index,
+                        group,
+                        groupCurrentCount,
+                        availabilityDomains,
+                        faultDomains,
+                        retries + 1,
+                    );
+                }
+            }
             ctx.logger.error(
                 `[oracle] Failed launching instance number ${index + 1} in group ${groupName} with err ${err}`,
                 { err, availabilityDomain, faultDomain },

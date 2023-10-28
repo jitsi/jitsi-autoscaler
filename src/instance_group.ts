@@ -1,5 +1,7 @@
 import Redis from 'ioredis';
 import { Context } from './context';
+import got from 'got';
+import Audit from './audit';
 
 export interface ScalingOptions {
     minDesired: number;
@@ -18,6 +20,16 @@ export interface InstanceGroupTags {
     [id: string]: string;
 }
 
+export interface GroupMetric {
+    groupName: string;
+    timestamp: number;
+    value: number;
+}
+
+export const GroupTypeToGroupMetricKey: { [id: string]: string } = {
+    skynet: 'queueSize',
+};
+
 export interface InstanceGroup {
     id: string;
     name: string;
@@ -31,6 +43,7 @@ export interface InstanceGroup {
     enableScheduler: boolean;
     enableUntrackedThrottle: boolean;
     enableReconfiguration?: boolean;
+    metricsUrl: string;
     gracePeriodTTLSec: number;
     protectedTTLSec: number;
     scalingOptions: ScalingOptions;
@@ -39,6 +52,7 @@ export interface InstanceGroup {
 }
 
 export interface InstanceGroupManagerOptions {
+    audit: Audit;
     redisClient: Redis.Redis;
     redisScanCount: number;
     initialGroupList: Array<InstanceGroup>;
@@ -48,6 +62,7 @@ export interface InstanceGroupManagerOptions {
 
 export default class InstanceGroupManager {
     private readonly GROUPS_HASH_NAME = 'allgroups';
+    private readonly audit: Audit;
     private redisClient: Redis.Redis;
     private readonly redisScanCount: number;
     private readonly initialGroupList: Array<InstanceGroup>;
@@ -55,6 +70,7 @@ export default class InstanceGroupManager {
     private readonly sanityJobsIntervalSeconds: number;
 
     constructor(options: InstanceGroupManagerOptions) {
+        this.audit = options.audit;
         this.redisClient = options.redisClient;
         this.redisScanCount = options.redisScanCount;
         this.initialGroupList = options.initialGroupList;
@@ -81,6 +97,10 @@ export default class InstanceGroupManager {
 
     getInitialGroups(): Array<InstanceGroup> {
         return this.initialGroupList;
+    }
+
+    private getGroupMetricsKey(groupName: string): string {
+        return `gmetric:${groupName}`;
     }
 
     async existsAtLeastOneGroup(): Promise<boolean> {
@@ -272,6 +292,71 @@ export default class InstanceGroupManager {
     async isGroupJobsCreationAllowed(): Promise<boolean> {
         const result = await this.redisClient.get(`groupJobsCreationGracePeriod`);
         return !(result !== null && result.length > 0);
+    }
+
+    async fetchGroupMetrics(ctx: Context, groupName: string): Promise<boolean> {
+        try {
+            const group = await this.getInstanceGroup(groupName);
+            if (!group) {
+                throw new Error(`Group ${groupName} not found, failed to report on group metrics`);
+            }
+
+            if (!group.metricsUrl) {
+                ctx.logger.debug(`Group ${groupName} no metrics url, skipping metrics fetching`);
+                return false;
+            }
+
+            const metrics: { [id: string]: number } = await got(group.metricsUrl).json();
+
+            const key: string = Object.keys(metrics).find((key) => {
+                return GroupTypeToGroupMetricKey[group.type] === key;
+            });
+
+            const metricsObject: GroupMetric = {
+                groupName,
+                timestamp: Date.now(),
+                value: metrics[key],
+            };
+
+            // store the group metrics
+            await this.redisClient.zadd(
+                this.getGroupMetricsKey(groupName),
+                metricsObject.timestamp,
+                JSON.stringify(metricsObject),
+            );
+
+            await this.audit.updateLastGroupMetricValue(ctx, groupName, metricsObject.value);
+        } catch (e) {
+            ctx.logger.error(`Failed to report group metrics for group ${groupName}`, e);
+            return false;
+        }
+    }
+
+    async getGroupMetricInventoryPerPeriod(
+        ctx: Context,
+        groupName: string,
+        periodsCount: number,
+        periodDurationSeconds: number,
+    ): Promise<Array<Array<GroupMetric>>> {
+        const metricPoints: Array<Array<GroupMetric>> = [];
+        const metricsKey = this.getGroupMetricsKey(groupName);
+        const now = Date.now();
+        const items: string[] = await this.redisClient.zrange(metricsKey, 0, -1);
+
+        for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
+            metricPoints[periodIdx] = [];
+        }
+
+        items.forEach((item) => {
+            const itemJson: GroupMetric = JSON.parse(item);
+            const periodIdx = Math.floor((now - itemJson.timestamp) / (periodDurationSeconds * 1000));
+
+            if (periodIdx >= 0 && periodIdx < periodsCount) {
+                metricPoints[periodIdx].push(itemJson);
+            }
+        });
+
+        return metricPoints;
     }
 
     async setGroupJobsCreationGracePeriod(): Promise<boolean> {

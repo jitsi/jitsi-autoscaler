@@ -57,23 +57,11 @@ export default class Validator {
         return count + instanceGroup.scalingOptions.desiredCount <= max;
     }
 
-    async supportedInstanceType(instanceType: string): Promise<boolean> {
-        return (
-            instanceType !== null &&
-            instanceType !== '' &&
-            (instanceType.toLowerCase() == 'jibri' ||
-                instanceType.toLowerCase() == 'sip-jibri' ||
-                instanceType.toLowerCase() == 'jigasi' ||
-                instanceType.toLowerCase() == 'nomad' ||
-                instanceType.toLowerCase() == 'jvb')
-        );
+    supportedInstanceType(instanceType: string): boolean {
+        return ['jibri', 'sip-jibri', 'jigasi', 'nomad', 'jvb', 'skynet'].includes(instanceType.toLowerCase());
     }
 
-    async supportedScalingDirection(direction: string): Promise<boolean> {
-        return (
-            direction !== null &&
-            direction !== '' &&
-            (direction.toLowerCase() == 'up' || direction.toLowerCase() == 'down')
-        );
+    supportedScalingDirection(direction: string): boolean {
+        return ['up', 'down'].includes(direction.toLowerCase());
     }
 }

@@ -15,6 +15,7 @@ export interface GroupAudit {
     timestamp?: number | string;
     autoScalerActionItem?: AutoScalerActionItem;
     launcherActionItem?: LauncherActionItem;
+    groupMetricValue?: number;
 }
 
 export interface AutoScalerActionItem {
@@ -37,6 +38,7 @@ export interface LauncherActionItem {
 export interface GroupAuditResponse {
     lastLauncherRun: string;
     lastAutoScalerRun: string;
+    lastGroupMetricValue: number;
     lastReconfigureRequest: string;
     lastScaleMetrics?: Array<number>;
     autoScalerActionItems?: AutoScalerActionItem[];
@@ -222,6 +224,18 @@ export default class Audit {
         return updateResponse;
     }
 
+    async updateLastGroupMetricValue(ctx: Context, groupName: string, groupMetricValue: number): Promise<boolean> {
+        const value: GroupAudit = {
+            groupMetricValue,
+            groupName,
+            type: 'last-group-metric-value',
+        };
+        const updateResponse = this.setGroupValue(groupName, value);
+        ctx.logger.info(`Updated last group metric for group ${groupName}`);
+
+        return updateResponse;
+    }
+
     async updateLastAutoScalerRun(ctx: Context, groupName: string, scaleMetrics: Array<number>): Promise<boolean> {
         const updateLastAutoScalerStart = process.hrtime();
 
@@ -345,6 +359,7 @@ export default class Audit {
         const groupAuditResponse: GroupAuditResponse = {
             lastLauncherRun: 'unknown',
             lastAutoScalerRun: 'unknown',
+            lastGroupMetricValue: null,
             lastReconfigureRequest: 'unknown',
             lastScaleMetrics: [],
         };
@@ -355,6 +370,9 @@ export default class Audit {
             switch (groupAudit.type) {
                 case 'last-launcher-run':
                     groupAuditResponse.lastLauncherRun = new Date(groupAudit.timestamp).toISOString();
+                    break;
+                case 'last-group-metric-value':
+                    groupAuditResponse.lastGroupMetricValue = groupAudit.groupMetricValue;
                     break;
                 case 'last-autoScaler-run':
                     groupAuditResponse.lastScaleMetrics = groupAudit.autoScalerActionItem

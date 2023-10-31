@@ -205,7 +205,7 @@ export default class OracleInstanceManager implements CloudInstanceManager {
 
             return launchResponse.instance.id;
         } catch (err) {
-            if (err.includes('Out of host capacity')) {
+            if (err.toString().includes('Out of host capacity')) {
                 if (retries < maxRetries) {
                     // if we have retries left try again
                     return this.launchOracleInstance(

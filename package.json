@@ -9,7 +9,7 @@
   "main": "src/index.js",
   "private": true,
   "engines": {
-    "node": ">=21"
+    "node": ">=20"
   },
   "dependencies": {
     "@types/redis": "^2.8.26",
@@ -49,17 +49,18 @@
     "eslint": "^8.26.0",
     "eslint-config-prettier": "^8.8.0",
     "eslint-plugin-prettier": "^4.2.1",
+    "glob": "^10.3.10",
     "nodemon": "^2.0.4",
     "prettier": "^2.8.8",
-    "tsx": "^3.14.0",
+    "ts-node": "^10.9.1",
     "typescript": "^5.0.4"
   },
   "scripts": {
-    "test": "node --import tsx --test src/test/**/*.ts",
+    "test": "glob -c \"node --test --require ts-node/register\" \"src/test/**/*.ts\"",
     "watch": "concurrently -k -p \"[{name}]\" \"npm run watch-ts\" \"npm run watch-node\"",
     "watch-ts": "tsc -w",
     "watch-node": "nodemon dist/app.js",
-    "watch-test": "node --import tsx --test --watch src/test/**/*.ts",
+    "watch-test": "glob -c \"node --test --watch --require ts-node/register\" \"src/test/**/*.ts\"",
     "lint": "npx eslint . --ext .ts,.tsx --fix",
     "build": "npm run lint && tsc",
     "start": "node dist/app.js"

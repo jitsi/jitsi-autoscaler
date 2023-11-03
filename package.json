@@ -63,6 +63,8 @@
     "watch-test": "glob -c \"node --test --watch --require ts-node/register\" \"src/test/**/*.ts\"",
     "lint": "npx eslint . --ext .ts,.tsx --fix",
     "build": "npm run lint && tsc",
+    "start-debug": "node --inspect=0.0.0.0:9229 dist/app.js",
+    "start-profile": "node --prof dist/app.js",
     "start": "node dist/app.js"
   },
   "author": "Jitsi",

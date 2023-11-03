@@ -1,4 +1,4 @@
-FROM --platform=$TARGETPLATFORM node:16
+FROM --platform=$TARGETPLATFORM node:20
 ARG TARGETPLATFORM
 
 # Create app directory

@@ -14,7 +14,11 @@ declare global {
 }
 
 export class Context {
-    constructor(public logger: Logger, public start: number, public requestId: string) {}
+    constructor(
+        public logger: Logger,
+        public start: number,
+        public requestId: string,
+    ) {}
 }
 
 // injectContext adds context to the express request object. The context

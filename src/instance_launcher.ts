@@ -1,7 +1,7 @@
 import { InstanceDetails, InstanceState, JibriStatusState, InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import LockManager from './lock_manager';
 import { Context } from './context';
 import * as promClient from 'prom-client';
@@ -33,7 +33,7 @@ export interface InstanceLauncherOptions {
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     shutdownManager: ShutdownManager;
     audit: Audit;
     metricsLoop: MetricsLoop;
@@ -44,7 +44,7 @@ export default class InstanceLauncher {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private lockManager: LockManager;
     private shutdownManager: ShutdownManager;
     private audit: Audit;

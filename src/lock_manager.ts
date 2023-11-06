@@ -1,16 +1,17 @@
-import Redis from 'ioredis';
+// import { Redis } from 'ioredis';
+import { RedisClient } from 'redis';
 import Redlock from 'redlock';
 import { Logger } from 'winston';
 import { Context } from './context';
 
 export interface LockManagerOptions {
-    redisClient: Redis.Redis;
+    redisClient: RedisClient;
     groupLockTTLMs: number;
     jobCreationLockTTL: number;
 }
 
 export default class LockManager {
-    private redisClient: Redis.Redis;
+    private redisClient: RedisClient;
     private groupProcessingLockManager: Redlock;
     private groupLockTTLMs: number;
     private jobCreationLockTTL: number;

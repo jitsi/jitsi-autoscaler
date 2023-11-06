@@ -28,10 +28,19 @@ export class ASAPPubKeyFetcher {
         }
 
         req.context.logger.debug('fetching pub key from key server');
-        pubKey = <jwt.Secret>await fetchPublicKey(this.baseUrl, token.header.kid);
-        this.cache.set(token.header.kid, pubKey);
-
-        return pubKey;
+        try {
+            pubKey = <jwt.Secret>await fetchPublicKey(this.baseUrl, token.header.kid);
+            req.context.logger.debug('success, caching pubkey for kid', { kid: token.header.kid });
+            this.cache.set(token.header.kid, pubKey);
+            return pubKey;
+        } catch (err) {
+            req.context.logger.error('error fetching pub key from key server', {
+                baseUrl: this.baseUrl,
+                kid: token.header.kid,
+                err,
+            });
+            throw err;
+        }
     }
 }
 

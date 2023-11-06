@@ -318,10 +318,10 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
     }
 
     if (err.name === 'UnauthorizedError') {
-        l.info(`unauthorized token ${err}`);
+        l.info(`unauthorized token ${err}`, { u: req.url });
         res.status(401).send('invalid token...');
     } else {
-        l.error(`internal error ${err}`, { stack: err.stack });
+        l.error(`internal error ${err}`, { u: req.url, stack: err.stack });
         res.status(500).send('internal server error');
     }
 });

@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { Context } from './context';
 
 export interface ScalingOptions {
@@ -39,7 +39,7 @@ export interface InstanceGroup {
 }
 
 export interface InstanceGroupManagerOptions {
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     redisScanCount: number;
     initialGroupList: Array<InstanceGroup>;
     groupJobsCreationGracePeriod: number;
@@ -48,7 +48,7 @@ export interface InstanceGroupManagerOptions {
 
 export default class InstanceGroupManager {
     private readonly GROUPS_HASH_NAME = 'allgroups';
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private readonly redisScanCount: number;
     private readonly initialGroupList: Array<InstanceGroup>;
     private readonly processingIntervalSeconds: number;
@@ -89,9 +89,9 @@ export default class InstanceGroupManager {
             const result = await this.redisClient.hscan(
                 this.GROUPS_HASH_NAME,
                 cursor,
-                'match',
+                'MATCH',
                 `*`,
-                'count',
+                'COUNT',
                 this.redisScanCount,
             );
             cursor = result[0];
@@ -102,8 +102,12 @@ export default class InstanceGroupManager {
                 });
 
                 const items = await pipeline.exec();
-                if (items.length > 0) {
-                    return true;
+                if (items) {
+                    if (items.length > 0) {
+                        return true;
+                    }
+                } else {
+                    return false;
                 }
             }
         } while (cursor != '0');
@@ -175,9 +179,9 @@ export default class InstanceGroupManager {
             const result = await this.redisClient.hscan(
                 this.GROUPS_HASH_NAME,
                 cursor,
-                'match',
+                'MATCH',
                 `*`,
-                'count',
+                'COUNT',
                 this.redisScanCount,
             );
             cursor = result[0];
@@ -188,12 +192,14 @@ export default class InstanceGroupManager {
                 });
 
                 const items = await pipeline.exec();
-                items.forEach((item) => {
-                    if (item[1]) {
-                        const itemJson: InstanceGroup = JSON.parse(item[1]);
-                        instanceGroups.push(itemJson);
-                    }
-                });
+                if (items) {
+                    items.forEach((item) => {
+                        if (item[1]) {
+                            const itemJson = <InstanceGroup>JSON.parse(<string>item[1]);
+                            instanceGroups.push(itemJson);
+                        }
+                    });
+                }
             }
             scanCount++;
         } while (cursor != '0');
@@ -288,7 +294,7 @@ export default class InstanceGroupManager {
     }
 
     async setValue(key: string, ttl: number): Promise<boolean> {
-        const result = await this.redisClient.set(key, JSON.stringify(false), 'ex', ttl);
+        const result = await this.redisClient.set(key, JSON.stringify(false), 'EX', ttl);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }

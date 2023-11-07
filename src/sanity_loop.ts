@@ -2,10 +2,10 @@ import { Context } from './context';
 import GroupReportGenerator from './group_report';
 import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 
 export interface SanityLoopOptions {
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     metricsTTL: number;
     cloudManager: CloudManager;
     reportExtCallRetryStrategy: CloudRetryStrategy;
@@ -18,7 +18,7 @@ export default class SanityLoop {
     private reportExtCallRetryStrategy: CloudRetryStrategy;
     private groupReportGenerator: GroupReportGenerator;
     private instanceGroupManager: InstanceGroupManager;
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private metricsTTL: number;
 
     constructor(options: SanityLoopOptions) {
@@ -66,7 +66,7 @@ export default class SanityLoop {
 
     async saveMetricUnTrackedCount(groupName: string, count: number): Promise<boolean> {
         const key = `service-metrics:${groupName}:untracked-count`;
-        const result = await this.redisClient.set(key, JSON.stringify(count), 'ex', this.metricsTTL);
+        const result = await this.redisClient.set(key, JSON.stringify(count), 'EX', this.metricsTTL);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }
@@ -77,7 +77,7 @@ export default class SanityLoop {
         await this.redisClient.set(
             `cloud-instances-list:${groupName}`,
             JSON.stringify(cloudInstances),
-            'ex',
+            'EX',
             this.metricsTTL,
         );
     }

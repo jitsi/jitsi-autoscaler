@@ -4,7 +4,8 @@ import express from 'express';
 import * as context from './context';
 import Handlers from './handlers';
 import Validator from './validator';
-import Redis from 'ioredis';
+import Redis, { RedisOptions } from 'ioredis';
+import { RedisClient, ClientOpts } from 'redis';
 import AutoscalerLogger from './logger';
 import shortid from 'shortid';
 import { ASAPPubKeyFetcher } from './asap';
@@ -21,7 +22,6 @@ import ReconfigureManager from './reconfigure_manager';
 import JobManager from './job_manager';
 import GroupReportGenerator from './group_report';
 import Audit from './audit';
-import { ClientOpts } from 'redis';
 import { body, param, validationResult } from 'express-validator';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
@@ -42,7 +42,7 @@ app.use(express.json());
 // TODO: unittesting
 // TODO: readme updates and docker compose allthethings
 
-const redisOptions = <Redis.RedisOptions>{
+const redisOptions = <RedisOptions>{
     host: config.RedisHost,
     port: config.RedisPort,
 };
@@ -67,6 +67,7 @@ if (config.RedisDb) {
 }
 
 const redisClient = new Redis(redisOptions);
+const bareRedisClient = new RedisClient(redisQueueOptions);
 
 app.get('/health', (req: express.Request, res: express.Response) => {
     logger.debug('Health check');
@@ -130,7 +131,7 @@ const cloudManager = new CloudManager({
 });
 
 const lockManager: LockManager = new LockManager(logger, {
-    redisClient,
+    redisClient: bareRedisClient,
     jobCreationLockTTL: config.JobsCreationLockTTLMs,
     groupLockTTLMs: config.GroupLockTTLMs,
 });
@@ -317,10 +318,10 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
     }
 
     if (err.name === 'UnauthorizedError') {
-        l.info(`unauthorized token ${err}`);
+        l.info(`unauthorized token ${err}`, { u: req.url });
         res.status(401).send('invalid token...');
     } else {
-        l.error(`internal error ${err}`, { stack: err.stack });
+        l.error(`internal error ${err}`, { u: req.url, stack: err.stack });
         res.status(500).send('internal server error');
     }
 });

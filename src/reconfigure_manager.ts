@@ -1,16 +1,16 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { Context } from './context';
 import Audit from './audit';
 import { InstanceDetails, StatsReport } from './instance_tracker';
 
 export interface ReconfigureManagerOptions {
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     reconfigureTTL: number;
     audit: Audit;
 }
 
 export default class ReconfigureManager {
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private reconfigureTTL: number;
     private audit: Audit;
 
@@ -30,7 +30,7 @@ export default class ReconfigureManager {
         for (const instance of instanceDetails) {
             const key = this.reconfigureKey(instance.instanceId);
             ctx.logger.debug('Writing reconfigure date', { key, reconfigureDate });
-            pipeline.set(key, reconfigureDate, 'ex', this.reconfigureTTL);
+            pipeline.set(key, reconfigureDate, 'EX', this.reconfigureTTL);
         }
         await pipeline.exec();
         await this.audit.saveReconfigureEvents(instanceDetails);
@@ -52,9 +52,14 @@ export default class ReconfigureManager {
             pipeline.get(key);
         });
         const instances = await pipeline.exec();
-        return instances.map((instance: string[]) => {
-            return instance[1];
-        });
+        if (instances) {
+            return instances.map((instance: [error: Error | null, result: unknown]) => {
+                return <string>instance[1];
+            });
+        } else {
+            ctx.logger.error('ReconfigureDates Failed in pipeline.exec()');
+            return [];
+        }
     }
 
     async getReconfigureDate(ctx: Context, instanceId: string): Promise<string> {

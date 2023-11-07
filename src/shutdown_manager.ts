@@ -1,16 +1,16 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { Context } from './context';
 import Audit from './audit';
 import { InstanceDetails } from './instance_tracker';
 
 export interface ShutdownManagerOptions {
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     shutdownTTL: number;
     audit: Audit;
 }
 
 export default class ShutdownManager {
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private shutdownTTL: number;
     private audit: Audit;
 
@@ -37,7 +37,7 @@ export default class ShutdownManager {
         for (const instance of instanceDetails) {
             const key = this.shutDownKey(instance.instanceId);
             ctx.logger.debug('Writing shutdown status', { key, status });
-            pipeline.set(key, status, 'ex', this.shutdownTTL);
+            pipeline.set(key, status, 'EX', this.shutdownTTL);
         }
         await pipeline.exec();
         await this.audit.saveShutdownEvents(instanceDetails);
@@ -51,9 +51,14 @@ export default class ShutdownManager {
             pipeline.get(key);
         });
         const instances = await pipeline.exec();
-        return instances.map((instance: string[]) => {
-            return instance[1] == 'shutdown';
-        });
+        if (instances) {
+            return instances.map((instance: [error: Error | null, result: unknown]) => {
+                return instance[1] == <unknown>'shutdown';
+            });
+        } else {
+            ctx.logger.error('ShutdownStatus Failed in pipeline.exec()');
+            return [];
+        }
     }
 
     async getShutdownStatus(ctx: Context, instanceId: string): Promise<boolean> {
@@ -71,7 +76,7 @@ export default class ShutdownManager {
     ): Promise<boolean> {
         const key = this.protectedKey(instanceId);
         ctx.logger.debug('Writing protected mode', { key, mode });
-        await this.redisClient.set(key, mode, 'ex', protectedTTL);
+        await this.redisClient.set(key, mode, 'EX', protectedTTL);
         return true;
     }
 
@@ -82,8 +87,13 @@ export default class ShutdownManager {
             pipeline.get(key);
         });
         const instances = await pipeline.exec();
-        return instances.map((instance: string[]) => {
-            return instance[1] == 'isScaleDownProtected';
-        });
+        if (instances) {
+            return instances.map((instance: [error: Error | null, result: unknown]) => {
+                return instance[1] == 'isScaleDownProtected';
+            });
+        } else {
+            ctx.logger.error('ScaleDownProtected Failed in pipeline.exec()');
+            return [];
+        }
     }
 }

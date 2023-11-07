@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
 
@@ -54,14 +54,14 @@ export interface InstanceAuditResponse {
 }
 
 export interface AuditOptions {
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     redisScanCount: number;
     auditTTL: number;
     groupRelatedDataTTL: number;
 }
 
 export default class Audit {
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private readonly redisScanCount: number;
     private readonly auditTTL: number;
     private readonly groupRelatedDataTTL: number;
@@ -123,7 +123,7 @@ export default class Audit {
             pipeline.set(
                 `audit:${instance.group}:${instance.instanceId}:request-to-terminate`,
                 JSON.stringify(value),
-                'ex',
+                'EX',
                 this.auditTTL,
             );
         }
@@ -139,7 +139,7 @@ export default class Audit {
         await this.redisClient.set(
             `audit:${group}:${instanceId}:reconfigure-complete`,
             JSON.stringify(value),
-            'ex',
+            'EX',
             this.auditTTL,
         );
     }
@@ -155,7 +155,7 @@ export default class Audit {
             pipeline.set(
                 `audit:${instance.group}:${instance.instanceId}:request-to-reconfigure`,
                 JSON.stringify(value),
-                'ex',
+                'EX',
                 this.auditTTL,
             );
         }
@@ -163,7 +163,7 @@ export default class Audit {
     }
 
     async setInstanceValue(key: string, value: InstanceAudit, ttl: number): Promise<boolean> {
-        const result = await this.redisClient.set(key, JSON.stringify(value), 'ex', ttl);
+        const result = await this.redisClient.set(key, JSON.stringify(value), 'EX', ttl);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }
@@ -396,9 +396,9 @@ export default class Audit {
         do {
             const result = await this.redisClient.scan(
                 cursor,
-                'match',
+                'MATCH',
                 `audit:${groupName}:*:*`,
-                'count',
+                'COUNT',
                 this.redisScanCount,
             );
             cursor = result[0];
@@ -409,11 +409,13 @@ export default class Audit {
                 });
 
                 const items = await pipeline.exec();
-                items.forEach((item) => {
-                    if (item[1]) {
-                        audit.push(JSON.parse(item[1]));
-                    }
-                });
+                if (items) {
+                    items.forEach((item) => {
+                        if (item[1]) {
+                            audit.push(<InstanceAudit>JSON.parse(<string>item[1]));
+                        }
+                    });
+                }
             }
         } while (cursor != '0');
         ctx.logger.debug(`Instance audit: `, { groupName, audit });

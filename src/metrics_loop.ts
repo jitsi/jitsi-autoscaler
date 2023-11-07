@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import * as promClient from 'prom-client';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import { Context } from './context';
@@ -58,7 +58,7 @@ const queueWaiting = new promClient.Gauge({
 });
 
 export interface MetricsLoopOptions {
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     metricsTTL: number;
     instanceGroupManager: InstanceGroupManager;
     instanceTracker: InstanceTracker;
@@ -66,7 +66,7 @@ export interface MetricsLoopOptions {
 }
 
 export default class MetricsLoop {
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private metricsTTL: number;
     private instanceGroupManager: InstanceGroupManager;
     private instanceTracker: InstanceTracker;
@@ -174,7 +174,7 @@ export default class MetricsLoop {
     }
 
     async setValue(key: string, value: number, ttl: number): Promise<boolean> {
-        const result = await this.redisClient.set(key, JSON.stringify(value), 'ex', ttl);
+        const result = await this.redisClient.set(key, JSON.stringify(value), 'EX', ttl);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }

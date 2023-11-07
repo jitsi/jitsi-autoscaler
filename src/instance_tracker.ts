@@ -143,7 +143,7 @@ export interface InstanceState {
 }
 
 export interface InstanceTrackerOptions {
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     redisScanCount: number;
     shutdownManager: ShutdownManager;
     audit: Audit;
@@ -155,7 +155,7 @@ export interface InstanceTrackerOptions {
 }
 
 export class InstanceTracker {
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private readonly redisScanCount: number;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
@@ -502,9 +502,9 @@ export class InstanceTracker {
             const result = await this.redisClient.hscan(
                 groupInstancesStatesKey,
                 cursor,
-                'match',
+                'MATCH',
                 `*`,
-                'count',
+                'COUNT',
                 this.redisScanCount,
             );
             cursor = result[0];
@@ -555,11 +555,16 @@ export class InstanceTracker {
         });
         const instanceStates = await pipeline.exec();
 
-        for (const state of instanceStates) {
-            if (state[1]) {
-                instanceStatesResponse.push(JSON.parse(state[1]));
+        if (instanceStates) {
+            for (const state of instanceStates) {
+                if (state[1]) {
+                    instanceStatesResponse.push(<InstanceState>JSON.parse(<string>state[1]));
+                }
             }
+        } else {
+            return [];
         }
+
         return instanceStatesResponse;
     }
 

@@ -1,7 +1,7 @@
 import { InstanceMetric, InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
 import Redlock from 'redlock';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
@@ -16,7 +16,7 @@ export interface AutoscaleProcessorOptions {
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
-    redisClient: Redis.Redis;
+    redisClient: Redis;
     audit: Audit;
 }
 
@@ -24,7 +24,7 @@ export default class AutoscaleProcessor {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
-    private redisClient: Redis.Redis;
+    private redisClient: Redis;
     private lockManager: LockManager;
     private audit: Audit;
 

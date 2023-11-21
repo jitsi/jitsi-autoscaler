@@ -38,6 +38,7 @@ const env = cleanEnv(process.env, {
     DEFAULT_INSTANCE_CONFIGURATION_ID: str(),
     DEFAULT_COMPARTMENT_ID: str(),
     METRIC_TTL_SEC: num({ default: 3600 }), // seconds
+    METRICS_PORT: num({ default: 3001 }),
     SERVICE_LEVEL_METRICS_TTL_SEC: num({ default: 600 }),
     IDLE_TTL_SEC: num({ default: 300 }), // seconds, default to 5 minutes
     PROVISIONING_TTL_SEC: num({ default: 900 }), // seconds
@@ -143,6 +144,8 @@ export default {
     SanityProcessingTimoutMs: env.SANITY_LOOP_PROCESSING_TIMEOUT_MS,
     // metrics loop
     MetricsLoopIntervalMs: env.METRICS_LOOP_INTERVAL_MS,
+    // metrics port
+    MetricsServerPort: env.METRICS_PORT,
     // other
     CloudProviders: cloudProviders,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,

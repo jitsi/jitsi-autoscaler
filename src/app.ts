@@ -1,4 +1,3 @@
-import bodyParser from 'body-parser';
 import config from './config';
 import express from 'express';
 import * as context from './context';
@@ -35,8 +34,10 @@ import ScalingManager from './scaling_options_manager';
 const asLogger = new AutoscalerLogger({ logLevel: config.LogLevel });
 const logger = asLogger.createLogger(config.LogLevel);
 
+// metrics listener
+const mapp = express();
+
 const app = express();
-app.use(bodyParser.json());
 app.use(express.json());
 
 // TODO: unittesting
@@ -69,7 +70,7 @@ if (config.RedisDb) {
 const redisClient = new Redis(redisOptions);
 const bareRedisClient = new RedisClient(redisQueueOptions);
 
-app.get('/health', (req: express.Request, res: express.Response) => {
+mapp.get('/health', (req: express.Request, res: express.Response) => {
     logger.debug('Health check');
     if (req.query['deep']) {
         redisClient.ping((err, reply) => {
@@ -290,15 +291,14 @@ const loggedPaths = ['/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use('/', context.injectContext);
 app.use(loggedPaths, context.accessLogger);
-stats.registerHandler(app, '/metrics');
+stats.registerHandler(mapp, '/metrics');
 app.use(
     expressjwt({
         secret: asapFetcher.secretCallback,
         audience: config.AsapJwtAcceptedAud,
         issuer: config.AsapJwtAcceptedHookIss,
         algorithms: ['RS256'],
-    }).unless((req) => {
-        if (req.path == '/health') return true;
+    }).unless(() => {
         return !config.ProtectedApi;
     }),
 );
@@ -591,6 +591,10 @@ app.post('/groups/:name/actions/reconfigure-instances', async (req, res, next) =
     } catch (err) {
         next(err);
     }
+});
+
+mapp.listen(config.MetricsServerPort, () => {
+    logger.info(`...listening on :${config.MetricsServerPort}`);
 });
 
 app.listen(config.HTTPServerPort, () => {

@@ -1,4 +1,3 @@
-import bodyParser from 'body-parser';
 import config from './config';
 import express from 'express';
 import * as context from './context';
@@ -35,8 +34,10 @@ import ScalingManager from './scaling_options_manager';
 const asLogger = new AutoscalerLogger({ logLevel: config.LogLevel });
 const logger = asLogger.createLogger(config.LogLevel);
 
+// metrics listener
+const mapp = express();
+
 const app = express();
-app.use(bodyParser.json());
 app.use(express.json());
 
 // TODO: unittesting
@@ -290,7 +291,7 @@ const loggedPaths = ['/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use('/', context.injectContext);
 app.use(loggedPaths, context.accessLogger);
-stats.registerHandler(app, '/metrics');
+stats.registerHandler(mapp, '/metrics');
 app.use(
     expressjwt({
         secret: asapFetcher.secretCallback,
@@ -591,6 +592,10 @@ app.post('/groups/:name/actions/reconfigure-instances', async (req, res, next) =
     } catch (err) {
         next(err);
     }
+});
+
+mapp.listen(config.MetricsServerPort, () => {
+    logger.info(`...listening on :${config.MetricsServerPort}`);
 });
 
 app.listen(config.HTTPServerPort, () => {

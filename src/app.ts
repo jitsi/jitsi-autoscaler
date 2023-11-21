@@ -298,8 +298,7 @@ app.use(
         audience: config.AsapJwtAcceptedAud,
         issuer: config.AsapJwtAcceptedHookIss,
         algorithms: ['RS256'],
-    }).unless((req) => {
-        if (req.path == '/health') return true;
+    }).unless(() => {
         return !config.ProtectedApi;
     }),
 );

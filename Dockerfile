@@ -1,6 +1,9 @@
 FROM --platform=$TARGETPLATFORM node:20
 ARG TARGETPLATFORM
 
+# install dependencies
+RUN apt-get update && apt-get -y install linux-perf
+
 # Create app directory
 WORKDIR /usr/src/app
 

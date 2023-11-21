@@ -70,7 +70,7 @@ if (config.RedisDb) {
 const redisClient = new Redis(redisOptions);
 const bareRedisClient = new RedisClient(redisQueueOptions);
 
-app.get('/health', (req: express.Request, res: express.Response) => {
+mapp.get('/health', (req: express.Request, res: express.Response) => {
     logger.debug('Health check');
     if (req.query['deep']) {
         redisClient.ping((err, reply) => {

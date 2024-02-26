@@ -71,6 +71,13 @@ export default class AutoscaleProcessor {
             const currentInventory = await this.instanceTracker.trimCurrent(ctx, group.name);
             const count = currentInventory.length;
 
+            if (count == 0) {
+                ctx.logger.info(
+                    `[AutoScaler] No instances found in group ${group.name}, no desired count adjustments possible`,
+                );
+                return false;
+            }
+
             const maxPeriodCount = Math.max(
                 group.scalingOptions.scaleUpPeriodsCount,
                 group.scalingOptions.scaleDownPeriodsCount,

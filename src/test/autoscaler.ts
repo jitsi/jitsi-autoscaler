@@ -7,7 +7,7 @@ import test, { afterEach, describe, mock } from 'node:test';
 import AutoscaleProcessor from '../autoscaler';
 
 describe('AutoscaleProcessor', () => {
-    const context = {
+    let context = {
         logger: {
             info: mock.fn(),
             debug: mock.fn(),
@@ -48,7 +48,9 @@ describe('AutoscaleProcessor', () => {
     };
 
     const instanceGroupManager = {
-        getInstanceGroup: mock.fn(),
+        getInstanceGroup: mock.fn(() => {
+            return groupDetails;
+        }),
         allowAutoscaling: mock.fn(),
         upsertInstanceGroup: mock.fn(),
     };
@@ -56,7 +58,7 @@ describe('AutoscaleProcessor', () => {
     const instanceTracker = {
         trimCurrent: mock.fn(),
         getMetricInventoryPerPeriod: mock.fn(),
-        getSummaryMetricPerPeriod: mock.fn(),
+        // getSummaryMetricPerPeriod: mock.fn(),
     };
 
     const audit = {
@@ -72,6 +74,14 @@ describe('AutoscaleProcessor', () => {
     });
 
     afterEach(() => {
+        context = {
+            logger: {
+                info: mock.fn(),
+                debug: mock.fn(),
+                error: mock.fn(),
+                warn: mock.fn(),
+            },
+        };
         mock.restoreAll();
     });
 
@@ -97,40 +107,60 @@ describe('AutoscaleProcessor', () => {
         });
 
         test('will exit if group autoscaling is disabled', async () => {
-            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
-                ...groupDetails,
-                enableAutoScale: false,
-            }));
+            // instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetails);
+            const disabledGroup = { ...groupDetails, enableAutoScale: false };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => {
+                return disabledGroup;
+            });
 
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[0].arguments[0],
+                `[AutoScaler] Autoscaling not enabled for group ${groupDetails.name}`,
+            );
 
             assert.strictEqual(result, false);
         });
 
         test('will exit if autoscaling activity has occurred recently', async () => {
-            instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => false);
-            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
-                ...groupDetails,
-                enableAutoScale: true,
-            }));
+            autoscaleProcessor.instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => false);
 
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[0].arguments[0],
+                `[AutoScaler] Wait before allowing desired count adjustments for group ${groupDetails.name}`,
+            );
 
             assert.strictEqual(result, false);
         });
 
         test('will not perform metrics calculations if no instances are found in the group', async () => {
             instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => true);
-            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
-                ...groupDetails,
-                enableAutoScale: true,
-            }));
             instanceTracker.trimCurrent.mock.mockImplementationOnce(() => []);
 
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
 
             assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 1);
             assert.strictEqual(result, false);
+        });
+
+        test('will not updated desired count if current count does not match group desired', async () => {
+            instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => true);
+            instanceTracker.trimCurrent = mock.fn();
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{}, {}]);
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 1);
+            assert.deepEqual(instanceTracker.getMetricInventoryPerPeriod.mock.calls.length, 1);
+            assert.deepEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
+            assert.deepEqual(
+                context.logger.info.mock.calls[1].arguments[0],
+                `[AutoScaler] Wait for the launcher to finish scaling up/down instances for group ${groupDetails.name}`,
+            );
+            assert.strictEqual(result, true);
         });
     });
 });

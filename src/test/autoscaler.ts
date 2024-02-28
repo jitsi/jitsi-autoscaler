@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import test, { afterEach, describe, mock } from 'node:test';
 
 import AutoscaleProcessor from '../autoscaler';
+import { InstanceTracker } from '../instance_tracker';
 
 describe('AutoscaleProcessor', () => {
     let context = {
@@ -58,7 +59,7 @@ describe('AutoscaleProcessor', () => {
     const instanceTracker = {
         trimCurrent: mock.fn(),
         getMetricInventoryPerPeriod: mock.fn(),
-        // getSummaryMetricPerPeriod: mock.fn(),
+        getSummaryMetricPerPeriod: InstanceTracker.prototype.getSummaryMetricPerPeriod,
     };
 
     const audit = {
@@ -82,6 +83,8 @@ describe('AutoscaleProcessor', () => {
                 warn: mock.fn(),
             },
         };
+        instanceTracker.trimCurrent.mock.resetCalls();
+        instanceTracker.getMetricInventoryPerPeriod.mock.resetCalls();
         mock.restoreAll();
     });
 
@@ -148,7 +151,6 @@ describe('AutoscaleProcessor', () => {
 
         test('will not updated desired count if current count does not match group desired', async () => {
             instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => true);
-            instanceTracker.trimCurrent = mock.fn();
             instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{}, {}]);
 
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
@@ -159,6 +161,22 @@ describe('AutoscaleProcessor', () => {
             assert.deepEqual(
                 context.logger.info.mock.calls[1].arguments[0],
                 `[AutoScaler] Wait for the launcher to finish scaling up/down instances for group ${groupDetails.name}`,
+            );
+            assert.strictEqual(result, true);
+        });
+
+        test('will not updated desired count if no metrics are available', async () => {
+            instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => true);
+            instanceTracker.trimCurrent.mock.resetCalls();
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{}]);
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 1);
+            assert.deepEqual(instanceTracker.getMetricInventoryPerPeriod.mock.calls.length, 1);
+            assert.deepEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
+            assert.deepEqual(
+                context.logger.warn.mock.calls[0].arguments[0],
+                `[AutoScaler] No metrics available, no desired count adjustments possible for group ${groupDetails.name} with 1 instances`,
             );
             assert.strictEqual(result, true);
         });

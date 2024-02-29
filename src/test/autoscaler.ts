@@ -20,7 +20,7 @@ describe('AutoscaleProcessor', () => {
     const groupName = 'group';
     const groupDetails = {
         name: groupName,
-        type: 'test',
+        type: 'JVB',
         region: 'default',
         environment: 'test',
         compartmentId: 'test',
@@ -52,14 +52,22 @@ describe('AutoscaleProcessor', () => {
         getInstanceGroup: mock.fn(() => {
             return groupDetails;
         }),
-        allowAutoscaling: mock.fn(),
+        allowAutoscaling: mock.fn(() => true),
         upsertInstanceGroup: mock.fn(),
     };
 
     const instanceTracker = {
         trimCurrent: mock.fn(),
-        getMetricInventoryPerPeriod: mock.fn(),
+        getMetricInventoryPerPeriod: mock.fn(() => {
+            return [
+                [{ value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+                [{ value: 0.4, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+                [{ value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+            ];
+        }),
         getSummaryMetricPerPeriod: InstanceTracker.prototype.getSummaryMetricPerPeriod,
+        getAverageMetricPerPeriod: InstanceTracker.prototype.getAverageMetricPerPeriod,
+        computeSummaryMetric: InstanceTracker.prototype.computeSummaryMetric,
     };
 
     const audit = {
@@ -85,10 +93,32 @@ describe('AutoscaleProcessor', () => {
         };
         instanceTracker.trimCurrent.mock.resetCalls();
         instanceTracker.getMetricInventoryPerPeriod.mock.resetCalls();
-        mock.restoreAll();
+        audit.updateLastAutoScalerRun.mock.resetCalls();
+        mock.reset();
     });
 
-    describe('processAutoscalingByGroup', () => {
+    describe('processAutoscalingByGroup scalingTests', () => {
+        test('will choose to increase desired count', async () => {
+            // do something
+        });
+        test('will choose to increase desired count to maximum and not higher', async () => {
+            // do something
+        });
+        test('would choose to increase desired count but maximum was reached', async () => {
+            // do something
+        });
+        test('will choose to decrease desired count', async () => {
+            // do something
+        });
+        test('will choose to increase desired count to minimum and not lower', async () => {
+            // do something
+        });
+        test('would choose to decrease desired count but minimum was reached', async () => {
+            // do something
+        });
+    });
+
+    describe('processAutoscalingByGroup noopTests', () => {
         test('will try to set a redis lock and exit if it fails', async () => {
             const error = new Error('lock error');
             lockManager.lockGroup.mock.mockImplementationOnce(() => {
@@ -98,6 +128,7 @@ describe('AutoscaleProcessor', () => {
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
 
             assert.deepEqual(context.logger.warn.mock.calls[0].arguments[1], { err: error });
+            assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 0);
             assert.strictEqual(result, false);
         });
 
@@ -107,6 +138,7 @@ describe('AutoscaleProcessor', () => {
             await assert.rejects(() => autoscaleProcessor.processAutoscalingByGroup(context, groupName), {
                 message: `Group ${groupName} not found, failed to process autoscaling`,
             });
+            assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 0);
         });
 
         test('will exit if group autoscaling is disabled', async () => {
@@ -123,6 +155,7 @@ describe('AutoscaleProcessor', () => {
                 `[AutoScaler] Autoscaling not enabled for group ${groupDetails.name}`,
             );
 
+            assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 0);
             assert.strictEqual(result, false);
         });
 
@@ -136,48 +169,107 @@ describe('AutoscaleProcessor', () => {
                 `[AutoScaler] Wait before allowing desired count adjustments for group ${groupDetails.name}`,
             );
 
+            // assert no inventory was read
+            assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 0);
+            // no updates to the instance group are expected
+            assert.deepEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+            // assert process ended with failure
             assert.strictEqual(result, false);
         });
 
         test('will not perform metrics calculations if no instances are found in the group', async () => {
-            instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => true);
             instanceTracker.trimCurrent.mock.mockImplementationOnce(() => []);
 
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
 
+            // assert inventory was read
             assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 1);
+            // assert no updates to the instance group are expected
+            assert.deepEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+            // assert process ended with failure
             assert.strictEqual(result, false);
         });
 
         test('will not updated desired count if current count does not match group desired', async () => {
-            instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => true);
             instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{}, {}]);
 
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
 
+            // assert inventory was read
             assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 1);
+            // assert metric inventory was read
             assert.deepEqual(instanceTracker.getMetricInventoryPerPeriod.mock.calls.length, 1);
+            // assert no action items were saved
             assert.deepEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
             assert.deepEqual(
                 context.logger.info.mock.calls[1].arguments[0],
                 `[AutoScaler] Wait for the launcher to finish scaling up/down instances for group ${groupDetails.name}`,
             );
+            // assert no updates to the instance group are expected
+            assert.deepEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+            // assert process ended with success
             assert.strictEqual(result, true);
         });
 
         test('will not updated desired count if no metrics are available', async () => {
-            instanceGroupManager.allowAutoscaling.mock.mockImplementationOnce(() => true);
-            instanceTracker.trimCurrent.mock.resetCalls();
             instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{}]);
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => []);
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
 
+            // assert inventory was read
             assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 1);
+            // assert metric inventory was read
             assert.deepEqual(instanceTracker.getMetricInventoryPerPeriod.mock.calls.length, 1);
+            // assert no action items were saved
             assert.deepEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
             assert.deepEqual(
                 context.logger.warn.mock.calls[0].arguments[0],
                 `[AutoScaler] No metrics available, no desired count adjustments possible for group ${groupDetails.name} with 1 instances`,
             );
+            // assert no updates to the instance group are expected
+            assert.deepEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+            // assert process ended with success
+            assert.strictEqual(result, true);
+        });
+
+        test('will not updated desired count if no changes are indicated based on metrics', async () => {
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{ instance_id: 'i-0a1b2c3d4e5f6g7h8' }]);
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            // assert inventory was read
+            assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 1);
+            // assert metric inventory was read
+            assert.deepEqual(instanceTracker.getMetricInventoryPerPeriod.mock.calls.length, 1);
+            // assert no action items were saved
+            assert.deepEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
+
+            assert.deepEqual(
+                context.logger.debug.mock.calls[0].arguments[0],
+                `[AutoScaler] Begin desired count adjustments for group ${groupName} with 1 instances and current desired count ${groupDetails.scalingOptions.desiredCount}`,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[1].arguments[0],
+                `[AutoScaler] Evaluating scale up choice for group ${groupName} with 1 instances and current desired count ${groupDetails.scalingOptions.desiredCount}`,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[2].arguments[0],
+                `[AutoScaler] Evaluating scale down choice for group ${groupName} with 1 instances and current desired count ${groupDetails.scalingOptions.desiredCount}`,
+                `[AutoScaler] No desired count adjustments needed for group ${groupName} with 1 instances`,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[3].arguments[0],
+                `[AutoScaler] No desired count adjustments needed for group ${groupName} with 1 instances`,
+            );
+            // no updates to the instance group are expected
+            assert.deepEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+
+            assert.deepEqual(audit.updateLastAutoScalerRun.mock.callCount(), 1);
+            assert.deepEqual(audit.updateLastAutoScalerRun.mock.calls[0].arguments[1], groupName);
+            // assert.deepEqual(audit.updateLastAutoScalerRun.mock.calls[0].arguments[2], groupName);
+            // assert process ended with success
             assert.strictEqual(result, true);
         });
     });

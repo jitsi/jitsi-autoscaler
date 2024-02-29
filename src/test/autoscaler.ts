@@ -97,6 +97,105 @@ describe('AutoscaleProcessor', () => {
         mock.reset();
     });
 
+    describe('processAutoscalingByGroup utilityTests', () => {
+        test('will choose to scale up when threshold is exceeded', async () => {
+            const scaleMetrics = [1, 1];
+            const count = 1;
+            const direction = 'up';
+            const group = {
+                ...groupDetails,
+                // scale up at 0.8, and bump maxDesired to allow for scaling up choice
+                scalingOptions: { ...groupDetails.scalingOptions, scaleUpThreshold: 0.8, maxDesired: 2 },
+            };
+            const scaleDecision = autoscaleProcessor.evalScaleConditionForAllPeriods(
+                context,
+                scaleMetrics,
+                count,
+                group,
+                direction,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[0].arguments[0],
+                `[AutoScaler] Evaluating scale ${direction} choice for group ${groupName} with ${count} instances and current desired count ${groupDetails.scalingOptions.desiredCount}`,
+            );
+
+            assert.strictEqual(scaleDecision, true);
+        });
+        test('will skip scaling up when threshold is not exceeded', async () => {
+            const scaleMetrics = [0.5, 0.5];
+            const count = 1;
+            const direction = 'up';
+            const group = {
+                ...groupDetails,
+                // scale up at 0.8, and bump maxDesired to allow for scaling up choice
+                scalingOptions: { ...groupDetails.scalingOptions, scaleUpThreshold: 0.8, maxDesired: 2 },
+            };
+            const scaleDecision = autoscaleProcessor.evalScaleConditionForAllPeriods(
+                context,
+                scaleMetrics,
+                count,
+                group,
+                direction,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[0].arguments[0],
+                `[AutoScaler] Evaluating scale ${direction} choice for group ${groupName} with ${count} instances and current desired count ${groupDetails.scalingOptions.desiredCount}`,
+            );
+
+            assert.strictEqual(scaleDecision, false);
+        });
+        test('will choose to scale down when threshold is not met', async () => {
+            const scaleMetrics = [0.1, 0.1];
+            const count = 1;
+            const direction = 'down';
+            const group = {
+                ...groupDetails,
+                // scale down at 0.3, and reduce minDesired to allow for scaling down choice
+                scalingOptions: { ...groupDetails.scalingOptions, scaleDownThreshold: 0.3, minDesired: 0 },
+            };
+            const scaleDecision = autoscaleProcessor.evalScaleConditionForAllPeriods(
+                context,
+                scaleMetrics,
+                count,
+                group,
+                direction,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[0].arguments[0],
+                `[AutoScaler] Evaluating scale ${direction} choice for group ${groupName} with ${count} instances and current desired count ${groupDetails.scalingOptions.desiredCount}`,
+            );
+
+            assert.strictEqual(scaleDecision, true);
+        });
+        test('will skip scaling down when threshold is met', async () => {
+            const scaleMetrics = [0.5, 0.5];
+            const count = 1;
+            const direction = 'down';
+            const group = {
+                ...groupDetails,
+                // scale up at 0.8, and bump maxDesired to allow for scaling up choice
+                scalingOptions: { ...groupDetails.scalingOptions, scaleUpThreshold: 0.8, maxDesired: 2 },
+            };
+            const scaleDecision = autoscaleProcessor.evalScaleConditionForAllPeriods(
+                context,
+                scaleMetrics,
+                count,
+                group,
+                direction,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[0].arguments[0],
+                `[AutoScaler] Evaluating scale ${direction} choice for group ${groupName} with ${count} instances and current desired count ${groupDetails.scalingOptions.desiredCount}`,
+            );
+
+            assert.strictEqual(scaleDecision, false);
+        });
+    });
+
     describe('processAutoscalingByGroup scalingTests', () => {
         test('will choose to increase desired count', async () => {
             // do something

@@ -54,6 +54,7 @@ describe('AutoscaleProcessor', () => {
         }),
         allowAutoscaling: mock.fn(() => true),
         upsertInstanceGroup: mock.fn(),
+        setAutoScaleGracePeriod: mock.fn(),
     };
 
     const instanceTracker = {
@@ -93,7 +94,9 @@ describe('AutoscaleProcessor', () => {
         };
         instanceTracker.trimCurrent.mock.resetCalls();
         instanceTracker.getMetricInventoryPerPeriod.mock.resetCalls();
+        instanceGroupManager.upsertInstanceGroup.mock.resetCalls();
         audit.updateLastAutoScalerRun.mock.resetCalls();
+        audit.saveAutoScalerActionItem.mock.resetCalls();
         mock.reset();
     });
 
@@ -198,7 +201,58 @@ describe('AutoscaleProcessor', () => {
 
     describe('processAutoscalingByGroup scalingTests', () => {
         test('will choose to increase desired count', async () => {
-            // do something
+            const scalableGroup = {
+                ...groupDetails,
+                scalingOptions: { ...groupDetails.scalingOptions, maxDesired: 2, scaleUpThreshold: 0.8 },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => {
+                return scalableGroup;
+            });
+            const inventory = [{ instance_id: 'i-0a1b2c3d4e5f6g7h8' }];
+
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => {
+                return [
+                    [{ value: 1, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+                    [{ value: 1, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+                    [{ value: 1, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+                ];
+            });
+
+            const currentDesired = scalableGroup.scalingOptions.desiredCount;
+            const expectedDesired = 2;
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            // assert inventory was read
+            assert.deepEqual(instanceTracker.trimCurrent.mock.calls.length, 1);
+            // assert metric inventory was read
+            assert.deepEqual(instanceTracker.getMetricInventoryPerPeriod.mock.calls.length, 1);
+            // assert no action items were saved
+            assert.deepEqual(audit.saveAutoScalerActionItem.mock.calls.length, 1);
+
+            assert.deepEqual(
+                context.logger.debug.mock.calls[0].arguments[0],
+                `[AutoScaler] Begin desired count adjustments for group ${groupName} with 1 instances and current desired count ${currentDesired}`,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[1].arguments[0],
+                `[AutoScaler] Evaluating scale up choice for group ${groupName} with 1 instances and current desired count ${currentDesired}`,
+            );
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[2].arguments[0],
+                `[AutoScaler] Increasing desired count to ${expectedDesired} for group ${groupName} with ${inventory.length} instances`,
+            );
+
+            assert.deepEqual(context.logger.info.mock.calls[2].arguments[1], { desiredCount: expectedDesired });
+            // one update to the instance group is expected
+            assert.deepEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
+
+            assert.deepEqual(audit.updateLastAutoScalerRun.mock.callCount(), 1);
+            assert.deepEqual(audit.updateLastAutoScalerRun.mock.calls[0].arguments[1], groupName);
+            // assert process ended with success
+            assert.strictEqual(result, true);
         });
         test('will choose to increase desired count to maximum and not higher', async () => {
             // do something
@@ -355,7 +409,6 @@ describe('AutoscaleProcessor', () => {
             assert.deepEqual(
                 context.logger.info.mock.calls[2].arguments[0],
                 `[AutoScaler] Evaluating scale down choice for group ${groupName} with 1 instances and current desired count ${groupDetails.scalingOptions.desiredCount}`,
-                `[AutoScaler] No desired count adjustments needed for group ${groupName} with 1 instances`,
             );
 
             assert.deepEqual(
@@ -367,7 +420,6 @@ describe('AutoscaleProcessor', () => {
 
             assert.deepEqual(audit.updateLastAutoScalerRun.mock.callCount(), 1);
             assert.deepEqual(audit.updateLastAutoScalerRun.mock.calls[0].arguments[1], groupName);
-            // assert.deepEqual(audit.updateLastAutoScalerRun.mock.calls[0].arguments[2], groupName);
             // assert process ended with success
             assert.strictEqual(result, true);
         });

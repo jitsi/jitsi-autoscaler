@@ -421,22 +421,63 @@ export class InstanceTracker {
             } ms, for group ${group}`,
         );
 
+        const instancesInPeriods = <string[][]>[];
         for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
             metricPoints[periodIdx] = [];
+            instancesInPeriods[periodIdx] = [];
         }
 
         const inventoryStart = process.hrtime();
         const items: string[] = await this.redisClient.zrange(this.getGroupMetricsKey(group), 0, -1);
 
+        const instancesInMetrics = <string[]>[];
         items.forEach((item) => {
             if (item) {
                 const itemJson = JSON.parse(item);
                 const periodIdx = Math.floor((currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000));
                 if (periodIdx >= 0 && periodIdx < periodsCount) {
                     metricPoints[periodIdx].push(itemJson);
+                    if (!instancesInMetrics.includes(itemJson.instanceId)) {
+                        instancesInMetrics.push(itemJson.instanceId);
+                    }
+                    if (!instancesInPeriods[periodIdx].includes(itemJson.instanceId)) {
+                        instancesInPeriods[periodIdx].push(itemJson.instanceId);
+                    }
                 }
             }
         });
+
+        // loop through all periods except the last, and fill in missing metrics
+        for (let periodIdx = periodsCount - 2; periodIdx >= 0; periodIdx--) {
+            instancesInMetrics
+                .filter((instanceId) => {
+                    return !instancesInPeriods[periodIdx].includes(instanceId);
+                })
+                .map((instanceId) => {
+                    // only fill in a missing metric if the instance is present in the next period and the previous period
+                    if (
+                        instancesInPeriods[periodIdx + 1].includes(instanceId) &&
+                        (periodIdx == 0 || instancesInPeriods[periodIdx - 1].includes(instanceId))
+                    ) {
+                        const previousMetric = metricPoints[periodIdx + 1]
+                            .sort((a, b) => {
+                                return b.timestamp - a.timestamp;
+                            })
+                            .find((metric) => {
+                                return metric.instanceId === instanceId;
+                            });
+                        if (previousMetric) {
+                            ctx.logger.info('Filling in for missing metric from previous period', {
+                                group,
+                                instanceId,
+                                periodIdx,
+                                previousMetric,
+                            });
+                            metricPoints[periodIdx].push(previousMetric);
+                        }
+                    }
+                });
+        }
 
         const inventoryEnd = process.hrtime(inventoryStart);
         ctx.logger.debug(`instance metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });

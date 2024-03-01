@@ -84,7 +84,111 @@ describe('InstanceTracker', () => {
         };
     });
 
-    describe('trackerMetricsTests', () => {
+    // these tests are increase frequency metrics
+    describe('trackerMetricHighFrequencyInventoryTests', () => {
+        const hfGroupDetails = {
+            ...groupDetails,
+            scalingOptions: {
+                ...groupDetails.scalingOptions,
+                scalePeriod: 10,
+            },
+        };
+
+        test('should segment the metrics into periods', async () => {
+            const metricInventory = [
+                { value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 350 },
+                {
+                    value: 0.4,
+                    instanceId: 'i-0a1b2c3d4e5f6g7h8',
+                    timestamp: Date.now() - hfGroupDetails.scalingOptions.scalePeriod * 1000 - 350,
+                },
+            ];
+
+            const scalePeriods = Math.max(
+                hfGroupDetails.scalingOptions.scaleDownPeriodsCount,
+                hfGroupDetails.scalingOptions.scaleUpPeriodsCount,
+            );
+            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+
+            const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
+                context,
+                hfGroupDetails,
+                scalePeriods,
+                hfGroupDetails.scalingOptions.scalePeriod,
+            );
+
+            // metrics for the instance should be segmented into correct count of periods
+            assert.deepEqual(metricInventoryPerPeriod.length, scalePeriods);
+        });
+
+        test('should segment the metrics into periods even if gaps exist in metrics', async () => {
+            const metricInventory = [
+                { value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 350 },
+                {
+                    value: 0.4,
+                    instanceId: 'i-0a1b2c3d4e5f6g7h8',
+                    timestamp: Date.now() - 2 * hfGroupDetails.scalingOptions.scalePeriod * 1000 - 350,
+                },
+            ];
+            const scalePeriods = Math.max(
+                hfGroupDetails.scalingOptions.scaleDownPeriodsCount,
+                hfGroupDetails.scalingOptions.scaleUpPeriodsCount,
+            );
+            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+
+            const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
+                context,
+                hfGroupDetails,
+                scalePeriods,
+                hfGroupDetails.scalingOptions.scalePeriod,
+            );
+            // metrics for the instance should be segmented into correct count of periods
+            assert.deepEqual(metricInventoryPerPeriod.length, scalePeriods);
+        });
+
+        test('should extend previous values through the metrics into periods that are missing', async () => {
+            const metricInventory = [
+                {
+                    value: 0.4,
+                    instanceId: 'i-0a1b2c3d4e5f6g7h8',
+                    timestamp: Date.now() - hfGroupDetails.scalingOptions.scalePeriod * 1000 - 350,
+                },
+            ];
+            const scalePeriods = Math.max(
+                hfGroupDetails.scalingOptions.scaleDownPeriodsCount,
+                hfGroupDetails.scalingOptions.scaleUpPeriodsCount,
+            );
+            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+
+            const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
+                context,
+                hfGroupDetails.name,
+                scalePeriods,
+                hfGroupDetails.scalingOptions.scalePeriod,
+            );
+            // metrics for the instance should be segmented into correct count of periods
+            assert.deepEqual(metricInventoryPerPeriod.length, scalePeriods);
+
+            // all periods should include a value
+            metricInventoryPerPeriod.map((period) => {
+                assert.deepEqual(period.length, 1);
+            });
+
+            assert.deepEqual(
+                context.logger.info.mock.calls[1].arguments[0],
+                `Filling in for missing metric from previous period`,
+            );
+            assert.deepEqual(context.logger.info.mock.calls[1].arguments[1], {
+                group: groupName,
+                instanceId: 'i-0a1b2c3d4e5f6g7h8',
+                periodIdx: 0,
+                previousMetric: metricInventory[0],
+            });
+        });
+    });
+
+    // these tests are for the getMetricInventoryPerPeriod method
+    describe('trackerMetricInventoryTests', () => {
         test('should segment the metrics into periods', async () => {
             const metricInventory = [
                 { value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 1000 },
@@ -177,8 +281,11 @@ describe('InstanceTracker', () => {
                 metricInventoryPerPeriod.length,
             );
         });
+    });
 
-        test('should return the correct summary for JVB values', async () => {
+    // these tests are for the getSummaryMetricPerPeriod method
+    describe('trackerSummaryTests', () => {
+        test('should return the correct summary for average values', async () => {
             // two timestamps are 5 seconds ago and 61 seconds ago
             const metricInventoryPerPeriod = [
                 [{ value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 5000 }],

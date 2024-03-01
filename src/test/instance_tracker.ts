@@ -196,5 +196,51 @@ describe('InstanceTracker', () => {
             //summary should average the values
             assert.deepEqual(results, [0.5, 0.4]);
         });
+        test('should return aggregated value per instance per period', async () => {
+            // two timestamps are 5 seconds ago and 61 seconds ago
+            const metricInventoryPerPeriod = [
+                [
+                    { value: 1, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 8000 },
+                    { value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 5000 },
+                ],
+                [{ value: 0.4, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 61000 }],
+            ];
+            const periodCount = metricInventoryPerPeriod.length;
+
+            const results = await instanceTracker.getSummaryMetricPerPeriod(
+                context,
+                groupDetails,
+                metricInventoryPerPeriod,
+                periodCount,
+            );
+
+            //summary should average the values
+            assert.deepEqual(results, [0.75, 0.4]);
+        });
+        test('should first average instance metrics then average across instances', async () => {
+            // two timestamps are 5 seconds ago and 61 seconds ago
+            const metricInventoryPerPeriod = [
+                [
+                    { value: 10, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 8000 },
+                    { value: 5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 5000 },
+                    { value: 1, instanceId: 'i-1tst9875bbb', timestamp: Date.now() - 5500 },
+                ],
+                [
+                    { value: 5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 61000 },
+                    { value: 1, instanceId: 'i-1tst9875bbb', timestamp: Date.now() - 615000 },
+                ],
+            ];
+            const periodCount = metricInventoryPerPeriod.length;
+
+            const results = await instanceTracker.getSummaryMetricPerPeriod(
+                context,
+                groupDetails,
+                metricInventoryPerPeriod,
+                periodCount,
+            );
+
+            //summary should average the values of the instances first then average across instances in each period
+            assert.deepEqual(results, [4.25, 3]);
+        });
     });
 });

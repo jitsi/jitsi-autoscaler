@@ -82,13 +82,12 @@ export default class AutoscaleProcessor {
                 group.scalingOptions.scaleUpPeriodsCount,
                 group.scalingOptions.scaleDownPeriodsCount,
             );
-            const metricInventoryPerPeriod: Array<Array<InstanceMetric>> =
-                await this.instanceTracker.getMetricInventoryPerPeriod(
-                    ctx,
-                    group.name,
-                    maxPeriodCount,
-                    group.scalingOptions.scalePeriod,
-                );
+            const metricInventoryPerPeriod = await this.instanceTracker.getMetricInventoryPerPeriod(
+                ctx,
+                group.name,
+                maxPeriodCount,
+                group.scalingOptions.scalePeriod,
+            );
 
             const scaleMetrics = await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
             await this.audit.updateLastAutoScalerRun(ctx, group.name, scaleMetrics);
@@ -133,6 +132,11 @@ export default class AutoscaleProcessor {
                     desiredCount = group.scalingOptions.maxDesired;
                 }
 
+                ctx.logger.info(
+                    `[AutoScaler] Increasing desired count to ${desiredCount} for group ${group.name} with ${count} instances`,
+                    { desiredCount },
+                );
+
                 await this.audit.saveAutoScalerActionItem(group.name, {
                     timestamp: Date.now(),
                     actionType: 'increaseDesiredCount',
@@ -150,6 +154,11 @@ export default class AutoscaleProcessor {
                 if (desiredCount < group.scalingOptions.minDesired) {
                     desiredCount = group.scalingOptions.minDesired;
                 }
+
+                ctx.logger.info(
+                    `[AutoScaler] Reducing desired count to ${desiredCount} for group ${group.name} with ${count} instances`,
+                    { desiredCount },
+                );
 
                 await this.audit.saveAutoScalerActionItem(group.name, {
                     timestamp: Date.now(),

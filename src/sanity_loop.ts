@@ -45,7 +45,7 @@ export default class SanityLoop {
                     cloudDelta[0] * 1000 + cloudDelta[1] / 1000000
                 } ms`,
             );
-
+            ctx.logger.info(`Retrieved ${group.cloud} instance details for ${groupName}`, { cloudInstances });
             await this.saveCloudInstances(group.name, cloudInstances);
 
             const groupReportStart = process.hrtime();

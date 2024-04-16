@@ -49,9 +49,9 @@ const env = cleanEnv(process.env, {
     MAX_THROTTLE_THRESHOLD: num({ default: 40 }), // default max of 40 untracked per group to throttle scale up
     GROUP_RELATED_DATA_TTL_SEC: num({ default: 172800 }), // default 2 day; keep group related data max 2 days after the group is deleted or no action is performed on it
     GROUP_LOCK_TTL_MS: num({ default: 180000 }), // time in ms
-    GROUP_JOBS_CREATION_INTERVAL_SEC: num({ default: 30 }), // with what interval this instance should try producing jobs for group processing
+    GROUP_JOBS_CREATION_INTERVAL_SEC: num({ default: 10 }), // with what interval this instance should try producing jobs for group processing
     SANITY_JOBS_CREATION_INTERVAL_SEC: num({ default: 240 }), // with what interval this instance should try producing jobs for sanity check
-    GROUP_JOBS_CREATION_GRACE_PERIOD_SEC: num({ default: 30 }), // jobs for group processing should be created once every JOB_CREATION_GRACE_PERIOD_SEC
+    GROUP_JOBS_CREATION_GRACE_PERIOD_SEC: num({ default: 20 }), // jobs for group processing should be created once every JOB_CREATION_GRACE_PERIOD_SEC
     SANITY_JOBS_CREATION_GRACE_PERIOD_SEC: num({ default: 240 }), // jobs for sanity check should be created once every SANITY_JOBS_CREATION_GRACE_PERIOD_SEC
     JOBS_CREATION_LOCK_TTL_MS: num({ default: 30000 }), // job creation lock ensures only one instance at a time can produce jobs
     SANITY_LOOP_PROCESSING_TIMEOUT_MS: num({ default: 180000 }), // max time allowed for a sanity job to finish processing until it times out - in ms

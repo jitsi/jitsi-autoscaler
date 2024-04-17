@@ -42,6 +42,14 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
         this.launchInstances = this.launchInstances.bind(this);
     }
 
+    setComputeManagementClient(client: core.ComputeManagementClient) {
+        this.computeManagementClient = client;
+    }
+
+    getComputeManagementClient() {
+        return this.computeManagementClient;
+    }
+
     async detachInstance(ctx: Context, group: InstanceGroup, instance: string): Promise<void> {
         ctx.logger.info(`[oraclepool] Detaching instance ${instance}`);
         this.computeManagementClient.regionId = group.region;
@@ -66,6 +74,8 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
         const poolDetails = await this.computeManagementClient.getInstancePool({
             instancePoolId: group.instanceConfigurationId,
         });
+
+        ctx.logger.debug(`[oraclepool] Instance Pool Details for group ${group.name}`, { poolDetails });
 
         const poolInstances = await this.computeManagementClient.listInstancePoolInstances({
             compartmentId: group.compartmentId,
@@ -92,14 +102,19 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
                 newSize,
             });
         }
-        const updateResult = await this.computeManagementClient.updateInstancePool({
-            instancePoolId: group.instanceConfigurationId,
-            updateInstancePoolDetails: {
-                size: newSize,
-            },
-        });
 
-        ctx.logger.info(`[oraclepool] Updated instance pool size for group ${group.name}`, { updateResult });
+        if (this.isDryRun) {
+            ctx.logger.info(`[oracle] Dry run enabled, instance pool size change skipped`, { newSize });
+        } else {
+            const updateResult = await this.computeManagementClient.updateInstancePool({
+                instancePoolId: group.instanceConfigurationId,
+                updateInstancePoolDetails: {
+                    size: newSize,
+                },
+            });
+
+            ctx.logger.info(`[oraclepool] Updated instance pool size for group ${group.name}`, { updateResult });
+        }
 
         this.workRequestClient.regionId = group.region;
         const cwaiter = this.computeManagementClient.createWaiters(this.workRequestClient, waiterConfiguration);
@@ -140,29 +155,26 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
         return result;
     }
 
-    async getInstances(
-        ctx: Context,
-        group: InstanceGroup,
-        cloudRetryStrategy: CloudRetryStrategy,
-    ): Promise<Array<CloudInstance>> {
-        const computeManagementClient = new core.ComputeManagementClient(
-            {
-                authenticationDetailsProvider: this.provider,
-            },
-            {
-                retryConfiguration: {
-                    terminationStrategy: new common.MaxTimeTerminationStrategy(cloudRetryStrategy.maxTimeInSeconds),
-                    delayStrategy: new common.ExponentialBackoffDelayStrategy(cloudRetryStrategy.maxDelayInSeconds),
-                    retryCondition: (response) => {
-                        return (
-                            cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
-                                return response.statusCode === retryableStatusCode;
-                            }).length > 0
-                        );
-                    },
-                },
-            },
-        );
+    async getInstances(ctx: Context, group: InstanceGroup, _: CloudRetryStrategy): Promise<Array<CloudInstance>> {
+        // const computeManagementClient = new core.ComputeManagementClient(
+        //     {
+        //         authenticationDetailsProvider: this.provider,
+        //     },
+        //     {
+        //         retryConfiguration: {
+        //             terminationStrategy: new common.MaxTimeTerminationStrategy(cloudRetryStrategy.maxTimeInSeconds),
+        //             delayStrategy: new common.ExponentialBackoffDelayStrategy(cloudRetryStrategy.maxDelayInSeconds),
+        //             retryCondition: (response) => {
+        //                 return (
+        //                     cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
+        //                         return response.statusCode === retryableStatusCode;
+        //                     }).length > 0
+        //                 );
+        //             },
+        //         },
+        //     },
+        // );
+        const computeManagementClient = this.computeManagementClient;
         computeManagementClient.regionId = group.region;
 
         const poolInstances = await computeManagementClient.listInstancePoolInstances({

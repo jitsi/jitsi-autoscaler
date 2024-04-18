@@ -25,8 +25,8 @@ const group = {
 describe('InstancePoolManager', () => {
     const manager = new OracleInstancePoolManager({
         isDryRun: false,
-        ociConfigurationFilePath: process.env.OCI_CONFIGURATION_FILE_PATH,
-        ociConfigurationProfile: process.env.OCI_CONFIGURATION_PROFILE,
+        ociConfigurationFilePath: __dirname + '/test_oracle_config',
+        ociConfigurationProfile: 'TEST',
     });
 
     const mockWaiters = {
@@ -96,16 +96,6 @@ describe('InstancePoolManager', () => {
             }),
         },
     };
-
-    if (!process.env.OCI_CONFIGURATION_FILE_PATH || !process.env.OCI_CONFIGURATION_PROFILE) {
-        console.error('Please set OCI_CONFIGURATION_FILE_PATH and OCI_CONFIGURATION_PROFILE env variables');
-        process.exit(1);
-    }
-
-    if (!process.env.COMPARTMENT_OCID || !process.env.INSTANCE_POOL_ID || !process.env.REGION) {
-        console.error('Please set COMPARTMENT_OCID, INSTANCE_POOL_ID and REGION env variables');
-        process.exit(1);
-    }
 
     afterEach(() => {
         mock.restoreAll();

@@ -7,12 +7,20 @@ import { CloudInstanceManager, CloudInstance } from './cloud_instance_manager';
 import { workrequests } from 'oci-sdk';
 import { InstanceState } from './instance_tracker';
 
-const maxTimeInSeconds = 60 * 60; // The duration for waiter configuration before failing. Currently set to 1 hour.
-const maxDelayInSeconds = 30; // The max delay for the waiter configuration. Currently set to 30 seconds
+const maxLaunchTimeInSeconds = 30; // The duration for waiter configuration before failing. Currently set to 30 seconds
+const launchDelayInSeconds = 5; // The max delay for the waiter configuration. Currently set to 10 seconds
 
-const waiterConfiguration: common.WaiterConfiguration = {
-    terminationStrategy: new common.MaxTimeTerminationStrategy(maxTimeInSeconds),
-    delayStrategy: new common.ExponentialBackoffDelayStrategy(maxDelayInSeconds),
+const maxDetachTimeInSeconds = 180; // The duration for waiter configuration before failing. Currently set to 180 seconds
+const maxDetachDelayInSeconds = 30; // The max delay for the waiter configuration. Currently set to 30 seconds
+
+const launchWaiterConfiguration: common.WaiterConfiguration = {
+    terminationStrategy: new common.MaxTimeTerminationStrategy(maxLaunchTimeInSeconds),
+    delayStrategy: new common.FixedTimeDelayStrategy(launchDelayInSeconds),
+};
+
+const detachWaiterConfiguration: common.WaiterConfiguration = {
+    terminationStrategy: new common.MaxTimeTerminationStrategy(maxDetachTimeInSeconds),
+    delayStrategy: new common.ExponentialBackoffDelayStrategy(maxDetachDelayInSeconds),
 };
 
 export interface OracleInstancePoolManagerOptions {
@@ -55,7 +63,7 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
         ctx.logger.info(`[oraclepool] Detaching instance ${instance}`);
         this.computeManagementClient.regionId = group.region;
 
-        const cwaiter = this.computeManagementClient.createWaiters(this.workRequestClient, waiterConfiguration);
+        const cwaiter = this.computeManagementClient.createWaiters(this.workRequestClient, detachWaiterConfiguration);
         const response = await cwaiter.forDetachInstancePoolInstance({
             instancePoolId: group.instanceConfigurationId,
             detachInstancePoolInstanceDetails: { instanceId: instance },
@@ -131,25 +139,32 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
         }
 
         this.workRequestClient.regionId = group.region;
-        const cwaiter = this.computeManagementClient.createWaiters(this.workRequestClient, waiterConfiguration);
-        const runningPool = await cwaiter.forInstancePool(
-            {
-                instancePoolId: group.instanceConfigurationId,
-            },
-            core.models.InstancePool.LifecycleState.Running,
-        );
+        const cwaiter = this.computeManagementClient.createWaiters(this.workRequestClient, launchWaiterConfiguration);
+        try {
+            const runningPool = await cwaiter.forInstancePool(
+                {
+                    instancePoolId: group.instanceConfigurationId,
+                },
+                core.models.InstancePool.LifecycleState.Running,
+            );
 
-        ctx.logger.info(`[oraclepool] Instance pool for ${group.name} back in running state`, { runningPool });
+            ctx.logger.info(`[oraclepool] Instance pool for ${group.name} back in running state`, { runningPool });
 
-        if (runningPool.instancePool.size == newSize) {
-            ctx.logger.debug(`[oraclepool] Instance pool ${group.name} size matches new size`, {
-                newSize,
-            });
-        } else {
-            ctx.logger.error(`[oraclepool] Instance pool ${group.name} size DOES NOT matches new size`, {
-                newSize,
-            });
+            if (runningPool.instancePool.size == newSize) {
+                ctx.logger.debug(`[oraclepool] Instance pool ${group.name} size matches new size`, {
+                    newSize,
+                });
+            } else {
+                ctx.logger.error(`[oraclepool] Instance pool ${group.name} size DOES NOT matches new size`, {
+                    newSize,
+                });
+            }
+        } catch (err) {
+            ctx.logger.error(`[oraclepool] Instance pool for ${group.name} failed to return to running state`, { err });
+            // the next launch job will eventually see the new instances and return them
         }
+
+        ctx.logger.debug(`[oraclepool] Instance pool ${group.name} listing pool instances`);
 
         const newPoolInstances = await this.computeManagementClient.listInstancePoolInstances({
             compartmentId: group.compartmentId,
@@ -172,24 +187,6 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
     }
 
     async getInstances(ctx: Context, group: InstanceGroup, _: CloudRetryStrategy): Promise<Array<CloudInstance>> {
-        // const computeManagementClient = new core.ComputeManagementClient(
-        //     {
-        //         authenticationDetailsProvider: this.provider,
-        //     },
-        //     {
-        //         retryConfiguration: {
-        //             terminationStrategy: new common.MaxTimeTerminationStrategy(cloudRetryStrategy.maxTimeInSeconds),
-        //             delayStrategy: new common.ExponentialBackoffDelayStrategy(cloudRetryStrategy.maxDelayInSeconds),
-        //             retryCondition: (response) => {
-        //                 return (
-        //                     cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
-        //                         return response.statusCode === retryableStatusCode;
-        //                     }).length > 0
-        //                 );
-        //             },
-        //         },
-        //     },
-        // );
         const computeManagementClient = this.computeManagementClient;
         computeManagementClient.regionId = group.region;
 
@@ -199,7 +196,7 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
         });
 
         return poolInstances.items.map((instance) => {
-            ctx.logger.debug('Found instance in oracle pool', { instance });
+            ctx.logger.debug('[oraclepool] Found instance in oracle pool', { instance });
             return {
                 instanceId: instance.id,
                 displayName: instance.displayName,

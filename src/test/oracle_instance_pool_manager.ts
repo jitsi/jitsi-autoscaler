@@ -20,7 +20,34 @@ const group = {
     region: 'testregion',
     compartmentId: 'testcpt',
     instanceConfigurationId: 'testpoolid',
+    enableAutoScale: true,
+    enableLaunch: true,
+    scalingOptions: {
+        minDesired: 1,
+        maxDesired: 3,
+        desiredCount: 2,
+        scaleUpQuantity: 1,
+        scaleDownQuantity: 1,
+        scaleUpThreshold: 0.8,
+        scaleDownThreshold: 0.3,
+        scalePeriod: 60,
+        scaleUpPeriodsCount: 2,
+        scaleDownPeriodsCount: 2,
+    },
 };
+
+const instancePool = <core.models.InstancePool>{
+    id: group.instanceConfigurationId,
+    name: group.name,
+    compartmentId: group.compartmentId,
+    instanceConfigurationId: 'testid',
+    size: 2,
+};
+
+const instancePoolInstances = [{ id: 'testinstanceid-1' }, { id: 'testinstanceid-2' }];
+const currentInventoryInstances = instancePoolInstances.map((instance) => {
+    return { instanceId: instance.id };
+});
 
 describe('InstancePoolManager', () => {
     const manager = new OracleInstancePoolManager({
@@ -30,15 +57,9 @@ describe('InstancePoolManager', () => {
     });
 
     const mockWaiters = {
-        forInstancePool: mock.fn((request, _) => {
+        forInstancePool: mock.fn(() => {
             return {
-                instancePool: <core.models.InstancePool>{
-                    id: request.instancePoolId,
-                    name: group.name,
-                    compartmentId: group.compartmentId,
-                    instanceConfigurationId: 'testid',
-                    size: 2,
-                },
+                instancePool,
             };
         }),
         forDetachInstancePoolInstance: mock.fn((request) => {
@@ -53,27 +74,20 @@ describe('InstancePoolManager', () => {
         createWaiters: mock.fn(() => {
             return mockWaiters;
         }),
-        getInstancePool: mock.fn((request) => {
+        getInstancePool: mock.fn((_) => {
             return {
-                instancePool: <core.models.InstancePool>{
-                    id: request.instancePoolId,
-                    name: group.name,
-                    compartmentId: group.compartmentId,
-                    instanceConfigurationId: 'testid',
-                    size: 2,
-                },
+                instancePool,
             };
         }),
         listInstancePoolInstances: mock.fn(() => {
-            return { items: [{ id: 'testinstanceid-1' }, { id: 'testinstanceid-2' }] };
+            return { items: instancePoolInstances };
         }),
         updateInstancePool: mock.fn((request) => {
-            return <core.models.InstancePool>{
-                id: request.instancePoolId,
-                name: group.name,
-                compartmentId: group.compartmentId,
-                instanceConfigurationId: 'testid',
-                size: request.size,
+            return <core.responses.UpdateInstancePoolResponse>{
+                instancePool: <core.models.InstancePool>{
+                    ...instancePool,
+                    size: request.updateInstancePoolDetails.size,
+                },
             };
         }),
     };
@@ -98,6 +112,10 @@ describe('InstancePoolManager', () => {
     };
 
     afterEach(() => {
+        mockComputeManagementClient.createWaiters.mock.resetCalls();
+        mockComputeManagementClient.getInstancePool.mock.resetCalls();
+        mockComputeManagementClient.listInstancePoolInstances.mock.resetCalls();
+        mockComputeManagementClient.updateInstancePool.mock.resetCalls();
         mock.restoreAll();
     });
 
@@ -112,36 +130,123 @@ describe('InstancePoolManager', () => {
                 retryableStatusCodes: [404, 429],
             });
             log('TEST', 'ended getInstances test');
-            assert.ok(instances);
+            assert.ok(instances, 'some instances should be returned');
             log('TEST', 'found instances', instances);
+            assert.equal(instances.length, 2, 'two instances should be returned');
         });
     });
 
     describe('launchInstances', () => {
+        console.log('Starting launchInstances test');
         // This is a test for the launchInstances method
         test('will launch instances in a group', async () => {
-            console.log('Starting launchInstances test');
+            console.log('Starting single launch test');
+            const desiredCount = 3;
             mockWaiters.forInstancePool.mock.mockImplementationOnce((_) => {
                 return {
                     instancePool: <core.models.InstancePool>{
-                        id: group.instanceConfigurationId,
-                        name: group.name,
-                        compartmentId: group.compartmentId,
-                        instanceConfigurationId: 'testid',
-                        size: 3,
+                        ...instancePool,
+                        size: desiredCount, // this is the critical bit for showing that the instance pool has been updated
                     },
                 };
             });
-            mockComputeManagementClient.listInstancePoolInstances.mock.mockImplementationOnce((_) => {
-                return { items: [{ id: 'testinstanceid-1' }, { id: 'testinstanceid-2' }, { id: 'new-instance-id' }] };
-            }, 2);
-            const instances = await manager.launchInstances(context, group, 2, 1);
-            console.log(mockComputeManagementClient.updateInstancePool.mock.callCount());
-            assert.equal(mockComputeManagementClient.updateInstancePool.mock.callCount(), 1);
-            assert.ok(instances);
-            assert.equal(instances[0], 'new-instance-id');
-            assert.equal(instances.length, 1);
+
+            // the second time listInstancePoolInstances is called, return a new instance with id 'new-instance-id'
+            mockComputeManagementClient.listInstancePoolInstances.mock.mockImplementationOnce(
+                (_) => {
+                    return {
+                        // list now includes new-instance-id
+                        items: [...instancePoolInstances, { id: 'new-instance-id' }],
+                    };
+                },
+                1, // this is the critical count for mocking the second call instead of the first
+            );
+
+            // override group.scalingOptions.desiredCount to control size of instance pool
+            const lgroup = { ...group, scalingOptions: { ...group.scalingOptions, desiredCount: desiredCount } };
+            const instances = await manager.launchInstances(context, lgroup, currentInventoryInstances, 1);
+            assert.equal(
+                mockComputeManagementClient.updateInstancePool.mock.callCount(),
+                1,
+                'updateInstancePool should be called',
+            );
+            assert.ok(instances, 'some instances should be returned');
+            assert.equal(instances[0], 'new-instance-id', 'new instance id should be returned');
+            assert.equal(instances.length, 1, 'only one instance should be returned');
             log('TEST', 'ended launchInstances test');
+            log('TEST', 'launched instances', instances);
+        });
+        test('will not launch instances in a group if desiredCount is already reached', async () => {
+            console.log('Starting skip launch test');
+            const desiredCount = 3;
+            // return pool already in desired state
+            mockComputeManagementClient.getInstancePool.mock.mockImplementationOnce((_) => {
+                return {
+                    instancePool: <core.models.InstancePool>{
+                        ...instancePool,
+                        size: desiredCount,
+                    },
+                };
+            });
+            // when listInstancePoolInstances is called, return 3 instances including newest with id 'new-instance-id'
+            mockComputeManagementClient.listInstancePoolInstances.mock.mockImplementationOnce((_) => {
+                return { items: [...instancePoolInstances, { id: 'new-instance-id' }] };
+            });
+
+            // override group.scalingOptions.desiredCount to control size of instance pool
+            const lgroup = { ...group, scalingOptions: { ...group.scalingOptions, desiredCount: desiredCount } };
+            const instances = await manager.launchInstances(
+                context,
+                lgroup,
+                [...currentInventoryInstances, { instanceId: 'new-instance-id' }],
+                1,
+            );
+            assert.equal(
+                mockComputeManagementClient.updateInstancePool.mock.callCount(),
+                0,
+                'updateInstancePool should not be called',
+            );
+            assert.equal(instances.length, 0, 'no instances should be returned');
+            log('TEST', 'ended skip launch test');
+            log('TEST', 'launched instances', instances);
+        });
+
+        test('will see previously launched instances in a group if missed the first time', async () => {
+            console.log('Starting find missing instances test');
+            const desiredCount = 3;
+            // return pool already in desired state
+            mockComputeManagementClient.getInstancePool.mock.mockImplementationOnce((_) => {
+                return {
+                    instancePool: <core.models.InstancePool>{
+                        ...instancePool,
+                        size: desiredCount,
+                    },
+                };
+            });
+            // when listInstancePoolInstances is called, return 3 instances including newest with id 'new-instance-id'
+            mockComputeManagementClient.listInstancePoolInstances.mock.mockImplementationOnce((_) => {
+                return { items: [...instancePoolInstances, { id: 'new-instance-id' }] };
+            });
+
+            // override group.scalingOptions.desiredCount to control size of instance pool
+            const lgroup = { ...group, scalingOptions: { ...group.scalingOptions, desiredCount: desiredCount } };
+
+            const instances = await manager.launchInstances(
+                context,
+                lgroup,
+                currentInventoryInstances, // we pass in currentInventoryInstances (with 2 entries) and expect to see the new instance as launched
+                1,
+            );
+            // still expect no pool updates
+            assert.equal(
+                mockComputeManagementClient.updateInstancePool.mock.callCount(),
+                0,
+                'updateInstancePool should not be called',
+            );
+            assert.ok(instances, 'some instances should be returned');
+            assert.equal(instances[0], 'new-instance-id', 'new instance id should be returned');
+            assert.equal(instances.length, 1, 'only one instance should be returned');
+            log('TEST', 'ended find missing instances test');
             log('TEST', 'launched instances', instances);
         });
     });

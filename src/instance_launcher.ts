@@ -126,7 +126,7 @@ export default class InstanceLauncher {
                 const scaleUpCount = await this.cloudManager.scaleUp(
                     ctx,
                     group,
-                    count,
+                    currentInventory,
                     actualScaleUpQuantity,
                     scaleDownProtected,
                 );

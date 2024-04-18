@@ -5,6 +5,7 @@ import { Context } from './context';
 import { CloudRetryStrategy } from './cloud_manager';
 import { CloudInstanceManager, CloudInstance } from './cloud_instance_manager';
 import { workrequests } from 'oci-sdk';
+import { InstanceState } from './instance_tracker';
 
 const maxTimeInSeconds = 60 * 60; // The duration for waiter configuration before failing. Currently set to 1 hour.
 const maxDelayInSeconds = 30; // The max delay for the waiter configuration. Currently set to 30 seconds
@@ -65,10 +66,12 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
     async launchInstances(
         ctx: Context,
         group: InstanceGroup,
-        groupCurrentCount: number,
+        currentInventory: InstanceState[],
         quantity: number,
     ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[oraclepool] Launching a batch of ${quantity} instances in group ${group.name}`);
+
+        const result = <string[]>[];
 
         this.computeManagementClient.regionId = group.region;
         const poolDetails = await this.computeManagementClient.getInstancePool({
@@ -86,25 +89,36 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
             return instance.id;
         });
 
-        ctx.logger.debug(`[oraclepool] Instance pool ${group.name} instances`, { instances: poolInstances.items });
+        const currentInstanceIds = currentInventory.map((instance) => {
+            return instance.instanceId;
+        });
 
-        const newSize = quantity + groupCurrentCount;
-        if (groupCurrentCount == poolDetails.instancePool.size) {
-            ctx.logger.debug(`[oraclepool] Instance pool ${group.name} size matches current count`, {
-                current: groupCurrentCount,
-                size: poolDetails.instancePool.size,
-                newSize,
-            });
-        } else {
-            ctx.logger.error(`[oraclepool] Instance pool ${group.name} size DOES NOT matches current count`, {
-                current: groupCurrentCount,
-                size: poolDetails.instancePool.size,
-                newSize,
+        // mark any instances not previously seen as being launched now
+        result.push(
+            ...existingInstanceIds.filter((instanceId) => {
+                return !currentInstanceIds.includes(instanceId);
+            }),
+        );
+
+        ctx.logger.debug(`[oraclepool] Instance pool ${group.name} instances`, { instances: poolInstances.items });
+        if (result.length > 0) {
+            ctx.logger.warn(`[oraclepool] Found instances in pool not in inventory, marking as launched now`, {
+                result,
             });
         }
 
+        // always use the group desired count for instance pools
+        const newSize = group.scalingOptions.desiredCount;
+        if (newSize == poolDetails.instancePool.size) {
+            // underlying pool size matches the desired count, so no need to update group
+            ctx.logger.info(`[oraclepool] Instance pool ${group.name} size matches desired count, no changes needed`, {
+                newSize,
+            });
+            return result;
+        }
+
         if (this.isDryRun) {
-            ctx.logger.info(`[oracle] Dry run enabled, instance pool size change skipped`, { newSize });
+            ctx.logger.info(`[oraclepool] Dry run enabled, instance pool size change skipped`, { newSize });
         } else {
             const updateResult = await this.computeManagementClient.updateInstancePool({
                 instancePoolId: group.instanceConfigurationId,
@@ -142,13 +156,15 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
             instancePoolId: group.instanceConfigurationId,
         });
 
-        const result = newPoolInstances.items
-            .map((instance) => {
-                return instance.id;
-            })
-            .filter((instanceId) => {
-                return !existingInstanceIds.includes(instanceId);
-            });
+        result.push(
+            ...newPoolInstances.items
+                .map((instance) => {
+                    return instance.id;
+                })
+                .filter((instanceId) => {
+                    return !existingInstanceIds.includes(instanceId);
+                }),
+        );
 
         ctx.logger.info(`[oraclepool] Finished launching all the instances in group ${group.name}`, { result });
 

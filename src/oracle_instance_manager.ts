@@ -58,6 +58,7 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         for (let i = 0; i < quantity; i++) {
             indexes.push(i);
         }
+        const groupCurrentCount = currentInventory.length;
 
         const result = await Promise.all(
             indexes.map(async (index) => {

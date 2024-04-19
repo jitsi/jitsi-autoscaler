@@ -117,7 +117,6 @@ class Handlers {
 
     constructor(options: HandlersOptions) {
         this.sidecarPoll = this.sidecarPoll.bind(this);
-        this.sidecarShutdown = this.sidecarShutdown.bind(this);
 
         this.lockManager = options.lockManager;
         this.cloudManager = options.cloudManager;
@@ -157,6 +156,7 @@ class Handlers {
 
     async sidecarShutdown(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
+        req.context.logger.info('Received shutdown confirmation', { details });
         statsCounter.inc();
         try {
             await this.cloudManager.shutdownInstance(req.context, details);

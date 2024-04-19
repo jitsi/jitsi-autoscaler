@@ -12,6 +12,7 @@ export interface InstanceReport {
     instanceName?: string;
     scaleStatus?: string;
     cloudStatus?: string;
+    isShutdownComplete?: boolean;
     isShuttingDown?: boolean;
     isScaleDownProtected?: boolean;
     reconfigureScheduled?: string;
@@ -33,6 +34,7 @@ export interface GroupReport {
     expiredCount?: number;
     cloudCount?: number;
     unTrackedCount?: number;
+    shutdownCount?: number;
     shuttingDownCount?: number;
     shutdownErrorCount?: number;
     reconfigureErrorCount?: number;
@@ -118,6 +120,9 @@ export default class GroupReportGenerator {
             if (instanceReport.isShuttingDown) {
                 groupReport.shuttingDownCount++;
             }
+            if (instanceReport.isShutdownComplete) {
+                groupReport.shutdownCount++;
+            }
             if (instanceReport.isScaleDownProtected) {
                 groupReport.scaleDownProtectedCount++;
             }
@@ -186,6 +191,7 @@ export default class GroupReportGenerator {
                 cloudStatus: 'unknown',
                 version: 'unknown',
                 isShuttingDown: instanceState.shutdownStatus,
+                isShutdownComplete: instanceState.shutdownComplete,
                 lastReconfigured: instanceState.lastReconfigured,
                 reconfigureError: instanceState.reconfigureError,
                 shutdownError: instanceState.shutdownError,

@@ -114,6 +114,7 @@ class Handlers {
 
     constructor(options: HandlersOptions) {
         this.sidecarPoll = this.sidecarPoll.bind(this);
+        this.sidecarShutdown = this.sidecarShutdown.bind(this);
 
         this.lockManager = options.lockManager;
         this.instanceTracker = options.instanceTracker;
@@ -150,6 +151,26 @@ class Handlers {
         }
     }
 
+    async sidecarShutdown(req: Request, res: Response): Promise<void> {
+        const details: InstanceDetails = req.body;
+        statsCounter.inc();
+        try {
+            await this.shutdownManager.shutdownInstance(req.context, details.instanceId);
+
+            const sendResponse = {
+                save: 'OK',
+            };
+
+            res.status(200);
+            res.send(sendResponse);
+        } catch (err) {
+            req.context.logger.error('Shutdown handling error', { err });
+            statsErrors.inc();
+
+            res.status(500);
+            res.send({ save: 'ERROR' });
+        }
+    }
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
         statsCounter.inc();

@@ -136,6 +136,7 @@ export interface InstanceState {
     timestamp?: number;
     metadata: InstanceMetadata;
     shutdownStatus?: boolean;
+    shutdownComplete?: string;
     reconfigureError?: boolean;
     shutdownError?: boolean;
     statsError?: boolean;

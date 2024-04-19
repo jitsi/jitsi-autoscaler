@@ -130,6 +130,24 @@ export default class Audit {
         await pipeline.exec();
     }
 
+    async saveShutdownConfirmationEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
+        const pipeline = this.redisClient.pipeline();
+        for (const instance of instanceDetails) {
+            const value: InstanceAudit = {
+                instanceId: instance.instanceId,
+                type: 'confirmation-of-termination',
+                timestamp: Date.now(),
+            };
+            pipeline.set(
+                `audit:${instance.group}:${instance.instanceId}:confirmation-of-termination`,
+                JSON.stringify(value),
+                'EX',
+                this.auditTTL,
+            );
+        }
+        await pipeline.exec();
+    }
+
     async saveUnsetReconfigureEvents(instanceId: string, group: string): Promise<void> {
         const value: InstanceAudit = {
             instanceId: instanceId,

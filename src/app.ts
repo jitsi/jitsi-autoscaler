@@ -340,6 +340,14 @@ app.post('/sidecar/poll', async (req, res, next) => {
     }
 });
 
+app.post('/sidecar/shutdown', async (req, res, next) => {
+    try {
+        await h.sidecarShutdown(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 app.post('/sidecar/stats', async (req, res, next) => {
     try {
         await h.sidecarStats(req, res);

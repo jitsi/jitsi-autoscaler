@@ -111,7 +111,7 @@ export default class ShutdownManager {
         const pipeline = this.redisClient.pipeline();
         for (const instance of instanceDetails) {
             const key = this.shutDownConfirmedKey(instance.instanceId);
-            ctx.logger.debug('Writing shutdown status', { key, status });
+            ctx.logger.debug('Writing shutdown confirmation', { key, status });
             pipeline.set(key, status, 'EX', this.shutdownTTL);
         }
         await pipeline.exec();

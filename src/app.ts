@@ -279,6 +279,7 @@ const h = new Handlers({
     instanceTracker,
     instanceGroupManager,
     shutdownManager,
+    cloudManager,
     reconfigureManager,
     groupReportGenerator,
     lockManager,

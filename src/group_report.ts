@@ -198,7 +198,9 @@ export default class GroupReportGenerator {
                 shutdownError: instanceState.shutdownError,
                 isScaleDownProtected: false,
             };
-            if (instanceState.shutdownStatus) {
+            if (instanceState.shutdownComplete) {
+                instanceReport.scaleStatus = 'SHUTDOWN COMPLETE';
+            } else if (instanceState.shutdownStatus) {
                 instanceReport.scaleStatus = 'SHUTDOWN';
             } else if (instanceState.status.provisioning) {
                 instanceReport.scaleStatus = 'PROVISIONING';

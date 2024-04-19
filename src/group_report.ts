@@ -12,7 +12,7 @@ export interface InstanceReport {
     instanceName?: string;
     scaleStatus?: string;
     cloudStatus?: string;
-    isShutdownComplete?: boolean;
+    shutdownComplete?: string | false;
     isShuttingDown?: boolean;
     isScaleDownProtected?: boolean;
     reconfigureScheduled?: string;
@@ -110,6 +110,7 @@ export default class GroupReportGenerator {
         });
 
         await this.addShutdownStatus(ctx, groupReport.instances);
+        await this.addShutdownConfirmations(ctx, groupReport.instances);
         await this.addReconfigureDate(ctx, groupReport.instances);
         await this.addShutdownProtectedStatus(ctx, groupReport.instances);
 
@@ -120,7 +121,7 @@ export default class GroupReportGenerator {
             if (instanceReport.isShuttingDown) {
                 groupReport.shuttingDownCount++;
             }
-            if (instanceReport.isShutdownComplete) {
+            if (instanceReport.shutdownComplete) {
                 groupReport.shutdownCount++;
             }
             if (instanceReport.isScaleDownProtected) {
@@ -191,7 +192,7 @@ export default class GroupReportGenerator {
                 cloudStatus: 'unknown',
                 version: 'unknown',
                 isShuttingDown: instanceState.shutdownStatus,
-                isShutdownComplete: instanceState.shutdownComplete,
+                shutdownComplete: instanceState.shutdownComplete,
                 lastReconfigured: instanceState.lastReconfigured,
                 reconfigureError: instanceState.reconfigureError,
                 shutdownError: instanceState.shutdownError,
@@ -309,6 +310,19 @@ export default class GroupReportGenerator {
 
         instanceReports.forEach((instanceReport, index) => {
             instanceReport.isShuttingDown = instanceReportsShutdownStatus[index];
+        });
+    }
+
+    private async addShutdownConfirmations(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+        (
+            await this.shutdownManager.getShutdownConfirmations(
+                ctx,
+                instanceReports.map((instanceReport) => {
+                    return instanceReport.instanceId;
+                }),
+            )
+        ).map((confirmation, index) => {
+            instanceReports[index].shutdownComplete = confirmation;
         });
     }
 

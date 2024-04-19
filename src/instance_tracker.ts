@@ -673,18 +673,18 @@ export class InstanceTracker {
     }
 
     async filterOutInstancesShuttingDown(ctx: Context, states: Array<InstanceState>): Promise<Array<InstanceState>> {
-        const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(
-            ctx,
-            states.map((state) => {
-                return state.instanceId;
-            }),
-        );
+        const instanceIds = states.map((state) => {
+            return state.instanceId;
+        });
+        const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(ctx, instanceIds);
+
+        const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(ctx, instanceIds);
 
         const statesShutdownStatus: boolean[] = [];
         for (let i = 0; i < states.length; i++) {
             statesShutdownStatus.push(this.shutdownStatusFromState(states[i]) || shutdownStatuses[i]);
         }
-        return states.filter((instanceState, index) => !statesShutdownStatus[index]);
+        return states.filter((instanceState, index) => !statesShutdownStatus[index] && !shutdownConfirmations[index]);
     }
 
     mapToInstanceDetails(states: Array<InstanceState>): Array<InstanceDetails> {

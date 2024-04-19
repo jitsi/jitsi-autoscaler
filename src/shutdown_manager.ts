@@ -73,7 +73,6 @@ export default class ShutdownManager {
         });
         const instances = await pipeline.exec();
         if (instances) {
-            ctx.logger.debug('Read shutdown confirmations', { instances });
             return instances.map((instance: [error: Error | null, result: unknown]) => {
                 if (instance[1] == null) {
                     return false;

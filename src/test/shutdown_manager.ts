@@ -67,7 +67,6 @@ describe('ShutdownManager', () => {
         test('read non-existent shutdown confirmation status', async () => {
             redisClient.get.mock.mockImplementationOnce(() => null);
             const result = await shutdownManager.getShutdownConfirmation(context, 'instanceId');
-            console.log(result);
             assert.equal(result, false, 'expect no shutdown confirmation when no key exists');
         });
 
@@ -75,7 +74,6 @@ describe('ShutdownManager', () => {
             const shutdownConfirmation = new Date().toISOString();
             redisClient.get.mock.mockImplementationOnce(() => shutdownConfirmation);
             const result = await shutdownManager.getShutdownConfirmation(context, 'instanceId');
-            console.log(result);
             assert.ok(result, 'expect ok result');
             assert.equal(result, shutdownConfirmation, 'expect shutdown confirmation to match mock date');
         });
@@ -93,10 +91,11 @@ describe('ShutdownManager', () => {
             const shutdownConfirmation = new Date().toISOString();
 
             const instances = ['instanceId', 'instanceId2'];
-            const result = await shutdownManager.getShutdownConfirmations(context, instances);
             mockPipeline.exec.mock.mockImplementationOnce(() =>
                 Promise.resolve(instances.map(() => [null, shutdownConfirmation])),
             );
+
+            const result = await shutdownManager.getShutdownConfirmations(context, instances);
             assert.ok(result, 'expect ok result');
             assert.equal(mockPipeline.exec.mock.callCount(), 1, 'expect exec to be called once');
             assert.equal(
@@ -106,6 +105,30 @@ describe('ShutdownManager', () => {
             );
             assert.equal(result.length, instances.length, 'expect confirmation length to match instances length');
             assert.equal(result[0], shutdownConfirmation, 'expect first confirmation to match mock date');
+            assert.equal(result[1], shutdownConfirmation, 'expect second confirmation to match mock date');
+        });
+
+        test('read multiple mixed shutdown confirmation statuses', async () => {
+            const shutdownConfirmation = new Date().toISOString();
+
+            const instances = ['instanceId', 'instanceId2'];
+            mockPipeline.exec.mock.mockImplementationOnce(() =>
+                Promise.resolve([
+                    [null, null],
+                    [null, shutdownConfirmation],
+                ]),
+            );
+
+            const result = await shutdownManager.getShutdownConfirmations(context, instances);
+            assert.ok(result, 'expect ok result');
+            assert.equal(mockPipeline.exec.mock.callCount(), 1, 'expect exec to be called once');
+            assert.equal(
+                mockPipeline.get.mock.callCount(),
+                instances.length,
+                'expect get to be called once per instance',
+            );
+            assert.equal(result.length, instances.length, 'expect confirmation length to match instances length');
+            assert.equal(result[0], false, 'expect first confirmation to be false');
             assert.equal(result[1], shutdownConfirmation, 'expect second confirmation to match mock date');
         });
     });

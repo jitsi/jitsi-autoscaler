@@ -50,6 +50,7 @@ export interface InstanceAuditResponse {
     requestToTerminate: string;
     requestToReconfigure: string;
     reconfigureComplete: string;
+    terminationConfirmation: string;
     latestStatusInfo?: InstanceState;
 }
 
@@ -96,6 +97,7 @@ export default class Audit {
 
         pipeline.expire(`audit:${groupName}:${instanceId}:request-to-launch`, this.auditTTL);
         pipeline.expire(`audit:${groupName}:${instanceId}:request-to-terminate`, this.auditTTL);
+        pipeline.expire(`audit:${groupName}:${instanceId}:confirmation-of-termination`, this.auditTTL);
         pipeline.expire(`audit:${groupName}:${instanceId}:request-to-reconfigure`, this.auditTTL);
         pipeline.expire(`audit:${groupName}:${instanceId}:reconfigure-complete`, this.auditTTL);
 
@@ -325,6 +327,7 @@ export default class Audit {
                 requestToTerminate: 'unknown',
                 requestToReconfigure: 'unknown',
                 reconfigureComplete: 'unknown',
+                terminationConfirmation: 'unknown',
             };
             instanceAuditResponseList.push(instanceAuditResponse);
         });
@@ -339,6 +342,9 @@ export default class Audit {
                         break;
                     case 'request-to-terminate':
                         instanceAuditResponse.requestToTerminate = new Date(instanceAudit.timestamp).toISOString();
+                        break;
+                    case 'confirmation-of-termination':
+                        instanceAuditResponse.terminationConfirmation = new Date(instanceAudit.timestamp).toISOString();
                         break;
                     case 'request-to-reconfigure':
                         instanceAuditResponse.requestToReconfigure = new Date(instanceAudit.timestamp).toISOString();

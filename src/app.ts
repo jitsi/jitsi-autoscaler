@@ -279,6 +279,7 @@ const h = new Handlers({
     instanceTracker,
     instanceGroupManager,
     shutdownManager,
+    cloudManager,
     reconfigureManager,
     groupReportGenerator,
     lockManager,
@@ -335,6 +336,14 @@ if (config.ProtectedApi) {
 app.post('/sidecar/poll', async (req, res, next) => {
     try {
         await h.sidecarPoll(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.post('/sidecar/shutdown', async (req, res, next) => {
+    try {
+        await h.sidecarShutdown(req, res);
     } catch (err) {
         next(err);
     }

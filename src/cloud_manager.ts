@@ -114,6 +114,13 @@ export default class CloudManager {
         return true;
     }
 
+    async shutdownInstance(ctx: Context, instance: InstanceDetails): Promise<boolean> {
+        const groupName = instance.group;
+        ctx.logger.info(`[CloudManager] Shutting down instance ${instance.instanceId} from group ${groupName}`);
+        await this.shutdownManager.setShutdownConfirmation(ctx, [instance]);
+        return true;
+    }
+
     async getInstances(
         ctx: Context,
         group: InstanceGroup,

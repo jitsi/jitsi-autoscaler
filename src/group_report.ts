@@ -12,6 +12,7 @@ export interface InstanceReport {
     instanceName?: string;
     scaleStatus?: string;
     cloudStatus?: string;
+    shutdownComplete?: string | false;
     isShuttingDown?: boolean;
     isScaleDownProtected?: boolean;
     reconfigureScheduled?: string;
@@ -33,6 +34,7 @@ export interface GroupReport {
     expiredCount?: number;
     cloudCount?: number;
     unTrackedCount?: number;
+    shutdownCount?: number;
     shuttingDownCount?: number;
     shutdownErrorCount?: number;
     reconfigureErrorCount?: number;
@@ -108,6 +110,7 @@ export default class GroupReportGenerator {
         });
 
         await this.addShutdownStatus(ctx, groupReport.instances);
+        await this.addShutdownConfirmations(ctx, groupReport.instances);
         await this.addReconfigureDate(ctx, groupReport.instances);
         await this.addShutdownProtectedStatus(ctx, groupReport.instances);
 
@@ -117,6 +120,9 @@ export default class GroupReportGenerator {
             }
             if (instanceReport.isShuttingDown) {
                 groupReport.shuttingDownCount++;
+            }
+            if (instanceReport.shutdownComplete) {
+                groupReport.shutdownCount++;
             }
             if (instanceReport.isScaleDownProtected) {
                 groupReport.scaleDownProtectedCount++;
@@ -186,12 +192,15 @@ export default class GroupReportGenerator {
                 cloudStatus: 'unknown',
                 version: 'unknown',
                 isShuttingDown: instanceState.shutdownStatus,
+                shutdownComplete: instanceState.shutdownComplete,
                 lastReconfigured: instanceState.lastReconfigured,
                 reconfigureError: instanceState.reconfigureError,
                 shutdownError: instanceState.shutdownError,
                 isScaleDownProtected: false,
             };
-            if (instanceState.shutdownStatus) {
+            if (instanceState.shutdownComplete) {
+                instanceReport.scaleStatus = 'SHUTDOWN COMPLETE';
+            } else if (instanceState.shutdownStatus) {
                 instanceReport.scaleStatus = 'SHUTDOWN';
             } else if (instanceState.status.provisioning) {
                 instanceReport.scaleStatus = 'PROVISIONING';
@@ -303,6 +312,19 @@ export default class GroupReportGenerator {
 
         instanceReports.forEach((instanceReport, index) => {
             instanceReport.isShuttingDown = instanceReportsShutdownStatus[index];
+        });
+    }
+
+    private async addShutdownConfirmations(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+        (
+            await this.shutdownManager.getShutdownConfirmations(
+                ctx,
+                instanceReports.map((instanceReport) => {
+                    return instanceReport.instanceId;
+                }),
+            )
+        ).map((confirmation, index) => {
+            instanceReports[index].shutdownComplete = confirmation;
         });
     }
 

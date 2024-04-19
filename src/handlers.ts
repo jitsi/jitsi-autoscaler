@@ -9,6 +9,7 @@ import GroupReportGenerator from './group_report';
 import Audit from './audit';
 import ScalingManager from './scaling_options_manager';
 import * as promClient from 'prom-client';
+import CloudManager from './cloud_manager';
 
 const statsErrors = new promClient.Counter({
     name: 'autoscaler_stats_errors',
@@ -92,6 +93,7 @@ interface InstanceConfigurationUpdateRequest {
 }
 
 interface HandlersOptions {
+    cloudManager: CloudManager;
     instanceTracker: InstanceTracker;
     audit: Audit;
     shutdownManager: ShutdownManager;
@@ -103,6 +105,7 @@ interface HandlersOptions {
 }
 
 class Handlers {
+    private cloudManager: CloudManager;
     private instanceTracker: InstanceTracker;
     private shutdownManager: ShutdownManager;
     private reconfigureManager: ReconfigureManager;
@@ -116,6 +119,7 @@ class Handlers {
         this.sidecarPoll = this.sidecarPoll.bind(this);
 
         this.lockManager = options.lockManager;
+        this.cloudManager = options.cloudManager;
         this.instanceTracker = options.instanceTracker;
         this.instanceGroupManager = options.instanceGroupManager;
         this.shutdownManager = options.shutdownManager;
@@ -150,6 +154,27 @@ class Handlers {
         }
     }
 
+    async sidecarShutdown(req: Request, res: Response): Promise<void> {
+        const details: InstanceDetails = req.body;
+        req.context.logger.info('Received shutdown confirmation', { details });
+        statsCounter.inc();
+        try {
+            await this.cloudManager.shutdownInstance(req.context, details);
+
+            const sendResponse = {
+                save: 'OK',
+            };
+
+            res.status(200);
+            res.send(sendResponse);
+        } catch (err) {
+            req.context.logger.error('Shutdown handling error', { err });
+            statsErrors.inc();
+
+            res.status(500);
+            res.send({ save: 'ERROR' });
+        }
+    }
     async sidecarStats(req: Request, res: Response): Promise<void> {
         const report: StatsReport = req.body;
         statsCounter.inc();

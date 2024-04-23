@@ -50,8 +50,13 @@ const currentInventoryInstances = instancePoolInstances.map((instance) => {
 });
 
 describe('InstancePoolManager', () => {
+    const mockInstanceTracker = {
+        trimCurrent: mock.fn(() => Promise.resolve(currentInventoryInstances)),
+    };
+
     const manager = new OracleInstancePoolManager({
         isDryRun: false,
+        instanceTracker: mockInstanceTracker,
         ociConfigurationFilePath: __dirname + '/test_oracle_config',
         ociConfigurationProfile: 'TEST',
     });
@@ -208,6 +213,41 @@ describe('InstancePoolManager', () => {
             );
             assert.equal(instances.length, 0, 'no instances should be returned');
             log('TEST', 'ended skip launch test');
+            log('TEST', 'launched instances', instances);
+        });
+
+        test('will not launch instances in a group if size would go down', async () => {
+            console.log('Starting skip scale down test');
+            const desiredCount = 2;
+            // return pool with 1 more than desired
+            mockComputeManagementClient.getInstancePool.mock.mockImplementationOnce((_) => {
+                return {
+                    instancePool: <core.models.InstancePool>{
+                        ...instancePool,
+                        size: desiredCount + 1,
+                    },
+                };
+            });
+            // when listInstancePoolInstances is called, return 3 instances including newest with id 'new-instance-id'
+            mockComputeManagementClient.listInstancePoolInstances.mock.mockImplementationOnce((_) => {
+                return { items: [...instancePoolInstances, { id: 'new-instance-id' }] };
+            });
+
+            // override group.scalingOptions.desiredCount to control size of instance pool
+            const lgroup = { ...group, scalingOptions: { ...group.scalingOptions, desiredCount: desiredCount } };
+            const instances = await manager.launchInstances(
+                context,
+                lgroup,
+                [...currentInventoryInstances, { instanceId: 'new-instance-id' }],
+                1,
+            );
+            assert.equal(
+                mockComputeManagementClient.updateInstancePool.mock.callCount(),
+                0,
+                'updateInstancePool should not be called',
+            );
+            assert.equal(instances.length, 0, 'no instances should be returned');
+            log('TEST', 'ended skip scale down test');
             log('TEST', 'launched instances', instances);
         });
 

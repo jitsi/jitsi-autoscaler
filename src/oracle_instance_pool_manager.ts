@@ -5,7 +5,7 @@ import { Context } from './context';
 import { CloudRetryStrategy } from './cloud_manager';
 import { CloudInstanceManager, CloudInstance } from './cloud_instance_manager';
 import { workrequests } from 'oci-sdk';
-import { InstanceState } from './instance_tracker';
+import { InstanceState, InstanceTracker } from './instance_tracker';
 
 const maxLaunchTimeInSeconds = 30; // The duration for waiter configuration before failing. Currently set to 30 seconds
 const launchDelayInSeconds = 5; // The max delay for the waiter configuration. Currently set to 10 seconds
@@ -25,11 +25,13 @@ const detachWaiterConfiguration: common.WaiterConfiguration = {
 
 export interface OracleInstancePoolManagerOptions {
     isDryRun: boolean;
+    instanceTracker: InstanceTracker;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
 }
 
 export default class OracleInstancePoolManager implements CloudInstanceManager {
+    private instanceTracker: InstanceTracker;
     private isDryRun: boolean;
     private provider: common.ConfigFileAuthenticationDetailsProvider;
     private computeManagementClient: core.ComputeManagementClient;
@@ -37,6 +39,7 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
 
     constructor(options: OracleInstancePoolManagerOptions) {
         this.isDryRun = options.isDryRun;
+        this.instanceTracker = options.instanceTracker;
         this.provider = new common.ConfigFileAuthenticationDetailsProvider(
             options.ociConfigurationFilePath,
             options.ociConfigurationProfile,
@@ -97,14 +100,24 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
             return instance.id;
         });
 
+        const fullInventory = await this.instanceTracker.trimCurrent(ctx, group.name, false);
+
         const currentInstanceIds = currentInventory.map((instance) => {
             return instance.instanceId;
         });
 
+        const shuttingDownInstances = fullInventory
+            .filter((instance) => {
+                return !currentInstanceIds.includes(instance.instanceId);
+            })
+            .map((instance) => {
+                return instance.instanceId;
+            });
+
         // mark any instances not previously seen as being launched now
         result.push(
             ...existingInstanceIds.filter((instanceId) => {
-                return !currentInstanceIds.includes(instanceId);
+                return !shuttingDownInstances.includes(instanceId) && !currentInstanceIds.includes(instanceId);
             }),
         );
 
@@ -115,11 +128,21 @@ export default class OracleInstancePoolManager implements CloudInstanceManager {
             });
         }
 
-        // always use the group desired count for instance pools
-        const newSize = group.scalingOptions.desiredCount;
+        // always use the group desired count + shutting down count for instance pools
+        const newSize = group.scalingOptions.desiredCount + shuttingDownInstances.length;
         if (newSize == poolDetails.instancePool.size) {
             // underlying pool size matches the desired count, so no need to update group
             ctx.logger.info(`[oraclepool] Instance pool ${group.name} size matches desired count, no changes needed`, {
+                newSize,
+            });
+            return result;
+        }
+
+        // never scale down via size, always do so by detaching instances on shutdown confirmation
+        if (newSize < poolDetails.instancePool.size) {
+            // underlying pool size would shrink with new size, so waiting for instances to be detached after confirming shutdown
+            ctx.logger.warn(`[oraclepool] Instance pool ${group.name} size would shrink, no changes applied`, {
+                size: poolDetails.instancePool.size,
                 newSize,
             });
             return result;

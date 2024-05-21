@@ -287,7 +287,7 @@ const h = new Handlers({
     scalingManager,
 });
 
-const validator = new Validator({ instanceTracker, instanceGroupManager });
+const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop });
 const loggedPaths = ['/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use('/', context.injectContext);

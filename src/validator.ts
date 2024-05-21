@@ -3,9 +3,11 @@ import { Context } from './context';
 import { Request } from 'express';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import { InstanceGroupDesiredValuesRequest } from './handlers';
+import MetricsLoop from './metrics_loop';
 
 export interface ValidatorOptions {
     instanceTracker: InstanceTracker;
+    metricsLoop: MetricsLoop;
     instanceGroupManager: InstanceGroupManager;
     scaleStatus?: string;
     cloudStatus?: string;
@@ -16,17 +18,34 @@ export interface ValidatorOptions {
 export default class Validator {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
+    private metricsLoop: MetricsLoop;
 
     constructor(options: ValidatorOptions) {
         this.instanceTracker = options.instanceTracker;
         this.instanceGroupManager = options.instanceGroupManager;
+        this.metricsLoop = options.metricsLoop;
 
         this.groupHasActiveInstances = this.groupHasActiveInstances.bind(this);
     }
 
     async groupHasActiveInstances(context: Context, name: string): Promise<boolean> {
         const instanceStates = await this.instanceTracker.trimCurrent(context, name, false);
-        return instanceStates.length > 0;
+        const cloudInstances = await this.metricsLoop.getCloudInstances(name);
+        const shutdownInstances = cloudInstances
+            .filter((cv, _) => {
+                return cv.cloudStatus.toLowerCase() == 'shutdown' || cv.cloudStatus.toLowerCase() == 'terminated';
+            })
+            .map((cv, _) => cv.instanceId);
+
+        return (
+            instanceStates.filter((v, _) => {
+                // skip any that have completed shutdown
+                if (v.shutdownComplete) return false;
+
+                // only include instances that are not listed as SHUTDOWN or TERMINATED
+                return !shutdownInstances.includes(v.instanceId);
+            }).length > 0
+        );
     }
 
     groupHasValidDesiredValues(minDesired: number, maxDesired: number, desiredCount: number): boolean {

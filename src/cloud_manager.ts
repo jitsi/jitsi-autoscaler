@@ -78,7 +78,7 @@ export default class CloudManager {
     async scaleUp(
         ctx: Context,
         group: InstanceGroup,
-        groupCurrentCount: number,
+        currentInventory: InstanceState[],
         quantity: number,
         isScaleDownProtected: boolean,
     ): Promise<number> {
@@ -91,7 +91,7 @@ export default class CloudManager {
             return 0;
         }
 
-        const scaleUpResult = await instanceManager.launchInstances(ctx, group, groupCurrentCount, quantity);
+        const scaleUpResult = await instanceManager.launchInstances(ctx, group, currentInventory, quantity);
 
         let scaleUpCount = 0;
         await Promise.all(

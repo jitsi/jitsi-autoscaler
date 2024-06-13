@@ -1,0 +1,6 @@
+[TEST]
+user=ocid1.user.oc1..aaaaaaaabbbbbbbbbbbbccccccccddddddddeeeeeeeeffffff
+fingerprint=4d:c5:f3:d4:91:47:40:37:e0:ce:a1:8d:2d:74:31:42
+key_file=src/test/oci_api_key.pem
+tenancy=ocid1.tenancy.oc1..aaaaaaaabbbbbbbbbbbbccccccccddddddddeeeeeeeeffffff
+region=eu-frankfurt-1

@@ -28,9 +28,13 @@ describe('Validator', () => {
         getCloudInstances: mock.fn(),
     };
 
+    const shutdownManager = {
+        getShutdownConfirmations: mock.fn((_, instanceIds) => instanceIds.map(() => false)),
+    };
+
     const groupName = 'group';
 
-    const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop });
+    const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop, shutdownManager });
 
     afterEach(() => {
         context = {
@@ -66,6 +70,17 @@ describe('Validator', () => {
                 { instanceId: '1', shutdownComplete: true },
             ]);
             metricsLoop.getCloudInstances.mock.mockImplementationOnce(() => []);
+
+            const result = await validator.groupHasActiveInstances(context, groupName);
+            assert.strictEqual(result, false);
+        });
+
+        test('should return false for a group with an instance that has sent back completed webhook', async () => {
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [
+                { instanceId: '1', shutdownComplete: true },
+            ]);
+            metricsLoop.getCloudInstances.mock.mockImplementationOnce(() => []);
+            shutdownManager.getShutdownConfirmations.mock.mockImplementationOnce(() => ['completed']);
 
             const result = await validator.groupHasActiveInstances(context, groupName);
             assert.strictEqual(result, false);

@@ -4,11 +4,13 @@ import { Request } from 'express';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import { InstanceGroupDesiredValuesRequest } from './handlers';
 import MetricsLoop from './metrics_loop';
+import ShutdownManager from './shutdown_manager';
 
 export interface ValidatorOptions {
     instanceTracker: InstanceTracker;
     metricsLoop: MetricsLoop;
     instanceGroupManager: InstanceGroupManager;
+    shutdownManager: ShutdownManager;
     scaleStatus?: string;
     cloudStatus?: string;
     isShuttingDown?: boolean;
@@ -19,11 +21,13 @@ export default class Validator {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private metricsLoop: MetricsLoop;
+    private shutdownManager: ShutdownManager;
 
     constructor(options: ValidatorOptions) {
         this.instanceTracker = options.instanceTracker;
         this.instanceGroupManager = options.instanceGroupManager;
         this.metricsLoop = options.metricsLoop;
+        this.shutdownManager = options.shutdownManager;
 
         this.groupHasActiveInstances = this.groupHasActiveInstances.bind(this);
     }
@@ -37,10 +41,15 @@ export default class Validator {
             })
             .map((cv, _) => cv.instanceId);
 
+        const instanceIds = instanceStates.map((v, _) => v.instanceId);
+
+        const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(context, instanceIds);
+
         return (
-            instanceStates.filter((v, _) => {
+            instanceStates.filter((v, i) => {
                 // skip any that have completed shutdown
                 if (v.shutdownComplete) return false;
+                if (shutdownConfirmations[i]) return false;
 
                 // only include instances that are not listed as SHUTDOWN or TERMINATED
                 return !shutdownInstances.includes(v.instanceId);

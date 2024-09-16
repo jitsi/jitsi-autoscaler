@@ -5,6 +5,7 @@ import Handlers from './handlers';
 import Validator from './validator';
 import Redis, { RedisOptions } from 'ioredis';
 import { RedisClient, ClientOpts } from 'redis';
+import * as promClient from 'prom-client';
 import AutoscalerLogger from './logger';
 import shortid from 'shortid';
 import { ASAPPubKeyFetcher } from './asap';
@@ -234,6 +235,11 @@ async function startProcessingGroups() {
 logger.info(`Waiting ${config.InitialWaitForPooling}ms before starting to loop for group processing`);
 setTimeout(startProcessingGroups, config.InitialWaitForPooling);
 
+const groupProcessingErrorCounter = new promClient.Counter({
+    name: 'autoscaler_group_processing_errors',
+    help: 'Counter for high level group processing errors',
+});
+
 async function createGroupProcessingJobs() {
     const start = Date.now();
     const pollId = shortid.generate();
@@ -245,6 +251,8 @@ async function createGroupProcessingJobs() {
         await jobManager.createGroupProcessingJobs(ctx);
     } catch (err) {
         ctx.logger.error(`Error while creating group processing jobs`, { err });
+        // should increment some group processing error counter here
+        groupProcessingErrorCounter.inc();
     }
     setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
 }
@@ -287,7 +295,7 @@ const h = new Handlers({
     scalingManager,
 });
 
-const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop });
+const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop, shutdownManager });
 const loggedPaths = ['/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use('/', context.injectContext);

@@ -684,7 +684,7 @@ export class InstanceTracker {
         for (let i = 0; i < states.length; i++) {
             statesShutdownStatus.push(this.shutdownStatusFromState(states[i]) || shutdownStatuses[i]);
         }
-        return states.filter((instanceState, index) => !statesShutdownStatus[index] && !shutdownConfirmations[index]);
+        return states.filter((_, index) => !statesShutdownStatus[index] && !shutdownConfirmations[index]);
     }
 
     mapToInstanceDetails(states: Array<InstanceState>): Array<InstanceDetails> {

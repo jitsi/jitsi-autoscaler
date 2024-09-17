@@ -89,6 +89,7 @@ export default class GroupReportGenerator {
             expiredCount: 0,
             unTrackedCount: 0,
             shuttingDownCount: 0,
+            shutdownCount: 0,
             shutdownErrorCount: 0,
             reconfigureErrorCount: 0,
             reconfigureScheduledCount: 0,

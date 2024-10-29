@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { AbstractCloudInstanceManager } from './cloud_instance_manager';
+import { InstanceState } from './instance_tracker';
 
 export interface CustomInstanceManagerOptions {
     isDryRun: boolean;
@@ -27,7 +28,7 @@ export default class CustomInstanceManager extends AbstractCloudInstanceManager 
     async launchInstances(
         ctx: Context,
         group: InstanceGroup,
-        groupCurrentCount: number,
+        currentInventory: InstanceState[],
         quantity: number,
     ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[custom] Launching a batch of ${quantity} instances in group ${group.name}`);

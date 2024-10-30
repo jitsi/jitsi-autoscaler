@@ -2,6 +2,7 @@ import got from 'got';
 import sha256 from 'sha256';
 import NodeCache from 'node-cache';
 import { Request } from 'express';
+import { UnauthorizedError } from 'express-jwt';
 import jwt from 'jsonwebtoken';
 
 export class ASAPPubKeyFetcher {
@@ -17,7 +18,7 @@ export class ASAPPubKeyFetcher {
 
     async secretCallback(req: Request, token: jwt.Jwt): Promise<jwt.Secret> {
         if (!token.header.kid) {
-            throw new Error('kid is required in header');
+            throw new UnauthorizedError('credentials_bad_format', new Error('kid is required in the header'));
         }
 
         let pubKey = <jwt.Secret>this.cache.get(token.header.kid);
@@ -39,7 +40,7 @@ export class ASAPPubKeyFetcher {
                 kid: token.header.kid,
                 err,
             });
-            throw err;
+            throw new UnauthorizedError('invalid_token', err);
         }
     }
 }

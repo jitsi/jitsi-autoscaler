@@ -1,62 +1,21 @@
-import { Redis } from 'ioredis';
 import { Context } from './context';
-
-export interface ScalingOptions {
-    minDesired: number;
-    maxDesired: number;
-    desiredCount: number;
-    scaleUpQuantity: number;
-    scaleDownQuantity: number;
-    scaleUpThreshold: number;
-    scaleDownThreshold: number;
-    scalePeriod: number;
-    scaleUpPeriodsCount: number;
-    scaleDownPeriodsCount: number;
-}
-
-export interface InstanceGroupTags {
-    [id: string]: string;
-}
-
-export interface InstanceGroup {
-    id: string;
-    name: string;
-    type: string;
-    region: string;
-    environment: string;
-    compartmentId: string;
-    instanceConfigurationId: string;
-    enableAutoScale: boolean;
-    enableLaunch: boolean;
-    enableScheduler: boolean;
-    enableUntrackedThrottle: boolean;
-    enableReconfiguration?: boolean;
-    gracePeriodTTLSec: number;
-    protectedTTLSec: number;
-    scalingOptions: ScalingOptions;
-    cloud: string;
-    tags: InstanceGroupTags;
-}
+import InstanceStore, { InstanceGroup, InstanceGroupTags } from './instance_store';
 
 export interface InstanceGroupManagerOptions {
-    redisClient: Redis;
-    redisScanCount: number;
-    initialGroupList: Array<InstanceGroup>;
+    instanceStore: InstanceStore;
+    initialGroupList: InstanceGroup[];
     groupJobsCreationGracePeriod: number;
     sanityJobsCreationGracePeriod: number;
 }
 
 export default class InstanceGroupManager {
-    private readonly GROUPS_HASH_NAME = 'allgroups';
-    private redisClient: Redis;
-    private readonly redisScanCount: number;
+    private instanceStore: InstanceStore;
     private readonly initialGroupList: Array<InstanceGroup>;
     private readonly processingIntervalSeconds: number;
     private readonly sanityJobsIntervalSeconds: number;
 
     constructor(options: InstanceGroupManagerOptions) {
-        this.redisClient = options.redisClient;
-        this.redisScanCount = options.redisScanCount;
+        this.instanceStore = options.instanceStore;
         this.initialGroupList = options.initialGroupList;
         this.processingIntervalSeconds = options.groupJobsCreationGracePeriod;
         this.sanityJobsIntervalSeconds = options.sanityJobsCreationGracePeriod;
@@ -73,9 +32,9 @@ export default class InstanceGroupManager {
         ctx.logger.info('Initializing instance group manager...');
         const existsAtLeastOneGroup = await this.existsAtLeastOneGroup();
         if (!existsAtLeastOneGroup) {
-            ctx.logger.info('Storing instance groups into redis');
+            ctx.logger.info('Storing instance groups into instance store');
             await Promise.all(this.initialGroupList.map((group) => this.upsertInstanceGroup(ctx, group)));
-            ctx.logger.info('Stored instance groups into redis');
+            ctx.logger.info('Stored instance groups into instance store');
         }
     }
 
@@ -84,50 +43,15 @@ export default class InstanceGroupManager {
     }
 
     async existsAtLeastOneGroup(): Promise<boolean> {
-        let cursor = '0';
-        do {
-            const result = await this.redisClient.hscan(
-                this.GROUPS_HASH_NAME,
-                cursor,
-                'MATCH',
-                `*`,
-                'COUNT',
-                this.redisScanCount,
-            );
-            cursor = result[0];
-            if (result[1].length > 0) {
-                const pipeline = this.redisClient.pipeline();
-                result[1].forEach((key: string) => {
-                    pipeline.hget(this.GROUPS_HASH_NAME, key);
-                });
-
-                const items = await pipeline.exec();
-                if (items) {
-                    if (items.length > 0) {
-                        return true;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        } while (cursor != '0');
-
-        return false;
+        return this.instanceStore.existsAtLeastOneGroup();
     }
 
     async upsertInstanceGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
-        ctx.logger.info(`Storing ${group.name}`);
-        await this.redisClient.hset(this.GROUPS_HASH_NAME, group.name, JSON.stringify(group));
-        return true;
+        return this.instanceStore.upsertInstanceGroup(ctx, group);
     }
 
     async getInstanceGroup(groupName: string): Promise<InstanceGroup> {
-        const result = await this.redisClient.hget(this.GROUPS_HASH_NAME, groupName);
-        if (result !== null && result.length > 0) {
-            return JSON.parse(result);
-        } else {
-            return null;
-        }
+        return this.instanceStore.getInstanceGroup(groupName);
     }
 
     async getAllInstanceGroupsAsMap(ctx: Context): Promise<Map<string, InstanceGroup>> {
@@ -162,55 +86,11 @@ export default class InstanceGroupManager {
     }
 
     async getAllInstanceGroupNames(ctx: Context): Promise<string[]> {
-        const start = process.hrtime();
-        const result = await this.redisClient.hkeys(this.GROUPS_HASH_NAME);
-        const end = process.hrtime(start);
-        ctx.logger.info(`Scanned all ${result.length} group names in ${end[0] * 1000 + end[1] / 1000000} ms`);
-        return result;
+        return this.instanceStore.getAllInstanceGroupNames(ctx);
     }
 
     async getAllInstanceGroups(ctx: Context): Promise<Array<InstanceGroup>> {
-        const instanceGroups: Array<InstanceGroup> = [];
-
-        let cursor = '0';
-        let scanCount = 0;
-        const getGroupsStart = process.hrtime();
-        do {
-            const result = await this.redisClient.hscan(
-                this.GROUPS_HASH_NAME,
-                cursor,
-                'MATCH',
-                `*`,
-                'COUNT',
-                this.redisScanCount,
-            );
-            cursor = result[0];
-            if (result[1].length > 0) {
-                const pipeline = this.redisClient.pipeline();
-                result[1].forEach((key: string) => {
-                    pipeline.hget(this.GROUPS_HASH_NAME, key);
-                });
-
-                const items = await pipeline.exec();
-                if (items) {
-                    items.forEach((item) => {
-                        if (item[1]) {
-                            const itemJson = <InstanceGroup>JSON.parse(<string>item[1]);
-                            instanceGroups.push(itemJson);
-                        }
-                    });
-                }
-            }
-            scanCount++;
-        } while (cursor != '0');
-        const getGroupsEnd = process.hrtime(getGroupsStart);
-        ctx.logger.debug(`instance groups are`, { instanceGroups });
-        ctx.logger.info(
-            `Scanned all ${instanceGroups.length} groups in ${scanCount} scans and ${
-                getGroupsEnd[0] * 1000 + getGroupsEnd[1] / 1000000
-            } ms`,
-        );
-        return instanceGroups;
+        return this.instanceStore.getAllInstanceGroups(ctx);
     }
 
     async getAllInstanceGroupsFiltered(ctx: Context, expectedTags: InstanceGroupTags): Promise<Array<InstanceGroup>> {
@@ -247,16 +127,11 @@ export default class InstanceGroupManager {
     }
 
     async deleteInstanceGroup(ctx: Context, groupName: string): Promise<void> {
-        ctx.logger.info(`Deleting group ${groupName}`);
-        await this.redisClient.hdel(this.GROUPS_HASH_NAME, groupName);
-        ctx.logger.info(`Group ${groupName} is deleted`);
+        await this.instanceStore.deleteInstanceGroup(ctx, groupName);
     }
 
     async allowAutoscaling(ctx: Context, group: string): Promise<boolean> {
-        const result = await this.redisClient.get(`autoScaleGracePeriod:${group}`);
-        ctx.logger.debug(`allowAutoscaling check: ${group}`, { result });
-
-        return !(result !== null && result.length > 0);
+        return this.instanceStore.checkValue(`autoScaleGracePeriod:${group}`);
     }
 
     async setAutoScaleGracePeriod(ctx: Context, group: InstanceGroup): Promise<boolean> {
@@ -271,13 +146,11 @@ export default class InstanceGroupManager {
     }
 
     async isScaleDownProtected(group: string): Promise<boolean> {
-        const result = await this.redisClient.get(`isScaleDownProtected:${group}`);
-        return result !== null && result.length > 0;
+        return this.instanceStore.checkValue(`isScaleDownProtected:${group}`);
     }
 
     async isGroupJobsCreationAllowed(): Promise<boolean> {
-        const result = await this.redisClient.get(`groupJobsCreationGracePeriod`);
-        return !(result !== null && result.length > 0);
+        return this.instanceStore.checkValue('groupJobsCreationGracePeriod');
     }
 
     async setGroupJobsCreationGracePeriod(): Promise<boolean> {
@@ -285,8 +158,7 @@ export default class InstanceGroupManager {
     }
 
     async isSanityJobsCreationAllowed(): Promise<boolean> {
-        const result = await this.redisClient.get(`sanityJobsCreationGracePeriod`);
-        return !(result !== null && result.length > 0);
+        return this.instanceStore.checkValue('sanityJobsCreationGracePeriod');
     }
 
     async setSanityJobsCreationGracePeriod(): Promise<boolean> {
@@ -294,10 +166,6 @@ export default class InstanceGroupManager {
     }
 
     async setValue(key: string, ttl: number): Promise<boolean> {
-        const result = await this.redisClient.set(key, JSON.stringify(false), 'EX', ttl);
-        if (result !== 'OK') {
-            throw new Error(`unable to set ${key}`);
-        }
-        return true;
+        return this.instanceStore.setValue(key, 'false', ttl);
     }
 }

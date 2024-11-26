@@ -1,8 +1,8 @@
 import { NomadClient, NomadJob } from './nomad';
-import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { AbstractCloudInstanceManager, CloudInstance } from './cloud_instance_manager';
 import { CloudRetryStrategy } from './cloud_manager';
+import { InstanceGroup } from './instance_store';
 
 export interface NomadInstanceManagerOptions {
     isDryRun: boolean;

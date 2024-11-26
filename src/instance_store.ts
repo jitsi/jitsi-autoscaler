@@ -1,5 +1,42 @@
 import { Context } from './context';
 
+export interface InstanceGroup {
+    id: string;
+    name: string;
+    type: string;
+    region: string;
+    environment: string;
+    compartmentId: string;
+    instanceConfigurationId: string;
+    enableAutoScale: boolean;
+    enableLaunch: boolean;
+    enableScheduler: boolean;
+    enableUntrackedThrottle: boolean;
+    enableReconfiguration?: boolean;
+    gracePeriodTTLSec: number;
+    protectedTTLSec: number;
+    scalingOptions: ScalingOptions;
+    cloud: string;
+    tags: InstanceGroupTags;
+}
+
+export interface ScalingOptions {
+    minDesired: number;
+    maxDesired: number;
+    desiredCount: number;
+    scaleUpQuantity: number;
+    scaleDownQuantity: number;
+    scaleUpThreshold: number;
+    scaleDownThreshold: number;
+    scalePeriod: number;
+    scaleUpPeriodsCount: number;
+    scaleDownPeriodsCount: number;
+}
+
+export interface InstanceGroupTags {
+    [id: string]: string;
+}
+
 export interface NomadStatus {
     stress_level: number;
     totalCPU: number;
@@ -123,6 +160,18 @@ interface InstanceStore {
     unsetReconfigureDate: { (ctx: Context, instanceId: string, group: string): Promise<boolean> };
     getReconfigureDates: { (ctx: Context, instanceIds: string[]): Promise<string[]> };
     getReconfigureDate: { (ctx: Context, instanceId: string): Promise<string> };
+
+    // group related methods
+    existsAtLeastOneGroup: { (): Promise<boolean> };
+    upsertInstanceGroup: { (ctx: Context, group: InstanceGroup): Promise<boolean> };
+    getInstanceGroup: { (groupName: string): Promise<InstanceGroup> };
+    getAllInstanceGroups: { (ctx: Context): Promise<InstanceGroup[]> };
+    getAllInstanceGroupNames: { (ctx: Context): Promise<string[]> };
+    deleteInstanceGroup: { (ctx: Context, groupName: string): Promise<void> };
+
+    // key related methods
+    checkValue: { (key: string): Promise<boolean> };
+    setValue: { (key: string, value: string, ttl: number): Promise<boolean> };
 }
 
 export default InstanceStore;

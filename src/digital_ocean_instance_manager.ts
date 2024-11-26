@@ -2,10 +2,10 @@ import path from 'path';
 import { createApiClient } from 'dots-wrapper';
 import { IDroplet } from 'dots-wrapper/dist/droplet';
 
-import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { AbstractCloudInstanceManager, CloudInstance } from './cloud_instance_manager';
 import { CloudRetryStrategy } from './cloud_manager';
+import { InstanceGroup } from './instance_store';
 
 export interface DigitalOceanInstanceManagerOptions {
     isDryRun: boolean;

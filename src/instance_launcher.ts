@@ -1,6 +1,6 @@
 import { InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager from './instance_group';
 import { Redis } from 'ioredis';
 import LockManager from './lock_manager';
 import { Context } from './context';
@@ -8,7 +8,7 @@ import * as promClient from 'prom-client';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
 import MetricsLoop from './metrics_loop';
-import { InstanceDetails, InstanceState, JibriStatusState } from './instance_store';
+import { InstanceDetails, InstanceGroup, InstanceState, JibriStatusState } from './instance_store';
 
 const instancesLaunchedCounter = new promClient.Counter({
     name: 'autoscaling_instance_launched_total',

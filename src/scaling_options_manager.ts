@@ -1,8 +1,9 @@
 import { Context } from './context';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager from './instance_group';
 import { FullScalingOptionsRequest, FullScalingOptionsResponse, ScalingOptionsRequest } from './handlers';
 import { Lock } from 'redlock';
 import LockManager from './lock_manager';
+import { InstanceGroup } from './instance_store';
 
 interface ScalingManagerOptions {
     instanceGroupManager: InstanceGroupManager;

@@ -1,10 +1,11 @@
 import { InstanceTracker } from './instance_tracker';
 import { Context } from './context';
 import { Request } from 'express';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager from './instance_group';
 import { InstanceGroupDesiredValuesRequest } from './handlers';
 import MetricsLoop from './metrics_loop';
 import ShutdownManager from './shutdown_manager';
+import { InstanceGroup } from './instance_store';
 
 export interface ValidatorOptions {
     instanceTracker: InstanceTracker;

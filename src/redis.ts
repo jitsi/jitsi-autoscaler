@@ -1,5 +1,5 @@
 import { Context } from './context';
-import InstanceStore, { InstanceDetails, InstanceState } from './instance_store';
+import InstanceStore, { InstanceDetails, InstanceGroup, InstanceState } from './instance_store';
 import MetricsStore, { InstanceMetric } from './metrics_store';
 import Redis from 'ioredis';
 
@@ -14,6 +14,7 @@ export interface RedisMetricsOptions {
 }
 
 export default class RedisStore implements MetricsStore, InstanceStore {
+    private readonly GROUPS_HASH_NAME = 'allgroups';
     private redisClient: Redis;
     private readonly redisScanCount: number;
     private readonly idleTTL: number;
@@ -389,5 +390,122 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         const res = await this.redisClient.get(key);
         ctx.logger.debug('Read reconfigure value', { key, res });
         return res;
+    }
+
+    async existsAtLeastOneGroup(): Promise<boolean> {
+        let cursor = '0';
+        do {
+            const result = await this.redisClient.hscan(
+                this.GROUPS_HASH_NAME,
+                cursor,
+                'MATCH',
+                `*`,
+                'COUNT',
+                this.redisScanCount,
+            );
+            cursor = result[0];
+            if (result[1].length > 0) {
+                const pipeline = this.redisClient.pipeline();
+                result[1].forEach((key: string) => {
+                    pipeline.hget(this.GROUPS_HASH_NAME, key);
+                });
+
+                const items = await pipeline.exec();
+                if (items) {
+                    if (items.length > 0) {
+                        return true;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        } while (cursor != '0');
+
+        return false;
+    }
+
+    async upsertInstanceGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
+        ctx.logger.info(`Storing ${group.name}`);
+        await this.redisClient.hset(this.GROUPS_HASH_NAME, group.name, JSON.stringify(group));
+        return true;
+    }
+
+    async getInstanceGroup(groupName: string): Promise<InstanceGroup> {
+        const result = await this.redisClient.hget(this.GROUPS_HASH_NAME, groupName);
+        if (result !== null && result.length > 0) {
+            return JSON.parse(result);
+        } else {
+            return null;
+        }
+    }
+
+    async getAllInstanceGroupNames(ctx: Context): Promise<string[]> {
+        const start = process.hrtime();
+        const result = await this.redisClient.hkeys(this.GROUPS_HASH_NAME);
+        const end = process.hrtime(start);
+        ctx.logger.info(`Scanned all ${result.length} group names in ${end[0] * 1000 + end[1] / 1000000} ms`);
+        return result;
+    }
+
+    async getAllInstanceGroups(ctx: Context): Promise<Array<InstanceGroup>> {
+        const instanceGroups: Array<InstanceGroup> = [];
+
+        let cursor = '0';
+        let scanCount = 0;
+        const getGroupsStart = process.hrtime();
+        do {
+            const result = await this.redisClient.hscan(
+                this.GROUPS_HASH_NAME,
+                cursor,
+                'MATCH',
+                `*`,
+                'COUNT',
+                this.redisScanCount,
+            );
+            cursor = result[0];
+            if (result[1].length > 0) {
+                const pipeline = this.redisClient.pipeline();
+                result[1].forEach((key: string) => {
+                    pipeline.hget(this.GROUPS_HASH_NAME, key);
+                });
+
+                const items = await pipeline.exec();
+                if (items) {
+                    items.forEach((item) => {
+                        if (item[1]) {
+                            const itemJson = <InstanceGroup>JSON.parse(<string>item[1]);
+                            instanceGroups.push(itemJson);
+                        }
+                    });
+                }
+            }
+            scanCount++;
+        } while (cursor != '0');
+        const getGroupsEnd = process.hrtime(getGroupsStart);
+        ctx.logger.debug(`instance groups are`, { instanceGroups });
+        ctx.logger.info(
+            `Scanned all ${instanceGroups.length} groups in ${scanCount} scans and ${
+                getGroupsEnd[0] * 1000 + getGroupsEnd[1] / 1000000
+            } ms`,
+        );
+        return instanceGroups;
+    }
+
+    async deleteInstanceGroup(ctx: Context, groupName: string): Promise<void> {
+        ctx.logger.info(`Deleting group ${groupName}`);
+        await this.redisClient.hdel(this.GROUPS_HASH_NAME, groupName);
+        ctx.logger.info(`Group ${groupName} is deleted`);
+    }
+
+    async checkValue(key: string): Promise<boolean> {
+        const result = await this.redisClient.get(key);
+        return !(result !== null && result.length > 0);
+    }
+    async setValue(key: string, value: string, ttl: number): Promise<boolean> {
+        const result = await this.redisClient.set(key, value, 'EX', ttl);
+        if (result !== 'OK') {
+            throw new Error(`unable to set ${key}`);
+        }
+        return true;
     }
 }

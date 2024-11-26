@@ -1,6 +1,6 @@
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
-import { InstanceGroup } from './instance_group';
+import { InstanceGroup } from './instance_store';
 import { cleanEnv, num, str, bool } from 'envalid';
 
 const result = dotenv.config();

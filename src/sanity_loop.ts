@@ -1,8 +1,9 @@
 import { Context } from './context';
 import GroupReportGenerator from './group_report';
 import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager from './instance_group';
 import { Redis } from 'ioredis';
+import { InstanceGroup } from './instance_store';
 
 export interface SanityLoopOptions {
     redisClient: Redis;

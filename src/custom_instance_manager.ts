@@ -1,7 +1,7 @@
 import { execFile } from 'child_process';
-import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { AbstractCloudInstanceManager } from './cloud_instance_manager';
+import { InstanceGroup } from './instance_store';
 
 export interface CustomInstanceManagerOptions {
     isDryRun: boolean;

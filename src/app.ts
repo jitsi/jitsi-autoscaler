@@ -150,14 +150,8 @@ const reconfigureManager = new ReconfigureManager({
 const instanceTracker = new InstanceTracker({
     metricsStore,
     instanceStore,
-    redisScanCount: config.RedisScanCount,
     shutdownManager,
     audit,
-    idleTTL: config.IdleTTL,
-    metricTTL: config.MetricTTL,
-    provisioningTTL: config.ProvisioningTTL,
-    shutdownStatusTTL: config.ShutdownStatusTTL,
-    groupRelatedDataTTL: config.GroupRelatedDataTTL,
 });
 
 const cloudManager = new CloudManager({
@@ -181,8 +175,7 @@ const lockManager: LockManager = new LockManager(logger, {
 });
 
 const instanceGroupManager = new InstanceGroupManager({
-    redisClient,
-    redisScanCount: config.RedisScanCount,
+    instanceStore,
     initialGroupList: config.GroupList,
     groupJobsCreationGracePeriod: config.GroupJobsCreationGracePeriodSec,
     sanityJobsCreationGracePeriod: config.SanityJobsCreationGracePeriodSec,

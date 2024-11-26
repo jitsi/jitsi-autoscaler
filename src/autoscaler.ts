@@ -3,10 +3,11 @@ import { InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
 import { Lock } from 'redlock';
 import { Redis } from 'ioredis';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import InstanceGroupManager from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
 import Audit from './audit';
+import { InstanceGroup } from './instance_store';
 
 interface ScaleChoiceFunction {
     (group: InstanceGroup, count: number, value: number): boolean;

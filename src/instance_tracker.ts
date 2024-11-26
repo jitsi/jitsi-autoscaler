@@ -1,10 +1,10 @@
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
-import { InstanceGroup } from './instance_group';
 import MetricsStore, { InstanceMetric } from './metrics_store';
 import InstanceStore, {
     InstanceDetails,
+    InstanceGroup,
     InstanceMetadata,
     InstanceState,
     JibriStatus,
@@ -57,39 +57,21 @@ export interface StatsReport {
 export interface InstanceTrackerOptions {
     metricsStore: MetricsStore;
     instanceStore: InstanceStore;
-    redisScanCount: number;
     shutdownManager: ShutdownManager;
     audit: Audit;
-    idleTTL: number;
-    metricTTL: number;
-    provisioningTTL: number;
-    shutdownStatusTTL: number;
-    groupRelatedDataTTL: number;
 }
 
 export class InstanceTracker {
-    private readonly redisScanCount: number;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
     private metricsStore: MetricsStore;
     private instanceStore: InstanceStore;
-    private readonly idleTTL: number;
-    private readonly provisioningTTL: number;
-    private readonly shutdownStatusTTL: number;
-    private readonly metricTTL: number;
-    private readonly groupRelatedDataTTL: number;
 
     constructor(options: InstanceTrackerOptions) {
         this.metricsStore = options.metricsStore;
         this.instanceStore = options.instanceStore;
-        this.redisScanCount = options.redisScanCount;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
-        this.idleTTL = options.idleTTL;
-        this.provisioningTTL = options.provisioningTTL;
-        this.shutdownStatusTTL = options.shutdownStatusTTL;
-        this.metricTTL = options.metricTTL;
-        this.groupRelatedDataTTL = options.groupRelatedDataTTL;
     }
 
     // @TODO: handle stats for instances

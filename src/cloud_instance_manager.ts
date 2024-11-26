@@ -1,6 +1,6 @@
-import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { CloudRetryStrategy } from './cloud_manager';
+import { InstanceGroup } from './instance_store';
 
 export interface CloudInstance {
     instanceId: string;

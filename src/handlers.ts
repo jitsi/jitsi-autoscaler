@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { InstanceTracker, StatsReport } from './instance_tracker';
-import InstanceGroupManager, { InstanceGroup, InstanceGroupTags } from './instance_group';
+import InstanceGroupManager from './instance_group';
 import LockManager from './lock_manager';
 import { Lock } from 'redlock';
 import ShutdownManager from './shutdown_manager';
@@ -10,7 +10,7 @@ import Audit from './audit';
 import ScalingManager from './scaling_options_manager';
 import * as promClient from 'prom-client';
 import CloudManager from './cloud_manager';
-import { InstanceDetails } from './instance_store';
+import { InstanceDetails, InstanceGroup, InstanceGroupTags } from './instance_store';
 
 const statsErrors = new promClient.Counter({
     name: 'autoscaler_stats_errors',

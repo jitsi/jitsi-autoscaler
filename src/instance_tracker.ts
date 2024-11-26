@@ -3,6 +3,17 @@ import Redis from 'ioredis';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
 import { InstanceGroup } from './instance_group';
+import MetricsStore, { InstanceMetric } from './metrics_store';
+import InstanceStore, {
+    InstanceDetails,
+    InstanceMetadata,
+    InstanceState,
+    JibriStatus,
+    JibriStatusState,
+    JigasiStatus,
+    JVBStatus,
+    NomadStatus,
+} from './instance_store';
 
 /* eslint-disable */
 function isEmpty(obj: any) {
@@ -11,38 +22,8 @@ function isEmpty(obj: any) {
     return true;
 }
 
-export enum JibriStatusState {
-    Idle = 'IDLE',
-    Busy = 'BUSY',
-    Expired = 'EXPIRED',
-}
-
-export enum JibriHealthState {
-    Healthy = 'HEALTHY',
-    Unhealthy = 'UNHEALTHY',
-}
-
 interface JibriStatusReport {
     status: JibriStatus;
-}
-
-export interface JibriStatus {
-    busyStatus: JibriStatusState;
-    health: JibriHealth;
-}
-
-export interface JibriHealth {
-    healthStatus: JibriHealthState;
-}
-
-export interface JVBStatus {
-    stress_level: number;
-    muc_clients_configured: number;
-    muc_clients_connected: number;
-    conferences: number;
-    participants: number;
-    largest_conference: number;
-    graceful_shutdown: boolean;
 }
 
 export interface NomadReportStats {
@@ -63,37 +44,6 @@ interface NomadGauge {
     Value: number;
 }
 
-export interface NomadStatus {
-    stress_level: number;
-    totalCPU: number;
-    eligibleForScheduling: boolean;
-    allocatedCPU: number;
-    allocatedMemory: number;
-    unallocatedCPU: number;
-    unallocatedMemory: number;
-}
-
-export interface JigasiStatus {
-    stress_level: number;
-    // muc_clients_configured: number;
-    // muc_clients_connected: number;
-    conferences: number;
-    participants: number;
-    // largest_conference: number;
-    graceful_shutdown: boolean;
-}
-export interface InstanceDetails {
-    instanceId: string;
-    instanceType: string;
-    cloud?: string;
-    region?: string;
-    group?: string;
-    name?: string;
-    version?: string;
-    publicIp?: string;
-    privateIp?: string;
-}
-
 export interface StatsReport {
     instance: InstanceDetails;
     timestamp?: number;
@@ -105,45 +55,9 @@ export interface StatsReport {
     reconfigureComplete?: string;
 }
 
-export interface InstanceStatus {
-    provisioning: boolean;
-    jibriStatus?: JibriStatus;
-    jvbStatus?: JVBStatus;
-    jigasiStatus?: JigasiStatus;
-    nomadStatus?: NomadStatus;
-}
-
-export interface InstanceMetric {
-    instanceId: string;
-    timestamp: number;
-    value: number;
-}
-
-export interface InstanceMetadata {
-    group: string;
-    publicIp?: string;
-    privateIp?: string;
-    version?: string;
-    name?: string;
-
-    [key: string]: string;
-}
-
-export interface InstanceState {
-    instanceId: string;
-    instanceType: string;
-    status: InstanceStatus;
-    timestamp?: number;
-    metadata: InstanceMetadata;
-    shutdownStatus?: boolean;
-    shutdownComplete?: string;
-    reconfigureError?: boolean;
-    shutdownError?: boolean;
-    statsError?: boolean;
-    lastReconfigured?: string;
-}
-
 export interface InstanceTrackerOptions {
+    metricsStore: MetricsStore;
+    instanceStore: InstanceStore;
     redisClient: Redis;
     redisScanCount: number;
     shutdownManager: ShutdownManager;
@@ -160,6 +74,8 @@ export class InstanceTracker {
     private readonly redisScanCount: number;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
+    private metricsStore: MetricsStore;
+    private instanceStore: InstanceStore;
     private readonly idleTTL: number;
     private readonly provisioningTTL: number;
     private readonly shutdownStatusTTL: number;
@@ -168,6 +84,8 @@ export class InstanceTracker {
 
     constructor(options: InstanceTrackerOptions) {
         this.redisClient = options.redisClient;
+        this.metricsStore = options.metricsStore;
+        this.instanceStore = options.instanceStore;
         this.redisScanCount = options.redisScanCount;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
@@ -176,10 +94,6 @@ export class InstanceTracker {
         this.shutdownStatusTTL = options.shutdownStatusTTL;
         this.metricTTL = options.metricTTL;
         this.groupRelatedDataTTL = options.groupRelatedDataTTL;
-
-        this.track = this.track.bind(this);
-        this.getInstanceStates = this.getInstanceStates.bind(this);
-        this.filterOutAndTrimExpiredStates = this.filterOutAndTrimExpiredStates.bind(this);
     }
 
     // @TODO: handle stats for instances
@@ -227,6 +141,7 @@ export class InstanceTracker {
             }
         }
         ctx.logger.debug('Tracking instance state', { instanceState });
+        instanceState.isShuttingDown = this.shutdownStatusFromState(instanceState);
         return await this.track(ctx, instanceState, shutdownStatus);
     }
 
@@ -259,19 +174,6 @@ export class InstanceTracker {
         };
     }
 
-    private getGroupInstancesStatesKey(groupName: string): string {
-        return `instances:status:${groupName}`;
-    }
-
-    private getGroupMetricsKey(groupName: string): string {
-        return `gmetric:instance:${groupName}`;
-    }
-
-    private async extendTTLForKey(key: string, ttl: number): Promise<boolean> {
-        const result = await this.redisClient.expire(key, ttl);
-        return result == 1;
-    }
-
     async track(ctx: Context, state: InstanceState, shutdownStatus = false): Promise<void> {
         let group = 'default';
 
@@ -286,13 +188,9 @@ export class InstanceTracker {
         }
 
         // Store latest instance status
-        await this.redisClient.hset(
-            this.getGroupInstancesStatesKey(group),
-            `${state.instanceId}`,
-            JSON.stringify(state),
-        );
+        this.instanceStore.saveInstanceStatus(ctx, group, state);
 
-        const isInstanceShuttingDown = this.shutdownStatusFromState(state) || shutdownStatus;
+        const isInstanceShuttingDown = state.isShuttingDown || shutdownStatus;
         // Store metric, but only for running instances
         if (!state.status.provisioning && !isInstanceShuttingDown) {
             let metricValue = 0;
@@ -337,11 +235,7 @@ export class InstanceTracker {
                     timestamp: state.timestamp,
                     value: metricValue,
                 };
-                await this.redisClient.zadd(
-                    this.getGroupMetricsKey(group),
-                    metricObject.timestamp,
-                    JSON.stringify(metricObject),
-                );
+                await this.metricsStore.writeInstanceMetric(ctx, group, metricObject);
             }
         }
 
@@ -396,6 +290,14 @@ export class InstanceTracker {
         });
     }
 
+    async fetchInstanceMetrics(ctx: Context, group: string): Promise<InstanceMetric[]> {
+        return this.metricsStore.fetchInstanceMetrics(ctx, group);
+    }
+
+    async cleanInstanceMetrics(ctx: Context, group: string): Promise<boolean> {
+        return this.metricsStore.cleanInstanceMetrics(ctx, group);
+    }
+
     async getMetricInventoryPerPeriod(
         ctx: Context,
         group: string,
@@ -404,23 +306,8 @@ export class InstanceTracker {
     ): Promise<Array<Array<InstanceMetric>>> {
         const metricPoints: Array<Array<InstanceMetric>> = [];
         const currentTime = Date.now();
-        const validUntil = new Date(currentTime - 1000 * this.metricTTL).getTime();
 
-        // Extend TTL longer enough for the key to be deleted only after the group is deleted or no action is performed on it
-        await this.extendTTLForKey(this.getGroupMetricsKey(group), this.groupRelatedDataTTL);
-
-        const cleanupStart = process.hrtime();
-        const itemsCleanedUp: number = await this.redisClient.zremrangebyscore(
-            this.getGroupMetricsKey(group),
-            0,
-            validUntil,
-        );
-        const cleanupEnd = process.hrtime(cleanupStart);
-        ctx.logger.info(
-            `Cleaned up ${itemsCleanedUp} metrics in ${
-                cleanupEnd[0] * 1000 + cleanupEnd[1] / 1000000
-            } ms, for group ${group}`,
-        );
+        await this.cleanInstanceMetrics(ctx, group);
 
         const instancesInPeriods = <string[][]>[];
         for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
@@ -429,12 +316,12 @@ export class InstanceTracker {
         }
 
         const inventoryStart = process.hrtime();
-        const items: string[] = await this.redisClient.zrange(this.getGroupMetricsKey(group), 0, -1);
+        const items = await this.fetchInstanceMetrics(ctx, group);
 
         const instancesInMetrics = <string[]>[];
-        items.forEach((item) => {
-            if (item) {
-                const itemJson = JSON.parse(item);
+        items.forEach((itemJson) => {
+            if (itemJson) {
+                // const itemJson = JSON.parse(item);
                 const periodIdx = Math.floor((currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000));
                 if (periodIdx >= 0 && periodIdx < periodsCount) {
                     metricPoints[periodIdx].push(itemJson);
@@ -530,44 +417,22 @@ export class InstanceTracker {
         }
     }
 
-    async trimCurrent(ctx: Context, group: string, filterShutdown = true): Promise<Array<InstanceState>> {
-        let states: Array<InstanceState> = [];
-        const currentStart = process.hrtime();
-        const groupInstancesStatesKey = this.getGroupInstancesStatesKey(group);
+    async getGroupInstanceStates(ctx: Context, group: string): Promise<InstanceState[]> {
+        return this.instanceStore.fetchInstanceStates(ctx, group);
+    }
 
-        // Extend TTL longer enough for the key to be deleted only after the group is deleted or no action is performed on it
-        await this.extendTTLForKey(groupInstancesStatesKey, this.groupRelatedDataTTL);
+    async filterOutAndTrimExpiredStates(
+        ctx: Context,
+        group: string,
+        states: InstanceState[],
+    ): Promise<InstanceState[]> {
+        return this.instanceStore.filterOutAndTrimExpiredStates(ctx, group, states);
+    }
 
-        let cursor = '0';
-        let scanCounts = 0;
-        do {
-            const result = await this.redisClient.hscan(
-                groupInstancesStatesKey,
-                cursor,
-                'MATCH',
-                `*`,
-                'COUNT',
-                this.redisScanCount,
-            );
-            cursor = result[0];
-            if (result[1].length > 0) {
-                const instanceStates = await this.getInstanceStates(result[1], groupInstancesStatesKey);
-                const validInstanceStates = await this.filterOutAndTrimExpiredStates(
-                    ctx,
-                    groupInstancesStatesKey,
-                    instanceStates,
-                );
-                states = states.concat(validInstanceStates);
-            }
-            scanCounts++;
-        } while (cursor != '0');
-        ctx.logger.debug(`instance states: ${states}`, { group, states });
-        const currentEnd = process.hrtime(currentStart);
-        ctx.logger.info(
-            `Scanned ${states.length} group instances in ${scanCounts} scans and ${
-                currentEnd[0] * 1000 + currentEnd[1] / 1000000
-            } ms, for group ${group}`,
-        );
+    async trimCurrent(ctx: Context, group: string, filterShutdown = true): Promise<InstanceState[]> {
+        const rawStates = await this.getGroupInstanceStates(ctx, group);
+        const states = await this.filterOutAndTrimExpiredStates(ctx, group, rawStates);
+        ctx.logger.debug(`instance states`, { group, states });
 
         if (filterShutdown) {
             const filterShutdownStart = process.hrtime();
@@ -588,28 +453,6 @@ export class InstanceTracker {
         return states;
     }
 
-    private async getInstanceStates(fields: string[], groupInstancesStatesKey: string): Promise<Array<InstanceState>> {
-        const instanceStatesResponse: Array<InstanceState> = [];
-        const pipeline = this.redisClient.pipeline();
-
-        fields.forEach((instanceId: string) => {
-            pipeline.hget(groupInstancesStatesKey, instanceId);
-        });
-        const instanceStates = await pipeline.exec();
-
-        if (instanceStates) {
-            for (const state of instanceStates) {
-                if (state[1]) {
-                    instanceStatesResponse.push(<InstanceState>JSON.parse(<string>state[1]));
-                }
-            }
-        } else {
-            return [];
-        }
-
-        return instanceStatesResponse;
-    }
-
     private shutdownStatusFromState(state: InstanceState) {
         let shutdownStatus = false;
         shutdownStatus = state.shutdownStatus;
@@ -628,50 +471,6 @@ export class InstanceTracker {
         return shutdownStatus;
     }
 
-    private async filterOutAndTrimExpiredStates(
-        ctx: Context,
-        groupInstancesStatesKey: string,
-        instanceStates: Array<InstanceState>,
-    ): Promise<Array<InstanceState>> {
-        const groupInstancesStatesResponse: Array<InstanceState> = [];
-        const deletePipeline = this.redisClient.pipeline();
-
-        const shutdownStatuses: boolean[] = await this.shutdownManager.getShutdownStatuses(
-            ctx,
-            instanceStates.map((instanceState) => {
-                return instanceState.instanceId;
-            }),
-        );
-
-        for (let i = 0; i < instanceStates.length; i++) {
-            const state = instanceStates[i];
-            let statusTTL = this.idleTTL;
-            if (state.status && state.status.provisioning) {
-                statusTTL = this.provisioningTTL;
-            }
-
-            const isInstanceShuttingDown = this.shutdownStatusFromState(state) || shutdownStatuses[i];
-            if (isInstanceShuttingDown) {
-                // We keep shutdown status a bit longer, to be consistent to Oracle Search API which has a delay in seeing Terminating status
-                statusTTL = this.shutdownStatusTTL;
-            }
-
-            const expiresAt = new Date(state.timestamp + 1000 * statusTTL);
-            const isValidState: boolean = expiresAt >= new Date();
-            if (isValidState) {
-                groupInstancesStatesResponse.push(state);
-            } else {
-                deletePipeline.hdel(groupInstancesStatesKey, state.instanceId);
-                ctx.logger.debug(`will delete expired state:`, {
-                    expiresAt,
-                    state,
-                });
-            }
-        }
-        await deletePipeline.exec();
-        return groupInstancesStatesResponse;
-    }
-
     async filterOutInstancesShuttingDown(ctx: Context, states: Array<InstanceState>): Promise<Array<InstanceState>> {
         const instanceIds = states.map((state) => {
             return state.instanceId;
@@ -687,7 +486,7 @@ export class InstanceTracker {
         return states.filter((_, index) => !statesShutdownStatus[index] && !shutdownConfirmations[index]);
     }
 
-    mapToInstanceDetails(states: Array<InstanceState>): Array<InstanceDetails> {
+    mapToInstanceDetails(states: InstanceState[]): InstanceDetails[] {
         return states.map((response) => {
             return <InstanceDetails>{
                 instanceId: response.instanceId,

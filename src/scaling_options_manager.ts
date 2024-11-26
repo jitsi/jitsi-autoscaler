@@ -1,7 +1,7 @@
 import { Context } from './context';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import { FullScalingOptionsRequest, FullScalingOptionsResponse, ScalingOptionsRequest } from './handlers';
-import Redlock from 'redlock';
+import { Lock } from 'redlock';
 import LockManager from './lock_manager';
 
 interface ScalingManagerOptions {
@@ -82,7 +82,7 @@ export default class ScalingManager {
         request: FullScalingOptionsRequest,
         group: InstanceGroup,
     ): Promise<boolean> {
-        let lock: Redlock.Lock = undefined;
+        let lock: Lock = undefined;
         let success = true;
         try {
             lock = await this.lockManager.lockGroup(ctx, group.name);
@@ -101,7 +101,7 @@ export default class ScalingManager {
                 success = false;
             }
         } finally {
-            await lock.unlock();
+            await lock.release();
         }
 
         return success;

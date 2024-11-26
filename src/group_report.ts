@@ -1,10 +1,11 @@
-import { InstanceState, InstanceTracker, JibriStatusState } from './instance_tracker';
+import { InstanceTracker } from './instance_tracker';
 import { Context } from './context';
 import { InstanceGroup } from './instance_group';
 import { CloudInstance } from './cloud_manager';
 import ShutdownManager from './shutdown_manager';
 import MetricsLoop from './metrics_loop';
 import ReconfigureManager from './reconfigure_manager';
+import { InstanceState, JibriStatusState } from './instance_store';
 
 export interface InstanceReport {
     instanceId: string;
@@ -179,8 +180,8 @@ export default class GroupReportGenerator {
 
     private getInstanceReportsMap(
         group: InstanceGroup,
-        instanceStates: Array<InstanceState>,
-        cloudInstances: Array<CloudInstance>,
+        instanceStates: InstanceState[],
+        cloudInstances: CloudInstance[],
     ): Map<string, InstanceReport> {
         const instanceReports = new Map<string, InstanceReport>();
 

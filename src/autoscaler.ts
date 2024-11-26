@@ -1,6 +1,7 @@
-import { InstanceMetric, InstanceTracker } from './instance_tracker';
+import { InstanceMetric } from './metrics_store';
+import { InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
-import Redlock from 'redlock';
+import { Lock } from 'redlock';
 import { Redis } from 'ioredis';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import LockManager from './lock_manager';
@@ -43,7 +44,7 @@ export default class AutoscaleProcessor {
     }
 
     async processAutoscalingByGroup(ctx: Context, groupName: string): Promise<boolean> {
-        let lock: Redlock.Lock = undefined;
+        let lock: Lock = undefined;
         try {
             lock = await this.lockManager.lockGroup(ctx, groupName);
         } catch (err) {
@@ -92,7 +93,7 @@ export default class AutoscaleProcessor {
             const scaleMetrics = await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
             await this.audit.updateLastAutoScalerRun(ctx, group.name, scaleMetrics);
         } finally {
-            await lock.unlock();
+            await lock.release();
         }
 
         return true;

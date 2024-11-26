@@ -1,7 +1,8 @@
 import { Redis } from 'ioredis';
 import { Context } from './context';
 import Audit from './audit';
-import { InstanceDetails, StatsReport } from './instance_tracker';
+import { StatsReport } from './instance_tracker';
+import { InstanceDetails } from './instance_store';
 
 export interface ReconfigureManagerOptions {
     redisClient: Redis;
@@ -24,7 +25,7 @@ export default class ReconfigureManager {
         return `instance:reconfigure:${instanceId}`;
     }
 
-    async setReconfigureDate(ctx: Context, instanceDetails: Array<InstanceDetails>): Promise<boolean> {
+    async setReconfigureDate(ctx: Context, instanceDetails: InstanceDetails[]): Promise<boolean> {
         const reconfigureDate = new Date().toISOString();
         const pipeline = this.redisClient.pipeline();
         for (const instance of instanceDetails) {

@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis';
-import { InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
+import { InstanceDetails, InstanceState } from './instance_store';
 
 export interface InstanceAudit {
     instanceId: string;

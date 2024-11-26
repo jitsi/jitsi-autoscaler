@@ -1,17 +1,17 @@
 // import { Redis } from 'ioredis';
-import { RedisClient } from 'redis';
-import Redlock from 'redlock';
+import Redis from 'ioredis';
+import Redlock, { Lock, ResourceLockedError } from 'redlock';
 import { Logger } from 'winston';
 import { Context } from './context';
 
 export interface LockManagerOptions {
-    redisClient: RedisClient;
+    redisClient: Redis;
     groupLockTTLMs: number;
     jobCreationLockTTL: number;
 }
 
 export default class LockManager {
-    private redisClient: RedisClient;
+    private redisClient: Redis;
     private groupProcessingLockManager: Redlock;
     private groupLockTTLMs: number;
     private jobCreationLockTTL: number;
@@ -38,22 +38,30 @@ export default class LockManager {
         this.groupProcessingLockManager.on('clientError', (err) => {
             this.logger.error('A redis error has occurred on the autoscalerLock:', err);
         });
+        this.groupProcessingLockManager.on('error', (err) => {
+            // Ignore cases where a resource is explicitly marked as locked on a client.
+            if (err instanceof ResourceLockedError) {
+                return;
+            }
+
+            this.logger.error('A redis error has occurred on the autoscalerLock:', err);
+        });
     }
 
-    async lockGroup(ctx: Context, group: string): Promise<Redlock.Lock> {
+    async lockGroup(ctx: Context, group: string): Promise<Lock> {
         ctx.logger.debug(`Obtaining lock ${LockManager.groupLockKey}`);
-        const lock = await this.groupProcessingLockManager.lock(
-            `${LockManager.groupLockKey}:${group}`,
+        const lock = await this.groupProcessingLockManager.acquire(
+            [`${LockManager.groupLockKey}:${group}`],
             this.groupLockTTLMs,
         );
         ctx.logger.debug(`Lock obtained for ${LockManager.groupLockKey}`);
         return lock;
     }
 
-    async lockJobCreation(ctx: Context): Promise<Redlock.Lock> {
+    async lockJobCreation(ctx: Context): Promise<Lock> {
         ctx.logger.debug(`Obtaining lock ${LockManager.groupJobsCreationLockKey}`);
-        const lock = await this.groupProcessingLockManager.lock(
-            LockManager.groupJobsCreationLockKey,
+        const lock = await this.groupProcessingLockManager.acquire(
+            [LockManager.groupJobsCreationLockKey],
             this.jobCreationLockTTL,
         );
         ctx.logger.debug(`Lock obtained for ${LockManager.groupJobsCreationLockKey}`);

@@ -4,7 +4,6 @@ import * as context from './context';
 import Handlers from './handlers';
 import Validator from './validator';
 import Redis, { RedisOptions } from 'ioredis';
-import { RedisClient, ClientOpts } from 'redis';
 import * as promClient from 'prom-client';
 import AutoscalerLogger from './logger';
 import shortid from 'shortid';
@@ -26,6 +25,10 @@ import { body, param, validationResult } from 'express-validator';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
 import ScalingManager from './scaling_options_manager';
+import RedisStore from './redis';
+import PrometheusClient from './prometheus';
+import MetricsStore from './metrics_store';
+import InstanceStore from './instance_store';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -48,28 +51,66 @@ const redisOptions = <RedisOptions>{
     host: config.RedisHost,
     port: config.RedisPort,
 };
-const redisQueueOptions = <ClientOpts>{
-    host: config.RedisHost,
-    port: config.RedisPort,
-};
 
 if (config.RedisPassword) {
     redisOptions.password = config.RedisPassword;
-    redisQueueOptions.password = config.RedisPassword;
 }
 
 if (config.RedisTLS) {
     redisOptions.tls = {};
-    redisQueueOptions.tls = {};
 }
 
 if (config.RedisDb) {
     redisOptions.db = config.RedisDb;
-    redisQueueOptions.db = config.RedisDb;
 }
 
 const redisClient = new Redis(redisOptions);
-const bareRedisClient = new RedisClient(redisQueueOptions);
+
+let metricsStore: MetricsStore;
+
+switch (config.MetricsStoreProvider) {
+    case 'prometheus':
+        metricsStore = new PrometheusClient({
+            logger,
+            endpoint: config.PrometheusURL,
+        });
+        break;
+    default:
+    case 'redis':
+        metricsStore = new RedisStore({
+            redisClient,
+            redisScanCount: config.RedisScanCount,
+            idleTTL: config.IdleTTL,
+            metricTTL: config.MetricTTL,
+            provisioningTTL: config.ProvisioningTTL,
+            shutdownStatusTTL: config.ShutdownStatusTTL,
+            groupRelatedDataTTL: config.GroupRelatedDataTTL,
+        });
+        break;
+}
+
+let instanceStore: InstanceStore;
+
+switch (config.InstanceStoreProvider) {
+    // case 'consul':
+    //     instanceStore = new ConsulClient({
+    //         logger,
+    //         endpoint: config.ConsulURL,
+    //     });
+    //     break;
+    default:
+    case 'redis':
+        instanceStore = new RedisStore({
+            redisClient,
+            redisScanCount: config.RedisScanCount,
+            idleTTL: config.IdleTTL,
+            metricTTL: config.MetricTTL,
+            provisioningTTL: config.ProvisioningTTL,
+            shutdownStatusTTL: config.ShutdownStatusTTL,
+            groupRelatedDataTTL: config.GroupRelatedDataTTL,
+        });
+        break;
+}
 
 mapp.get('/health', (req: express.Request, res: express.Response) => {
     logger.debug('Health check');
@@ -96,6 +137,7 @@ const audit = new Audit({
 
 const shutdownManager = new ShutdownManager({
     redisClient,
+    instanceStore,
     shutdownTTL: config.ShutDownTTL,
     audit,
 });
@@ -108,6 +150,8 @@ const reconfigureManager = new ReconfigureManager({
 
 const instanceTracker = new InstanceTracker({
     redisClient,
+    metricsStore,
+    instanceStore,
     redisScanCount: config.RedisScanCount,
     shutdownManager,
     audit,
@@ -133,7 +177,7 @@ const cloudManager = new CloudManager({
 });
 
 const lockManager: LockManager = new LockManager(logger, {
-    redisClient: bareRedisClient,
+    redisClient,
     jobCreationLockTTL: config.JobsCreationLockTTLMs,
     groupLockTTLMs: config.GroupLockTTLMs,
 });
@@ -210,7 +254,7 @@ const sanityLoop = new SanityLoop({
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
     logger,
-    queueRedisOptions: redisQueueOptions,
+    queueRedisOptions: { host: config.RedisHost, port: config.RedisPort, password: config.RedisPassword },
     lockManager,
     instanceGroupManager,
     instanceLauncher,

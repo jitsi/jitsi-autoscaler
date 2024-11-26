@@ -55,6 +55,9 @@ const env = cleanEnv(process.env, {
     SANITY_JOBS_CREATION_GRACE_PERIOD_SEC: num({ default: 240 }), // jobs for sanity check should be created once every SANITY_JOBS_CREATION_GRACE_PERIOD_SEC
     JOBS_CREATION_LOCK_TTL_MS: num({ default: 30000 }), // job creation lock ensures only one instance at a time can produce jobs
     SANITY_LOOP_PROCESSING_TIMEOUT_MS: num({ default: 180000 }), // max time allowed for a sanity job to finish processing until it times out - in ms
+    INSTANCE_STORE_PROVIDER: str({ default: 'redis' }),
+    METRICS_STORE_PROVIDER: str({ default: 'redis' }),
+    PROMETHEUS_URL: str({ default: 'http://localhost:9090' }),
     METRICS_LOOP_INTERVAL_MS: num({ default: 60000 }), // time in ms
     REPORT_EXT_CALL_MAX_TIME_IN_SECONDS: num({ default: 60 }),
     REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS: num({ default: 30 }),
@@ -146,6 +149,10 @@ export default {
     MetricsLoopIntervalMs: env.METRICS_LOOP_INTERVAL_MS,
     // metrics port
     MetricsServerPort: env.METRICS_PORT,
+    // instance storage provider
+    InstanceStoreProvider: env.INSTANCE_STORE_PROVIDER,
+    // metrics storage provider
+    MetricsStoreProvider: env.METRICS_STORE_PROVIDER,
     // other
     CloudProviders: cloudProviders,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,
@@ -163,4 +170,5 @@ export default {
             return Number(statusCodeAsString);
         },
     ),
+    PrometheusURL: env.PROMETHEUS_URL,
 };

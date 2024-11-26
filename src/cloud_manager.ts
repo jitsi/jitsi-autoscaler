@@ -1,9 +1,10 @@
 import { InstanceGroup } from './instance_group';
-import { InstanceTracker, InstanceDetails, InstanceState } from './instance_tracker';
+import { InstanceTracker } from './instance_tracker';
 import { Context } from './context';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
 import { CloudInstanceManagerSelector, CloudInstanceManagerSelectorOptions } from './cloud_instance_manager_selector';
+import { InstanceDetails, InstanceState } from './instance_store';
 
 export interface CloudRetryStrategy {
     maxTimeInSeconds: number;

@@ -2,8 +2,9 @@ import { Redis } from 'ioredis';
 import * as promClient from 'prom-client';
 import InstanceGroupManager, { InstanceGroup } from './instance_group';
 import { Context } from './context';
-import { InstanceState, InstanceTracker } from './instance_tracker';
+import { InstanceTracker } from './instance_tracker';
 import { CloudInstance } from './cloud_manager';
+import { InstanceState } from './instance_store';
 
 const groupsManaged = new promClient.Gauge({
     name: 'autoscaling_groups_managed',

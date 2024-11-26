@@ -148,7 +148,6 @@ const reconfigureManager = new ReconfigureManager({
 });
 
 const instanceTracker = new InstanceTracker({
-    redisClient,
     metricsStore,
     instanceStore,
     redisScanCount: config.RedisScanCount,

@@ -1,5 +1,4 @@
 import { Context } from './context';
-import Redis from 'ioredis';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
 import { InstanceGroup } from './instance_group';
@@ -58,7 +57,6 @@ export interface StatsReport {
 export interface InstanceTrackerOptions {
     metricsStore: MetricsStore;
     instanceStore: InstanceStore;
-    redisClient: Redis;
     redisScanCount: number;
     shutdownManager: ShutdownManager;
     audit: Audit;
@@ -70,7 +68,6 @@ export interface InstanceTrackerOptions {
 }
 
 export class InstanceTracker {
-    private redisClient: Redis;
     private readonly redisScanCount: number;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
@@ -83,7 +80,6 @@ export class InstanceTracker {
     private readonly groupRelatedDataTTL: number;
 
     constructor(options: InstanceTrackerOptions) {
-        this.redisClient = options.redisClient;
         this.metricsStore = options.metricsStore;
         this.instanceStore = options.instanceStore;
         this.redisScanCount = options.redisScanCount;

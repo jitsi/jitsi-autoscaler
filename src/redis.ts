@@ -1,3 +1,4 @@
+import { CloudInstance } from './cloud_manager';
 import { Context } from './context';
 import InstanceStore, { InstanceDetails, InstanceGroup, InstanceState } from './instance_store';
 import MetricsStore, { InstanceMetric } from './metrics_store';
@@ -11,6 +12,7 @@ export interface RedisMetricsOptions {
     provisioningTTL: number;
     shutdownStatusTTL: number;
     groupRelatedDataTTL: number;
+    serviceLevelMetricsTTL: number;
 }
 
 export default class RedisStore implements MetricsStore, InstanceStore {
@@ -21,6 +23,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
     private readonly provisioningTTL: number;
     private readonly shutdownStatusTTL: number;
     private readonly metricTTL: number;
+    private readonly serviceLevelMetricsTTL: number;
     private readonly groupRelatedDataTTL: number;
 
     constructor(options: RedisMetricsOptions) {
@@ -30,6 +33,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         this.shutdownStatusTTL = options.shutdownStatusTTL;
         this.metricTTL = options.metricTTL;
         this.groupRelatedDataTTL = options.groupRelatedDataTTL;
+        this.serviceLevelMetricsTTL = options.serviceLevelMetricsTTL;
     }
 
     async fetchInstanceMetrics(ctx: Context, group: string): Promise<InstanceMetric[]> {
@@ -506,6 +510,25 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);
         }
+        return true;
+    }
+
+    async saveMetricUnTrackedCount(groupName: string, count: number): Promise<boolean> {
+        const key = `service-metrics:${groupName}:untracked-count`;
+        const result = await this.redisClient.set(key, JSON.stringify(count), 'EX', this.serviceLevelMetricsTTL);
+        if (result !== 'OK') {
+            throw new Error(`unable to set ${key}`);
+        }
+        return true;
+    }
+
+    async saveCloudInstances(groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> {
+        await this.redisClient.set(
+            `cloud-instances-list:${groupName}`,
+            JSON.stringify(cloudInstances),
+            'EX',
+            this.serviceLevelMetricsTTL,
+        );
         return true;
     }
 }

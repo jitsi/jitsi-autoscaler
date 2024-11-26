@@ -1,8 +1,6 @@
 import { InstanceMetric } from './metrics_store';
 import { InstanceTracker } from './instance_tracker';
-import CloudManager from './cloud_manager';
 import { Lock } from 'redlock';
-import { Redis } from 'ioredis';
 import InstanceGroupManager from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
@@ -15,18 +13,14 @@ interface ScaleChoiceFunction {
 
 export interface AutoscaleProcessorOptions {
     instanceTracker: InstanceTracker;
-    cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
-    redisClient: Redis;
     audit: Audit;
 }
 
 export default class AutoscaleProcessor {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
-    private cloudManager: CloudManager;
-    private redisClient: Redis;
     private lockManager: LockManager;
     private audit: Audit;
 
@@ -35,10 +29,8 @@ export default class AutoscaleProcessor {
 
     constructor(options: AutoscaleProcessorOptions) {
         this.instanceTracker = options.instanceTracker;
-        this.cloudManager = options.cloudManager;
         this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
-        this.redisClient = options.redisClient;
         this.audit = options.audit;
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);

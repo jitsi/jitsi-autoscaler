@@ -168,6 +168,12 @@ export default class PrometheusClient implements MetricsStore {
         return this.pushMetric(metrics, labels, writer);
     }
 
+    saveMetricUnTrackedCount(groupName: string, count: number, writer = <PrometheusWriter>{}): Promise<boolean> {
+        const metrics = { autoscaler_untracked_instance_count: count };
+        const labels = { group: groupName };
+        return this.pushMetric(metrics, labels, writer);
+    }
+
     async cleanInstanceMetrics(_ctx: Context, _group: string): Promise<boolean> {
         return true;
     }

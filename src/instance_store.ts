@@ -1,3 +1,4 @@
+import { CloudInstance } from './cloud_manager';
 import { Context } from './context';
 
 export interface InstanceGroup {
@@ -172,6 +173,9 @@ interface InstanceStore {
     // key related methods
     checkValue: { (key: string): Promise<boolean> };
     setValue: { (key: string, value: string, ttl: number): Promise<boolean> };
+
+    // sanity related
+    saveCloudInstances: { (groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> };
 }
 
 export default InstanceStore;

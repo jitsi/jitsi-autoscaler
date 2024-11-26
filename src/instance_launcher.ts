@@ -1,8 +1,6 @@
 import { InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
 import InstanceGroupManager from './instance_group';
-import { Redis } from 'ioredis';
-import LockManager from './lock_manager';
 import { Context } from './context';
 import * as promClient from 'prom-client';
 import ShutdownManager from './shutdown_manager';
@@ -33,8 +31,6 @@ export interface InstanceLauncherOptions {
     instanceTracker: InstanceTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
-    lockManager: LockManager;
-    redisClient: Redis;
     shutdownManager: ShutdownManager;
     audit: Audit;
     metricsLoop: MetricsLoop;
@@ -45,8 +41,6 @@ export default class InstanceLauncher {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
-    private redisClient: Redis;
-    private lockManager: LockManager;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
     private metricsLoop: MetricsLoop;
@@ -55,8 +49,6 @@ export default class InstanceLauncher {
         this.instanceTracker = options.instanceTracker;
         this.cloudManager = options.cloudManager;
         this.instanceGroupManager = options.instanceGroupManager;
-        this.lockManager = options.lockManager;
-        this.redisClient = options.redisClient;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
         this.metricsLoop = options.metricsLoop;

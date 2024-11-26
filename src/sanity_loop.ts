@@ -2,12 +2,12 @@ import { Context } from './context';
 import GroupReportGenerator from './group_report';
 import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
 import InstanceGroupManager from './instance_group';
-import { Redis } from 'ioredis';
-import { InstanceGroup } from './instance_store';
+import InstanceStore, { InstanceGroup } from './instance_store';
+import MetricsStore from './metrics_store';
 
 export interface SanityLoopOptions {
-    redisClient: Redis;
-    metricsTTL: number;
+    metricsStore: MetricsStore;
+    instanceStore: InstanceStore;
     cloudManager: CloudManager;
     reportExtCallRetryStrategy: CloudRetryStrategy;
     groupReportGenerator: GroupReportGenerator;
@@ -19,16 +19,16 @@ export default class SanityLoop {
     private reportExtCallRetryStrategy: CloudRetryStrategy;
     private groupReportGenerator: GroupReportGenerator;
     private instanceGroupManager: InstanceGroupManager;
-    private redisClient: Redis;
-    private metricsTTL: number;
+    private metricsStore: MetricsStore;
+    private instanceStore: InstanceStore;
 
     constructor(options: SanityLoopOptions) {
         this.cloudManager = options.cloudManager;
         this.reportExtCallRetryStrategy = options.reportExtCallRetryStrategy;
         this.groupReportGenerator = options.groupReportGenerator;
         this.instanceGroupManager = options.instanceGroupManager;
-        this.redisClient = options.redisClient;
-        this.metricsTTL = options.metricsTTL;
+        this.metricsStore = options.metricsStore;
+        this.instanceStore = options.instanceStore;
 
         this.reportUntrackedInstances = this.reportUntrackedInstances.bind(this);
     }
@@ -66,20 +66,10 @@ export default class SanityLoop {
     }
 
     async saveMetricUnTrackedCount(groupName: string, count: number): Promise<boolean> {
-        const key = `service-metrics:${groupName}:untracked-count`;
-        const result = await this.redisClient.set(key, JSON.stringify(count), 'EX', this.metricsTTL);
-        if (result !== 'OK') {
-            throw new Error(`unable to set ${key}`);
-        }
-        return true;
+        return this.metricsStore.saveMetricUnTrackedCount(groupName, count);
     }
 
-    private async saveCloudInstances(groupName: string, cloudInstances: Array<CloudInstance>) {
-        await this.redisClient.set(
-            `cloud-instances-list:${groupName}`,
-            JSON.stringify(cloudInstances),
-            'EX',
-            this.metricsTTL,
-        );
+    private async saveCloudInstances(groupName: string, cloudInstances: CloudInstance[]) {
+        return this.instanceStore.saveCloudInstances(groupName, cloudInstances);
     }
 }

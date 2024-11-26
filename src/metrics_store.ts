@@ -6,22 +6,15 @@ export interface InstanceMetric {
     value: number;
 }
 
-interface CleanInstanceMetrics {
-    (ctx: Context, group: string): Promise<boolean>;
-}
-
-interface FetchInstanceMetrics {
-    (ctx: Context, group: string): Promise<InstanceMetric[]>;
-}
-
-interface WriteInstanceMetric {
-    (ctx: Context, group: string, item: InstanceMetric): Promise<boolean>;
-}
-
 interface MetricsStore {
-    fetchInstanceMetrics: FetchInstanceMetrics;
-    writeInstanceMetric: WriteInstanceMetric;
-    cleanInstanceMetrics: CleanInstanceMetrics;
+    fetchInstanceMetrics: {
+        (ctx: Context, group: string): Promise<InstanceMetric[]>;
+    };
+    writeInstanceMetric: {
+        (ctx: Context, group: string, item: InstanceMetric): Promise<boolean>;
+    };
+    cleanInstanceMetrics: { (ctx: Context, group: string): Promise<boolean> };
+    saveMetricUnTrackedCount: { (groupName: string, count: number): Promise<boolean> };
 }
 
 export default MetricsStore;

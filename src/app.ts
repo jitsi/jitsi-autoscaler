@@ -85,6 +85,7 @@ switch (config.MetricsStoreProvider) {
             provisioningTTL: config.ProvisioningTTL,
             shutdownStatusTTL: config.ShutdownStatusTTL,
             groupRelatedDataTTL: config.GroupRelatedDataTTL,
+            serviceLevelMetricsTTL: config.ServiceLevelMetricsTTL,
         });
         break;
 }
@@ -108,6 +109,7 @@ switch (config.InstanceStoreProvider) {
             provisioningTTL: config.ProvisioningTTL,
             shutdownStatusTTL: config.ShutdownStatusTTL,
             groupRelatedDataTTL: config.GroupRelatedDataTTL,
+            serviceLevelMetricsTTL: config.ServiceLevelMetricsTTL,
         });
         break;
 }
@@ -194,10 +196,8 @@ instanceGroupManager.init(initCtx).catch((err) => {
 
 const autoscaleProcessor = new AutoscaleProcessor({
     instanceTracker,
-    cloudManager,
     instanceGroupManager,
     lockManager,
-    redisClient,
     audit,
 });
 
@@ -214,8 +214,6 @@ const instanceLauncher = new InstanceLauncher({
     instanceTracker,
     cloudManager,
     instanceGroupManager,
-    lockManager,
-    redisClient,
     shutdownManager,
     audit,
     metricsLoop,
@@ -229,8 +227,8 @@ const groupReportGenerator = new GroupReportGenerator({
 });
 
 const sanityLoop = new SanityLoop({
-    redisClient,
-    metricsTTL: config.ServiceLevelMetricsTTL,
+    metricsStore,
+    instanceStore,
     cloudManager,
     reportExtCallRetryStrategy: {
         maxTimeInSeconds: config.ReportExtCallMaxTimeInSeconds,

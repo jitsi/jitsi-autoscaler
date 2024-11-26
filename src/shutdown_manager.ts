@@ -1,11 +1,9 @@
-import { Redis } from 'ioredis';
 import { Context } from './context';
 import Audit from './audit';
 import InstanceStore, { InstanceDetails } from './instance_store';
 
 export interface ShutdownManagerOptions {
     instanceStore: InstanceStore;
-    redisClient: Redis;
     shutdownTTL: number;
     audit: Audit;
 }

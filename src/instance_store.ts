@@ -115,6 +115,14 @@ interface InstanceStore {
     };
     setScaleDownProtected: { (ctx: Context, instanceId: string, protectedTTL: number, mode: string): Promise<boolean> };
     areScaleDownProtected: { (ctx: Context, instanceIds: string[]): Promise<boolean[]> };
+
+    // reconfigure related methods
+    setReconfigureDate: {
+        (ctx: Context, instanceDetails: InstanceDetails[], date: string, ttl: number): Promise<boolean>;
+    };
+    unsetReconfigureDate: { (ctx: Context, instanceId: string, group: string): Promise<boolean> };
+    getReconfigureDates: { (ctx: Context, instanceIds: string[]): Promise<string[]> };
+    getReconfigureDate: { (ctx: Context, instanceId: string): Promise<string> };
 }
 
 export default InstanceStore;

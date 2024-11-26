@@ -136,14 +136,13 @@ const audit = new Audit({
 });
 
 const shutdownManager = new ShutdownManager({
-    redisClient,
     instanceStore,
     shutdownTTL: config.ShutDownTTL,
     audit,
 });
 
 const reconfigureManager = new ReconfigureManager({
-    redisClient,
+    instanceStore,
     reconfigureTTL: config.ReconfigureTTL,
     audit,
 });

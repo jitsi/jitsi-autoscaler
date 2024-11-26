@@ -339,4 +339,55 @@ export default class RedisStore implements MetricsStore, InstanceStore {
             return [];
         }
     }
+
+    reconfigureKey(instanceId: string): string {
+        return `instance:reconfigure:${instanceId}`;
+    }
+
+    async setReconfigureDate(
+        ctx: Context,
+        instanceDetails: InstanceDetails[],
+        reconfigureDate = new Date().toISOString(),
+        ttl = 86400,
+    ): Promise<boolean> {
+        const pipeline = this.redisClient.pipeline();
+        for (const instance of instanceDetails) {
+            const key = this.reconfigureKey(instance.instanceId);
+            ctx.logger.debug('Writing reconfigure date', { key, reconfigureDate });
+            pipeline.set(key, reconfigureDate, 'EX', ttl);
+        }
+        await pipeline.exec();
+        return true;
+    }
+
+    async unsetReconfigureDate(ctx: Context, instanceId: string, group: string): Promise<boolean> {
+        const key = this.reconfigureKey(instanceId);
+        const res = await this.redisClient.del(key);
+        ctx.logger.debug('Remove reconfigure value', { key, res, group });
+        return true;
+    }
+
+    async getReconfigureDates(ctx: Context, instanceIds: string[]): Promise<string[]> {
+        const pipeline = this.redisClient.pipeline();
+        instanceIds.forEach((instanceId) => {
+            const key = this.reconfigureKey(instanceId);
+            pipeline.get(key);
+        });
+        const instances = await pipeline.exec();
+        if (instances) {
+            return instances.map((instance: [error: Error | null, result: unknown]) => {
+                return <string>instance[1];
+            });
+        } else {
+            ctx.logger.error('ReconfigureDates Failed in pipeline.exec()');
+            return [];
+        }
+    }
+
+    async getReconfigureDate(ctx: Context, instanceId: string): Promise<string> {
+        const key = this.reconfigureKey(instanceId);
+        const res = await this.redisClient.get(key);
+        ctx.logger.debug('Read reconfigure value', { key, res });
+        return res;
+    }
 }

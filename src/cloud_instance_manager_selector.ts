@@ -3,9 +3,12 @@ import CustomInstanceManager from './custom_instance_manager';
 import NomadInstanceManager from './nomad_instance_manager';
 import DigitalOceanInstanceManager from './digital_ocean_instance_manager';
 import { CloudInstanceManager } from './cloud_instance_manager';
+import OracleInstancePoolManager from './oracle_instance_pool_manager';
+import { InstanceTracker } from './instance_tracker';
 
 export interface CloudInstanceManagerSelectorOptions {
     cloudProviders: string[];
+    instanceTracker: InstanceTracker;
     isDryRun: boolean;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
@@ -19,6 +22,7 @@ export interface CloudInstanceManagerSelectorOptions {
 
 export class CloudInstanceManagerSelector {
     private oracleInstanceManager: OracleInstanceManager;
+    private oracleInstancePoolManager: OracleInstancePoolManager;
     private digitalOceanInstanceManager: DigitalOceanInstanceManager;
     private customInstanceManager: CustomInstanceManager;
     private nomadInstanceManager: NomadInstanceManager;
@@ -27,6 +31,15 @@ export class CloudInstanceManagerSelector {
         if (options.cloudProviders.includes('oracle')) {
             this.oracleInstanceManager = new OracleInstanceManager({
                 isDryRun: options.isDryRun,
+                ociConfigurationFilePath: options.ociConfigurationFilePath,
+                ociConfigurationProfile: options.ociConfigurationProfile,
+            });
+        }
+
+        if (options.cloudProviders.includes('oraclepool')) {
+            this.oracleInstancePoolManager = new OracleInstancePoolManager({
+                isDryRun: options.isDryRun,
+                instanceTracker: options.instanceTracker,
                 ociConfigurationFilePath: options.ociConfigurationFilePath,
                 ociConfigurationProfile: options.ociConfigurationProfile,
             });
@@ -57,6 +70,8 @@ export class CloudInstanceManagerSelector {
         switch (cloud) {
             case 'oracle':
                 return this.oracleInstanceManager;
+            case 'oraclepool':
+                return this.oracleInstancePoolManager;
             case 'digitalocean':
                 return this.digitalOceanInstanceManager;
             case 'nomad':

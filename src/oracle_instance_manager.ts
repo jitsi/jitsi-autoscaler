@@ -7,6 +7,7 @@ import { ResourceSearchClient } from 'oci-resourcesearch';
 import * as resourceSearch from 'oci-resourcesearch';
 import { CloudRetryStrategy } from './cloud_manager';
 import { AbstractCloudInstanceManager, CloudInstanceManager, CloudInstance } from './cloud_instance_manager';
+import { InstanceState } from './instance_tracker';
 
 interface FaultDomainMap {
     [key: string]: string[];
@@ -43,7 +44,7 @@ export default class OracleInstanceManager implements CloudInstanceManager {
     async launchInstances(
         ctx: Context,
         group: InstanceGroup,
-        groupCurrentCount: number,
+        currentInventory: InstanceState[],
         quantity: number,
     ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
@@ -57,6 +58,7 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         for (let i = 0; i < quantity; i++) {
             indexes.push(i);
         }
+        const groupCurrentCount = currentInventory.length;
 
         const result = await Promise.all(
             indexes.map(async (index) => {

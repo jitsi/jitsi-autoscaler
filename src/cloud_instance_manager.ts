@@ -1,6 +1,7 @@
 import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { CloudRetryStrategy } from './cloud_manager';
+import { InstanceState } from './instance_tracker';
 
 export interface CloudInstance {
     instanceId: string;
@@ -12,7 +13,7 @@ export interface CloudInstanceManager {
     launchInstances(
         ctx: Context,
         group: InstanceGroup,
-        groupCurrentCount: number,
+        currentInventory: InstanceState[],
         quantity: number,
     ): Promise<Array<string | boolean>>;
 
@@ -33,7 +34,7 @@ export abstract class AbstractCloudInstanceManager implements CloudInstanceManag
     async launchInstances(
         ctx: Context,
         group: InstanceGroup,
-        groupCurrentCount: number,
+        currentInventory: InstanceState[],
         quantity: number,
     ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[CloudInstanceManager] Launching a batch of ${quantity} instances in group ${group.name}`);

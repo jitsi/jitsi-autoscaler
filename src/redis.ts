@@ -34,6 +34,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         this.metricTTL = options.metricTTL;
         this.groupRelatedDataTTL = options.groupRelatedDataTTL;
         this.serviceLevelMetricsTTL = options.serviceLevelMetricsTTL;
+        this.redisScanCount = options.redisScanCount;
     }
 
     async fetchInstanceMetrics(ctx: Context, group: string): Promise<InstanceMetric[]> {

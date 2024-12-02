@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import test, { afterEach, describe, mock } from 'node:test';
 
 import { InstanceTracker } from '../instance_tracker';
+import { mockStore } from './mock_store';
 
 describe('InstanceTracker', () => {
     let context = {
@@ -48,25 +49,6 @@ describe('InstanceTracker', () => {
             scaleUpPeriodsCount: 2,
             scaleDownPeriodsCount: 2,
         },
-    };
-
-    const mockStore = {
-        fetchInstanceMetrics: mock.fn(() => [
-            { value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 350 },
-        ]),
-
-        cleanInstanceMetrics: mock.fn(),
-
-        writeInstanceMetric: mock.fn(),
-
-        fetchInstanceStates: mock.fn((ctx: Context, group: string) => {
-            switch (provider) {
-                default:
-                    // redis
-                    return redisStore.fetchInstanceStates(ctx, group);
-            }
-        }),
-        filterOutAndTrimExpiredStates: mock.fn((ctx: Context, group: string, states: InstanceState[]) => states),
     };
 
     const instanceTracker = new InstanceTracker({

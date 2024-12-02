@@ -1,7 +1,7 @@
 import { Context } from './context';
 import InstanceGroupManager from './instance_group';
 import { FullScalingOptionsRequest, FullScalingOptionsResponse, ScalingOptionsRequest } from './handlers';
-import { Lock } from 'redlock';
+import { AutoscalerLock } from './lock';
 import LockManager from './lock_manager';
 import { InstanceGroup } from './instance_store';
 
@@ -83,7 +83,7 @@ export default class ScalingManager {
         request: FullScalingOptionsRequest,
         group: InstanceGroup,
     ): Promise<boolean> {
-        let lock: Lock = undefined;
+        let lock: AutoscalerLock = undefined;
         let success = true;
         try {
             lock = await this.lockManager.lockGroup(ctx, group.name);

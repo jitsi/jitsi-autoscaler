@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { InstanceTracker, StatsReport } from './instance_tracker';
 import InstanceGroupManager from './instance_group';
 import LockManager from './lock_manager';
-import { Lock } from 'redlock';
+import { AutoscalerLock } from './lock';
 import ShutdownManager from './shutdown_manager';
 import ReconfigureManager from './reconfigure_manager';
 import GroupReportGenerator from './group_report';
@@ -237,7 +237,7 @@ class Handlers {
 
     async updateDesiredCount(req: Request, res: Response): Promise<void> {
         const request: InstanceGroupDesiredValuesRequest = req.body;
-        const lock: Lock = await this.lockManager.lockGroup(req.context, req.params.name);
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
             const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
             if (instanceGroup) {
@@ -266,7 +266,7 @@ class Handlers {
     async updateScalingActivities(req: Request, res: Response): Promise<void> {
         const scalingActivitiesRequest: InstanceGroupScalingActivitiesRequest = req.body;
 
-        const lock: Lock = await this.lockManager.lockGroup(req.context, req.params.name);
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
             const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
             if (instanceGroup) {
@@ -328,7 +328,7 @@ class Handlers {
 
     async updateInstanceConfiguration(req: Request, res: Response): Promise<void> {
         const instanceConfigurationUpdateRequest: InstanceConfigurationUpdateRequest = req.body;
-        const lock: Lock = await this.lockManager.lockGroup(req.context, req.params.name);
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
             const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
             if (instanceGroup) {
@@ -351,7 +351,7 @@ class Handlers {
             res.send({ errors: ['The request param group name must match group name in the body'] });
             return;
         }
-        const lock: Lock = await this.lockManager.lockGroup(req.context, instanceGroup.name);
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, instanceGroup.name);
         try {
             await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
             await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, instanceGroup);
@@ -401,7 +401,7 @@ class Handlers {
     }
 
     async deleteInstanceGroup(req: Request, res: Response): Promise<void> {
-        const lock: Lock = await this.lockManager.lockGroup(req.context, req.params.name);
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
             const instanceGroups = await this.instanceGroupManager.deleteInstanceGroup(req.context, req.params.name);
 
@@ -451,7 +451,7 @@ class Handlers {
         const currentGroupsMap = await this.instanceGroupManager.getAllInstanceGroupsAsMap(req.context);
         await Promise.all(
             initialGroups.map(async (initialGroup) => {
-                const lock: Lock = await this.lockManager.lockGroup(req.context, initialGroup.name);
+                const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, initialGroup.name);
 
                 try {
                     if (currentGroupsMap.has(initialGroup.name)) {
@@ -481,7 +481,7 @@ class Handlers {
 
     async launchProtectedInstanceGroup(req: Request, res: Response): Promise<void> {
         const groupName = req.params.name;
-        const lock: Lock = await this.lockManager.lockGroup(req.context, groupName);
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, groupName);
         try {
             const requestBody = req.body;
             const scaleDownProtectedTTL = requestBody.protectedTTLSec;
@@ -537,7 +537,7 @@ class Handlers {
 
     async updateScalingOptions(req: Request, res: Response): Promise<void> {
         const scalingOptionsRequest: InstanceGroupScalingOptionsRequest = req.body;
-        const lock: Lock = await this.lockManager.lockGroup(req.context, req.params.name);
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
             const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
             if (instanceGroup) {

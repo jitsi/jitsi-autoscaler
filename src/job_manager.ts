@@ -7,7 +7,7 @@ import { ClientOpts } from 'redis';
 import InstanceLauncher from './instance_launcher';
 import AutoscaleProcessor from './autoscaler';
 import LockManager from './lock_manager';
-import { Lock } from 'redlock';
+import { AutoscalerLock } from './lock';
 import * as promClient from 'prom-client';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
@@ -250,7 +250,7 @@ export default class JobManager {
             return;
         }
 
-        let lock: Lock = undefined;
+        let lock: AutoscalerLock = undefined;
         try {
             lock = await this.lockManager.lockJobCreation(ctx);
         } catch (err) {
@@ -289,7 +289,7 @@ export default class JobManager {
             return;
         }
 
-        let lock: Lock = undefined;
+        let lock: AutoscalerLock = undefined;
         try {
             lock = await this.lockManager.lockJobCreation(ctx);
         } catch (err) {

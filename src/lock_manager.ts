@@ -3,6 +3,7 @@ import Redis from 'ioredis';
 import Redlock, { Lock, ResourceLockedError } from 'redlock';
 import { Logger } from 'winston';
 import { Context } from './context';
+import AutoscalerLock, { AutoscalerLockManager } from './lock';
 
 export interface LockManagerOptions {
     redisClient: Redis;
@@ -10,7 +11,17 @@ export interface LockManagerOptions {
     jobCreationLockTTL: number;
 }
 
-export default class LockManager {
+export class RedLocker implements AutoscalerLock {
+    private lock: Lock;
+    constructor(lock: Lock) {
+        this.lock = lock;
+    }
+    async release(): Promise<void> {
+        await this.lock.release();
+    }
+}
+
+export default class LockManager implements AutoscalerLockManager {
     private redisClient: Redis;
     private groupProcessingLockManager: Redlock;
     private groupLockTTLMs: number;
@@ -48,23 +59,23 @@ export default class LockManager {
         });
     }
 
-    async lockGroup(ctx: Context, group: string): Promise<Lock> {
+    async lockGroup(ctx: Context, group: string): Promise<AutoscalerLock> {
         ctx.logger.debug(`Obtaining lock ${LockManager.groupLockKey}`);
         const lock = await this.groupProcessingLockManager.acquire(
             [`${LockManager.groupLockKey}:${group}`],
             this.groupLockTTLMs,
         );
         ctx.logger.debug(`Lock obtained for ${LockManager.groupLockKey}`);
-        return lock;
+        return new RedLocker(lock);
     }
 
-    async lockJobCreation(ctx: Context): Promise<Lock> {
+    async lockJobCreation(ctx: Context): Promise<AutoscalerLock> {
         ctx.logger.debug(`Obtaining lock ${LockManager.groupJobsCreationLockKey}`);
         const lock = await this.groupProcessingLockManager.acquire(
             [LockManager.groupJobsCreationLockKey],
             this.jobCreationLockTTL,
         );
         ctx.logger.debug(`Lock obtained for ${LockManager.groupJobsCreationLockKey}`);
-        return lock;
+        return new RedLocker(lock);
     }
 }

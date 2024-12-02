@@ -1,6 +1,6 @@
 import { InstanceMetric } from './metrics_store';
 import { InstanceTracker } from './instance_tracker';
-import { Lock } from 'redlock';
+import { AutoscalerLock } from './lock';
 import InstanceGroupManager from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
@@ -37,7 +37,7 @@ export default class AutoscaleProcessor {
     }
 
     async processAutoscalingByGroup(ctx: Context, groupName: string): Promise<boolean> {
-        let lock: Lock = undefined;
+        let lock: AutoscalerLock = undefined;
         try {
             lock = await this.lockManager.lockGroup(ctx, groupName);
         } catch (err) {

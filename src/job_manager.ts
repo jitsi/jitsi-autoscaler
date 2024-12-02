@@ -333,7 +333,7 @@ export default class JobManager {
 
     async createJobs(
         ctx: context.Context,
-        instanceGroupNames: Array<string>,
+        instanceGroupNames: string[],
         jobQueue: Queue,
         jobType: JobType,
         processingTimeoutMillis: number,

@@ -53,7 +53,7 @@ export default class OracleInstanceManager implements CloudInstanceManager {
 
         const faultDomainsByAD = await this.getFaultDomainsByAD(group.compartmentId, group.region, availabilityDomains);
 
-        const indexes: Array<number> = [];
+        const indexes = <number[]>[];
         for (let i = 0; i < quantity; i++) {
             indexes.push(i);
         }
@@ -259,8 +259,8 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         ctx: Context,
         group: InstanceGroup,
         cloudRetryStrategy: CloudRetryStrategy,
-    ): Promise<Array<CloudInstance>> {
-        const instances: Array<resourceSearch.models.ResourceSummary> = [];
+    ): Promise<CloudInstance[]> {
+        const instances = <resourceSearch.models.ResourceSummary[]>[];
 
         const resourceSearchClient = new ResourceSearchClient(
             {

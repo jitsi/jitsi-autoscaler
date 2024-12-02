@@ -10,7 +10,7 @@ export interface InstanceGroupManagerOptions {
 
 export default class InstanceGroupManager {
     private instanceStore: InstanceStore;
-    private readonly initialGroupList: Array<InstanceGroup>;
+    private readonly initialGroupList: InstanceGroup[];
     private readonly processingIntervalSeconds: number;
     private readonly sanityJobsIntervalSeconds: number;
 
@@ -38,7 +38,7 @@ export default class InstanceGroupManager {
         }
     }
 
-    getInitialGroups(): Array<InstanceGroup> {
+    getInitialGroups(): InstanceGroup[] {
         return this.initialGroupList;
     }
 
@@ -67,7 +67,7 @@ export default class InstanceGroupManager {
         type: string,
         region: string,
         environment: string,
-    ): Promise<Array<InstanceGroup>> {
+    ): Promise<InstanceGroup[]> {
         const groups = await this.getAllInstanceGroups(ctx);
 
         function byTypeRegionEnvironment(group: InstanceGroup) {
@@ -89,11 +89,11 @@ export default class InstanceGroupManager {
         return this.instanceStore.getAllInstanceGroupNames(ctx);
     }
 
-    async getAllInstanceGroups(ctx: Context): Promise<Array<InstanceGroup>> {
+    async getAllInstanceGroups(ctx: Context): Promise<InstanceGroup[]> {
         return this.instanceStore.getAllInstanceGroups(ctx);
     }
 
-    async getAllInstanceGroupsFiltered(ctx: Context, expectedTags: InstanceGroupTags): Promise<Array<InstanceGroup>> {
+    async getAllInstanceGroupsFiltered(ctx: Context, expectedTags: InstanceGroupTags): Promise<InstanceGroup[]> {
         const allGroups = await this.getAllInstanceGroups(ctx);
 
         const filteredGroups = allGroups.filter((group) => InstanceGroupManager.filterGroups(ctx, group, expectedTags));

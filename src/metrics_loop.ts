@@ -160,7 +160,7 @@ export default class MetricsLoop {
         untrackedInstancesCountCloud.remove(groupName);
     }
 
-    countNonProvisioningInstances(ctx: Context, states: Array<InstanceState>): number {
+    countNonProvisioningInstances(ctx: Context, states: InstanceState[]): number {
         let count = 0;
         states.forEach((instanceState) => {
             if (!instanceState.status.provisioning) {
@@ -200,8 +200,8 @@ export default class MetricsLoop {
         }
     }
 
-    async getCloudInstances(groupName: string): Promise<Array<CloudInstance>> {
-        let cloudInstances: Array<CloudInstance> = [];
+    async getCloudInstances(groupName: string): Promise<CloudInstance[]> {
+        let cloudInstances = <CloudInstance[]>[];
         const response = await this.redisClient.get(`cloud-instances-list:${groupName}`);
         if (response !== null && response.length > 0) {
             cloudInstances = JSON.parse(response);

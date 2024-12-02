@@ -32,7 +32,7 @@ export default class CustomInstanceManager extends AbstractCloudInstanceManager 
     ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[custom] Launching a batch of ${quantity} instances in group ${group.name}`);
 
-        const indexes: Array<number> = [];
+        const indexes = <number[]>[];
         for (let i = 0; i < quantity; i++) {
             indexes.push(i);
         }

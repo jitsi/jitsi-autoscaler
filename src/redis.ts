@@ -52,9 +52,9 @@ export default class RedisStore implements MetricsStore, InstanceStore {
     private async doFilterOutAndTrimExpiredStates(
         ctx: Context,
         groupInstancesStatesKey: string,
-        instanceStates: Array<InstanceState>,
-    ): Promise<Array<InstanceState>> {
-        const groupInstancesStatesResponse: Array<InstanceState> = [];
+        instanceStates: InstanceState[],
+    ): Promise<InstanceState[]> {
+        const groupInstancesStatesResponse = <InstanceState[]>[];
         const deletePipeline = this.redisClient.pipeline();
 
         const shutdownStatuses: boolean[] = await this.getShutdownStatuses(
@@ -94,7 +94,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
     }
 
     async fetchInstanceStates(ctx: Context, group: string): Promise<InstanceState[]> {
-        let states: Array<InstanceState> = [];
+        let states: InstanceState[] = [];
         const currentStart = process.hrtime();
         const groupInstancesStatesKey = this.getGroupInstancesStatesKey(group);
 
@@ -135,8 +135,8 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return states;
     }
 
-    private async getInstanceStates(fields: string[], groupInstancesStatesKey: string): Promise<Array<InstanceState>> {
-        const instanceStatesResponse: Array<InstanceState> = [];
+    private async getInstanceStates(fields: string[], groupInstancesStatesKey: string): Promise<InstanceState[]> {
+        const instanceStatesResponse: InstanceState[] = [];
         const pipeline = this.redisClient.pipeline();
 
         fields.forEach((instanceId: string) => {
@@ -245,7 +245,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return true;
     }
 
-    async getShutdownStatuses(ctx: Context, instanceIds: Array<string>): Promise<boolean[]> {
+    async getShutdownStatuses(ctx: Context, instanceIds: string[]): Promise<boolean[]> {
         const pipeline = this.redisClient.pipeline();
         instanceIds.forEach((instanceId) => {
             const key = this.shutDownKey(instanceId);
@@ -262,7 +262,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         }
     }
 
-    async getShutdownConfirmations(ctx: Context, instanceIds: Array<string>): Promise<(string | false)[]> {
+    async getShutdownConfirmations(ctx: Context, instanceIds: string[]): Promise<(string | false)[]> {
         const pipeline = this.redisClient.pipeline();
         instanceIds.forEach((instanceId) => {
             const key = this.shutDownConfirmedKey(instanceId);
@@ -292,7 +292,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
 
     async setShutdownConfirmation(
         ctx: Context,
-        instanceDetails: Array<InstanceDetails>,
+        instanceDetails: InstanceDetails[],
         status = new Date().toISOString(),
         shutdownTTL = 86400,
     ) {
@@ -328,7 +328,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return true;
     }
 
-    async areScaleDownProtected(ctx: Context, instanceIds: Array<string>): Promise<boolean[]> {
+    async areScaleDownProtected(ctx: Context, instanceIds: string[]): Promise<boolean[]> {
         const pipeline = this.redisClient.pipeline();
         instanceIds.forEach((instanceId) => {
             const key = this.protectedKey(instanceId);
@@ -451,8 +451,8 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return result;
     }
 
-    async getAllInstanceGroups(ctx: Context): Promise<Array<InstanceGroup>> {
-        const instanceGroups: Array<InstanceGroup> = [];
+    async getAllInstanceGroups(ctx: Context): Promise<InstanceGroup[]> {
+        const instanceGroups = <InstanceGroup[]>[];
 
         let cursor = '0';
         let scanCount = 0;

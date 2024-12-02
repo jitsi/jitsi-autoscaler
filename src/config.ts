@@ -94,7 +94,7 @@ if (cloudProviders.includes('digitalocean')) {
 }
 
 const groupsJsonRaw: string = fs.readFileSync(env.GROUP_CONFIG_FILE, { encoding: 'utf-8' });
-const groupList: Array<InstanceGroup> = JSON.parse(groupsJsonRaw)['groupEntries'];
+const groupList = <InstanceGroup[]>JSON.parse(groupsJsonRaw)['groupEntries'];
 
 groupList.forEach((group) => {
     if (!group.instanceConfigurationId) {

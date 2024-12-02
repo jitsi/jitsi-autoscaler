@@ -96,8 +96,8 @@ export default class AutoscaleProcessor {
         ctx: Context,
         group: InstanceGroup,
         count: number,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
-    ): Promise<Array<number>> {
+        metricInventoryPerPeriod: InstanceMetric[][],
+    ): Promise<number[]> {
         ctx.logger.debug(
             `[AutoScaler] Begin desired count adjustments for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
         );
@@ -112,7 +112,7 @@ export default class AutoscaleProcessor {
             return;
         }
 
-        const scaleMetrics: Array<number> = await this.instanceTracker.getSummaryMetricPerPeriod(
+        const scaleMetrics: number[] = await this.instanceTracker.getSummaryMetricPerPeriod(
             ctx,
             group,
             metricInventoryPerPeriod,
@@ -228,7 +228,7 @@ export default class AutoscaleProcessor {
 
     private evalScaleConditionForAllPeriods(
         ctx: Context,
-        scaleMetrics: Array<number>,
+        scaleMetrics: number[],
         count: number,
         group: InstanceGroup,
         direction: string,

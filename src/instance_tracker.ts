@@ -225,9 +225,9 @@ export class InstanceTracker {
     async getSummaryMetricPerPeriod(
         ctx: Context,
         group: InstanceGroup,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        metricInventoryPerPeriod: InstanceMetric[][],
         periodCount: number,
-    ): Promise<Array<number>> {
+    ): Promise<number[]> {
         switch (group.type) {
             case 'jibri':
             case 'sip-jibri':
@@ -242,9 +242,9 @@ export class InstanceTracker {
 
     async getAvailableMetricPerPeriod(
         ctx: Context,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        metricInventoryPerPeriod: InstanceMetric[][],
         periodCount: number,
-    ): Promise<Array<number>> {
+    ): Promise<number[]> {
         ctx.logger.debug(`Getting available metric per period for ${periodCount} periods`, {
             metricInventoryPerPeriod,
         });
@@ -256,9 +256,9 @@ export class InstanceTracker {
 
     async getAverageMetricPerPeriod(
         ctx: Context,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
+        metricInventoryPerPeriod: InstanceMetric[][],
         periodCount: number,
-    ): Promise<Array<number>> {
+    ): Promise<number[]> {
         ctx.logger.debug(`Getting average metric per period for ${periodCount} periods`, {
             metricInventoryPerPeriod,
         });
@@ -281,8 +281,8 @@ export class InstanceTracker {
         group: string,
         periodsCount: number,
         periodDurationSeconds: number,
-    ): Promise<Array<Array<InstanceMetric>>> {
-        const metricPoints: Array<Array<InstanceMetric>> = [];
+    ): Promise<InstanceMetric[][]> {
+        const metricPoints: InstanceMetric[][] = [];
         const currentTime = Date.now();
 
         await this.cleanInstanceMetrics(ctx, group);
@@ -357,7 +357,7 @@ export class InstanceTracker {
         return metricPoints;
     }
 
-    computeSummaryMetric(instanceMetrics: Array<InstanceMetric>, averageFlag = false): number {
+    computeSummaryMetric(instanceMetrics: InstanceMetric[], averageFlag = false): number {
         const dataPointsPerInstance: Map<string, number> = new Map();
         const aggregatedDataPerInstance: Map<string, number> = new Map();
 
@@ -375,7 +375,7 @@ export class InstanceTracker {
             aggregatedDataPerInstance.set(instanceMetric.instanceId, currentAggregatedValue + instanceMetric.value);
         });
 
-        const instanceIds: Array<string> = Array.from(aggregatedDataPerInstance.keys());
+        const instanceIds: string[] = Array.from(aggregatedDataPerInstance.keys());
 
         if (instanceIds.length > 0) {
             const fullSum = instanceIds
@@ -449,7 +449,7 @@ export class InstanceTracker {
         return shutdownStatus;
     }
 
-    async filterOutInstancesShuttingDown(ctx: Context, states: Array<InstanceState>): Promise<Array<InstanceState>> {
+    async filterOutInstancesShuttingDown(ctx: Context, states: InstanceState[]): Promise<InstanceState[]> {
         const instanceIds = states.map((state) => {
             return state.instanceId;
         });

@@ -40,7 +40,7 @@ export interface GroupReport {
     reconfigureErrorCount?: number;
     reconfigureScheduledCount?: number;
     scaleDownProtectedCount?: number;
-    instances?: Array<InstanceReport>;
+    instances?: InstanceReport[];
 }
 
 export interface GroupReportGeneratorOptions {
@@ -285,7 +285,7 @@ export default class GroupReportGenerator {
         return instanceReports;
     }
 
-    private async addReconfigureDate(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+    private async addReconfigureDate(ctx: Context, instanceReports: InstanceReport[]): Promise<void> {
         const reconfigureDates = await this.reconfigureManager.getReconfigureDates(
             ctx,
             instanceReports.map((instanceReport) => {
@@ -298,7 +298,7 @@ export default class GroupReportGenerator {
         }
     }
 
-    private async addShutdownStatus(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+    private async addShutdownStatus(ctx: Context, instanceReports: InstanceReport[]): Promise<void> {
         const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(
             ctx,
             instanceReports.map((instanceReport) => {
@@ -316,7 +316,7 @@ export default class GroupReportGenerator {
         });
     }
 
-    private async addShutdownConfirmations(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+    private async addShutdownConfirmations(ctx: Context, instanceReports: InstanceReport[]): Promise<void> {
         (
             await this.shutdownManager.getShutdownConfirmations(
                 ctx,
@@ -329,7 +329,7 @@ export default class GroupReportGenerator {
         });
     }
 
-    private async addShutdownProtectedStatus(ctx: Context, instanceReports: Array<InstanceReport>): Promise<void> {
+    private async addShutdownProtectedStatus(ctx: Context, instanceReports: InstanceReport[]): Promise<void> {
         const instanceReportsProtectedStatus: boolean[] = await this.shutdownManager.areScaleDownProtected(
             ctx,
             instanceReports.map((instanceReport) => {

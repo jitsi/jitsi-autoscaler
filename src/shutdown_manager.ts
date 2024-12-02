@@ -29,7 +29,7 @@ export default class ShutdownManager {
         return this.instanceStore.getShutdownStatuses(ctx, instanceIds);
     }
 
-    async getShutdownConfirmations(ctx: Context, instanceIds: Array<string>): Promise<(string | false)[]> {
+    async getShutdownConfirmations(ctx: Context, instanceIds: string[]): Promise<(string | false)[]> {
         return this.instanceStore.getShutdownConfirmations(ctx, instanceIds);
     }
 
@@ -43,7 +43,7 @@ export default class ShutdownManager {
 
     async setShutdownConfirmation(
         ctx: Context,
-        instanceDetails: Array<InstanceDetails>,
+        instanceDetails: InstanceDetails[],
         status = new Date().toISOString(),
     ): Promise<boolean> {
         const save = this.instanceStore.setShutdownConfirmation(ctx, instanceDetails, status, this.shutdownTTL);
@@ -60,7 +60,7 @@ export default class ShutdownManager {
         return this.instanceStore.setScaleDownProtected(ctx, instanceId, protectedTTL, mode);
     }
 
-    async areScaleDownProtected(ctx: Context, instanceIds: Array<string>): Promise<boolean[]> {
+    async areScaleDownProtected(ctx: Context, instanceIds: string[]): Promise<boolean[]> {
         return this.instanceStore.areScaleDownProtected(ctx, instanceIds);
     }
 }

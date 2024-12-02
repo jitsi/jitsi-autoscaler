@@ -8,7 +8,7 @@ import { InstanceGroup, InstanceDetails, InstanceState } from './instance_store'
 export interface CloudRetryStrategy {
     maxTimeInSeconds: number;
     maxDelayInSeconds: number;
-    retryableStatusCodes: Array<number>;
+    retryableStatusCodes: number[];
 }
 
 export interface CloudManagerOptions extends CloudInstanceManagerSelectorOptions {
@@ -106,7 +106,7 @@ export default class CloudManager {
         return scaleUpCount;
     }
 
-    async scaleDown(ctx: Context, group: InstanceGroup, instances: Array<InstanceDetails>): Promise<boolean> {
+    async scaleDown(ctx: Context, group: InstanceGroup, instances: InstanceDetails[]): Promise<boolean> {
         const groupName = group.name;
         ctx.logger.info('Scaling down', { groupName, instances });
         await this.shutdownManager.setShutdownStatus(ctx, instances);
@@ -125,7 +125,7 @@ export default class CloudManager {
         ctx: Context,
         group: InstanceGroup,
         cloudRetryStrategy: CloudRetryStrategy,
-    ): Promise<Array<CloudInstance>> {
+    ): Promise<CloudInstance[]> {
         const instanceManager = this.cloudInstanceManagerSelector.selectInstanceManager(group.cloud);
         if (!instanceManager) {
             ctx.logger.error(`Cloud type not configured: ${group.cloud}`);

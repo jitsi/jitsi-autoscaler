@@ -175,7 +175,7 @@ interface InstanceStore {
     setValue: { (key: string, value: string, ttl: number): Promise<boolean> };
 
     // sanity related
-    saveCloudInstances: { (groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> };
+    saveCloudInstances: { (ctx: Context, groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> };
 }
 
 export default InstanceStore;

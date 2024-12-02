@@ -71,7 +71,6 @@ let metricsStore: MetricsStore;
 switch (config.MetricsStoreProvider) {
     case 'prometheus':
         metricsStore = new PrometheusClient({
-            logger,
             endpoint: config.PrometheusURL,
         });
         break;

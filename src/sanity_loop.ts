@@ -47,14 +47,14 @@ export default class SanityLoop {
                 } ms`,
             );
             ctx.logger.debug(`Retrieved ${group.cloud} instance details for ${groupName}`, { cloudInstances });
-            await this.saveCloudInstances(group.name, cloudInstances);
+            await this.saveCloudInstances(ctx, group.name, cloudInstances);
 
             const groupReportStart = process.hrtime();
             const groupReport = await this.groupReportGenerator.generateReport(ctx, group, cloudInstances);
             const groupReportEnd = process.hrtime(groupReportStart);
             ctx.logger.info(`Retrieved group report in ${groupReportEnd[0] * 1000 + groupReportEnd[1] / 1000000} ms`);
 
-            await this.saveMetricUnTrackedCount(groupName, groupReport.unTrackedCount);
+            await this.saveMetricUnTrackedCount(ctx, groupName, groupReport.unTrackedCount);
             ctx.logger.info(
                 `Successfully saved cloud instances and untracked count ${groupReport.unTrackedCount} for ${groupName}`,
             );
@@ -65,11 +65,11 @@ export default class SanityLoop {
         }
     }
 
-    async saveMetricUnTrackedCount(groupName: string, count: number): Promise<boolean> {
-        return this.metricsStore.saveMetricUnTrackedCount(groupName, count);
+    async saveMetricUnTrackedCount(ctx: Context, groupName: string, count: number): Promise<boolean> {
+        return this.metricsStore.saveMetricUnTrackedCount(ctx, groupName, count);
     }
 
-    private async saveCloudInstances(groupName: string, cloudInstances: CloudInstance[]) {
-        return this.instanceStore.saveCloudInstances(groupName, cloudInstances);
+    private async saveCloudInstances(ctx: Context, groupName: string, cloudInstances: CloudInstance[]) {
+        return this.instanceStore.saveCloudInstances(ctx, groupName, cloudInstances);
     }
 }

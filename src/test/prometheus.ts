@@ -10,24 +10,19 @@ import { Result } from 'prometheus-remote-write';
 const asLogger = new AutoscalerLogger({ logLevel: 'debug' });
 const logger = asLogger.createLogger('debug');
 
-const options = <PrometheusOptions>{
-    logger,
-    endpoint: 'http://localhost:9090',
-};
-
-const client = new PrometheusClient(options);
-const driver = client.prometheusDriver();
-const writer = client.prometheusWriter();
+const driver = { rangeQuery: mock.fn(() => {}), query: mock.fn(() => {}) };
+const writer = { pushMetrics: mock.fn(() => {}) };
 const ctx = { logger };
 ctx.logger.debug = mock.fn();
 ctx.logger.error = mock.fn();
-writer.pushMetrics = mock.fn(
-    () =>
-        <Result>{
-            status: 204,
-            statusText: 'OK',
-        },
-);
+
+writer.pushMetrics = mock.fn(async (_metrics, _labels) => {
+    return <Result>{
+        status: 204,
+        statusText: 'OK',
+    };
+});
+
 driver.rangeQuery = mock.fn(
     () =>
         <Result>{
@@ -36,6 +31,16 @@ driver.rangeQuery = mock.fn(
             ],
         },
 );
+
+const options = <PrometheusOptions>{
+    logger,
+    endpoint: 'http://localhost:9090',
+    promDriver: driver,
+    promWriter: writer,
+};
+
+const client = new PrometheusClient(options);
+
 describe('PrometheusClient', () => {
     // const context = { logger: { debug: mock.fn() } };
 
@@ -102,5 +107,23 @@ describe('PrometheusClient', () => {
             const res = await client.fetchInstanceMetrics(ctx, group, driver);
             assert.strictEqual(res.length, 0);
         });
+    });
+
+    test('will save untracked count properly', async () => {
+        client.saveMetricUnTrackedCount('test', 1, writer);
+
+        driver.rangeQuery.mock.mockImplementationOnce(
+            () =>
+                <Result>{
+                    result: [
+                        {
+                            metric: { labels: { instance: 'test', group: 'test' } },
+                            values: [{ value: 1, time: new Date() }],
+                        },
+                    ],
+                },
+        );
+        const res = await client.prometheusRangeQuery('autoscaler_untracked_instance_count{group="test"}', driver);
+        assert.strictEqual(res.result[0].values[0].value, 1);
     });
 });

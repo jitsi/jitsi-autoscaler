@@ -514,16 +514,17 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return true;
     }
 
-    async saveMetricUnTrackedCount(groupName: string, count: number): Promise<boolean> {
+    async saveMetricUnTrackedCount(ctx: Context, groupName: string, count: number): Promise<boolean> {
         const key = `service-metrics:${groupName}:untracked-count`;
         const result = await this.redisClient.set(key, JSON.stringify(count), 'EX', this.serviceLevelMetricsTTL);
         if (result !== 'OK') {
+            ctx.logger.error('Error saving untracked count', { key, count });
             throw new Error(`unable to set ${key}`);
         }
         return true;
     }
 
-    async saveCloudInstances(groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> {
+    async saveCloudInstances(_ctx: Context, groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> {
         await this.redisClient.set(
             `cloud-instances-list:${groupName}`,
             JSON.stringify(cloudInstances),

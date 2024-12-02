@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis';
-import { InstanceDetails, InstanceState } from './instance_tracker';
 import { Context } from './context';
+import { InstanceDetails, InstanceState } from './instance_store';
 
 export interface InstanceAudit {
     instanceId: string;
@@ -23,7 +23,7 @@ export interface AutoScalerActionItem {
     count: number;
     oldDesiredCount: number;
     newDesiredCount: number;
-    scaleMetrics: Array<number>;
+    scaleMetrics: number[];
 }
 
 export interface LauncherActionItem {
@@ -38,7 +38,7 @@ export interface GroupAuditResponse {
     lastLauncherRun: string;
     lastAutoScalerRun: string;
     lastReconfigureRequest: string;
-    lastScaleMetrics?: Array<number>;
+    lastScaleMetrics?: number[];
     autoScalerActionItems?: AutoScalerActionItem[];
     launcherActionItems?: LauncherActionItem[];
 }
@@ -114,7 +114,7 @@ export default class Audit {
         return this.setInstanceValue(`audit:${groupName}:${instanceId}:request-to-launch`, value, this.auditTTL);
     }
 
-    async saveShutdownEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
+    async saveShutdownEvents(instanceDetails: InstanceDetails[]): Promise<void> {
         const pipeline = this.redisClient.pipeline();
         for (const instance of instanceDetails) {
             const value: InstanceAudit = {
@@ -132,7 +132,7 @@ export default class Audit {
         await pipeline.exec();
     }
 
-    async saveShutdownConfirmationEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
+    async saveShutdownConfirmationEvents(instanceDetails: InstanceDetails[]): Promise<void> {
         const pipeline = this.redisClient.pipeline();
         for (const instance of instanceDetails) {
             const value: InstanceAudit = {
@@ -164,7 +164,7 @@ export default class Audit {
         );
     }
 
-    async saveReconfigureEvents(instanceDetails: Array<InstanceDetails>): Promise<void> {
+    async saveReconfigureEvents(instanceDetails: InstanceDetails[]): Promise<void> {
         const pipeline = this.redisClient.pipeline();
         for (const instance of instanceDetails) {
             const value: InstanceAudit = {
@@ -242,7 +242,7 @@ export default class Audit {
         return updateResponse;
     }
 
-    async updateLastAutoScalerRun(ctx: Context, groupName: string, scaleMetrics: Array<number>): Promise<boolean> {
+    async updateLastAutoScalerRun(ctx: Context, groupName: string, scaleMetrics: number[]): Promise<boolean> {
         const updateLastAutoScalerStart = process.hrtime();
 
         // Extend TTL longer enough for the key to be deleted only after the group is deleted or no action is performed on it
@@ -315,7 +315,7 @@ export default class Audit {
     }
 
     async generateInstanceAudit(ctx: Context, groupName: string): Promise<InstanceAuditResponse[]> {
-        const instanceAudits: Array<InstanceAudit> = await this.getInstanceAudit(ctx, groupName);
+        const instanceAudits = await this.getInstanceAudit(ctx, groupName);
         instanceAudits.sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
 
         const instanceAuditResponseList: InstanceAuditResponse[] = [];
@@ -364,7 +364,7 @@ export default class Audit {
     }
 
     async generateGroupAudit(ctx: Context, groupName: string): Promise<GroupAuditResponse> {
-        const groupAudits: Array<GroupAudit> = await this.getGroupAudit(ctx, groupName);
+        const groupAudits = await this.getGroupAudit(ctx, groupName);
 
         const groupAuditResponse: GroupAuditResponse = {
             lastLauncherRun: 'unknown',
@@ -413,8 +413,8 @@ export default class Audit {
         return groupAuditResponse;
     }
 
-    async getInstanceAudit(ctx: Context, groupName: string): Promise<Array<InstanceAudit>> {
-        const audit: Array<InstanceAudit> = [];
+    async getInstanceAudit(ctx: Context, groupName: string): Promise<InstanceAudit[]> {
+        const audit = <InstanceAudit[]>[];
 
         let cursor = '0';
         do {
@@ -447,8 +447,8 @@ export default class Audit {
         return audit;
     }
 
-    async getGroupAudit(ctx: Context, groupName: string): Promise<Array<GroupAudit>> {
-        const audit: Array<GroupAudit> = [];
+    async getGroupAudit(ctx: Context, groupName: string): Promise<GroupAudit[]> {
+        const audit = <GroupAudit[]>[];
 
         const groupAuditStart = process.hrtime();
         const items: string[] = await this.redisClient.zrange(this.getGroupAuditActionsKey(groupName), 0, -1);

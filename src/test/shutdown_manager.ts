@@ -4,6 +4,7 @@
 import assert from 'node:assert';
 import test, { afterEach, describe, mock } from 'node:test';
 
+import RedisStore from '../redis';
 import ShutdownManager from '../shutdown_manager';
 
 describe('ShutdownManager', () => {
@@ -37,12 +38,13 @@ describe('ShutdownManager', () => {
         pipeline: mock.fn(() => mockPipeline),
     };
 
+    const instanceStore = new RedisStore({ redisClient });
     const audit = {
         log: mock.fn(),
     };
 
     const shutdownManager = new ShutdownManager({
-        redisClient,
+        instanceStore,
         audit,
         shutdownTTL: 86400,
     });

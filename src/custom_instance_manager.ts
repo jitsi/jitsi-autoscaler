@@ -1,7 +1,7 @@
 import { execFile } from 'child_process';
-import { InstanceGroup } from './instance_group';
 import { Context } from './context';
 import { AbstractCloudInstanceManager } from './cloud_instance_manager';
+import { InstanceGroup } from './instance_store';
 
 export interface CustomInstanceManagerOptions {
     isDryRun: boolean;
@@ -32,7 +32,7 @@ export default class CustomInstanceManager extends AbstractCloudInstanceManager 
     ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[custom] Launching a batch of ${quantity} instances in group ${group.name}`);
 
-        const indexes: Array<number> = [];
+        const indexes = <number[]>[];
         for (let i = 0; i < quantity; i++) {
             indexes.push(i);
         }

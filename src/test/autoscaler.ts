@@ -42,7 +42,7 @@ describe('AutoscaleProcessor', () => {
             scaleDownPeriodsCount: 2,
         },
     };
-    const lock = { unlock: mock.fn() };
+    const lock = { release: mock.fn() };
 
     const lockManager = {
         lockGroup: mock.fn(() => lock),

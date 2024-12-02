@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import test, { afterEach, describe, mock } from 'node:test';
 
 import { InstanceTracker } from '../instance_tracker';
+import RedisStore from '../redis';
 
 describe('InstanceTracker', () => {
     let context = {
@@ -61,8 +62,11 @@ describe('InstanceTracker', () => {
         },
     };
 
+    const redisStore = new RedisStore({ redisClient });
+
     const instanceTracker = new InstanceTracker({
-        redisClient,
+        instanceStore: redisStore,
+        metricsStore: redisStore,
         redisScanCount: 100,
         shutdownManager,
         audit,

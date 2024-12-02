@@ -1,13 +1,12 @@
-import { InstanceDetails, InstanceState, JibriStatusState, InstanceTracker } from './instance_tracker';
+import { InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
-import { Redis } from 'ioredis';
-import LockManager from './lock_manager';
+import InstanceGroupManager from './instance_group';
 import { Context } from './context';
 import * as promClient from 'prom-client';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
 import MetricsLoop from './metrics_loop';
+import { InstanceDetails, InstanceGroup, InstanceState, JibriStatusState } from './instance_store';
 
 const instancesLaunchedCounter = new promClient.Counter({
     name: 'autoscaling_instance_launched_total',
@@ -32,8 +31,6 @@ export interface InstanceLauncherOptions {
     instanceTracker: InstanceTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
-    lockManager: LockManager;
-    redisClient: Redis;
     shutdownManager: ShutdownManager;
     audit: Audit;
     metricsLoop: MetricsLoop;
@@ -44,8 +41,6 @@ export default class InstanceLauncher {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
-    private redisClient: Redis;
-    private lockManager: LockManager;
     private shutdownManager: ShutdownManager;
     private audit: Audit;
     private metricsLoop: MetricsLoop;
@@ -54,8 +49,6 @@ export default class InstanceLauncher {
         this.instanceTracker = options.instanceTracker;
         this.cloudManager = options.cloudManager;
         this.instanceGroupManager = options.instanceGroupManager;
-        this.lockManager = options.lockManager;
-        this.redisClient = options.redisClient;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
         this.metricsLoop = options.metricsLoop;
@@ -192,9 +185,9 @@ export default class InstanceLauncher {
     getJigasisForScaleDown(
         ctx: Context,
         group: InstanceGroup,
-        unprotectedInstances: Array<InstanceState>,
+        unprotectedInstances: InstanceState[],
         desiredScaleDownQuantity: number,
-    ): Array<InstanceDetails> {
+    ): InstanceDetails[] {
         // first sort by participant count
         unprotectedInstances.sort((a, b) => {
             const aParticipants = a.status.jigasiStatus ? a.status.jigasiStatus.participants : 0;
@@ -224,9 +217,9 @@ export default class InstanceLauncher {
     getNomadsForScaleDown(
         ctx: Context,
         group: InstanceGroup,
-        unprotectedInstances: Array<InstanceState>,
+        unprotectedInstances: InstanceState[],
         desiredScaleDownQuantity: number,
-    ): Array<InstanceDetails> {
+    ): InstanceDetails[] {
         // first sort by participant count
         unprotectedInstances.sort((a, b) => {
             const aAllocatedCPU = a.status.nomadStatus ? a.status.nomadStatus.allocatedCPU : 0;
@@ -255,9 +248,9 @@ export default class InstanceLauncher {
     getJVBsForScaleDown(
         ctx: Context,
         group: InstanceGroup,
-        unprotectedInstances: Array<InstanceState>,
+        unprotectedInstances: InstanceState[],
         desiredScaleDownQuantity: number,
-    ): Array<InstanceDetails> {
+    ): InstanceDetails[] {
         // first sort by participant count
         unprotectedInstances.sort((a, b) => {
             const aParticipants = a.status.jvbStatus ? a.status.jvbStatus.participants : 0;
@@ -287,9 +280,9 @@ export default class InstanceLauncher {
     getJibrisForScaleDown(
         ctx: Context,
         group: InstanceGroup,
-        unprotectedInstances: Array<InstanceState>,
+        unprotectedInstances: InstanceState[],
         desiredScaleDownQuantity: number,
-    ): Array<InstanceDetails> {
+    ): InstanceDetails[] {
         const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {
             ctx.logger.error(
@@ -329,15 +322,15 @@ export default class InstanceLauncher {
 
     async getInstancesForScaleDown(
         ctx: Context,
-        currentInventory: Array<InstanceState>,
+        currentInventory: InstanceState[],
         group: InstanceGroup,
-    ): Promise<Array<InstanceDetails>> {
+    ): Promise<InstanceDetails[]> {
         const desiredScaleDownQuantity =
             currentInventory.length - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
 
         const unprotectedInstances = await this.filterOutProtectedInstances(ctx, currentInventory);
 
-        let listOfInstancesForScaleDown: Array<InstanceDetails> = [];
+        let listOfInstancesForScaleDown: InstanceDetails[] = [];
         switch (group.type) {
             case 'jibri':
             case 'sip-jibri':
@@ -376,10 +369,7 @@ export default class InstanceLauncher {
         return listOfInstancesForScaleDown;
     }
 
-    async filterOutProtectedInstances(
-        ctx: Context,
-        instanceDetails: Array<InstanceState>,
-    ): Promise<Array<InstanceState>> {
+    async filterOutProtectedInstances(ctx: Context, instanceDetails: InstanceState[]): Promise<InstanceState[]> {
         const protectedInstances: boolean[] = await this.shutdownManager.areScaleDownProtected(
             ctx,
             instanceDetails.map((instance) => {
@@ -390,7 +380,7 @@ export default class InstanceLauncher {
         return instanceDetails.filter((instances, index) => !protectedInstances[index]);
     }
 
-    private getProvisioningOrWithoutStatusInstances(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+    private getProvisioningOrWithoutStatusInstances(instanceStates: InstanceState[]): InstanceDetails[] {
         const states = instanceStates.filter((instanceState) => {
             return (
                 (!instanceState.status.jibriStatus &&
@@ -403,7 +393,7 @@ export default class InstanceLauncher {
         return this.instanceTracker.mapToInstanceDetails(states);
     }
 
-    private getRunningInstances(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+    private getRunningInstances(instanceStates: InstanceState[]): InstanceDetails[] {
         const states = instanceStates.filter((instanceState) => {
             return (
                 (instanceState.status.jibriStatus ||
@@ -416,7 +406,7 @@ export default class InstanceLauncher {
         return this.instanceTracker.mapToInstanceDetails(states);
     }
 
-    private getAvailableJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+    private getAvailableJibris(instanceStates: InstanceState[]): InstanceDetails[] {
         const states = instanceStates.filter((instanceState) => {
             return (
                 instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Idle
@@ -425,7 +415,7 @@ export default class InstanceLauncher {
         return this.instanceTracker.mapToInstanceDetails(states);
     }
 
-    private getExpiredJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+    private getExpiredJibris(instanceStates: InstanceState[]): InstanceDetails[] {
         const states = instanceStates.filter((instanceState) => {
             return (
                 instanceState.status.jibriStatus &&
@@ -435,7 +425,7 @@ export default class InstanceLauncher {
         return this.instanceTracker.mapToInstanceDetails(states);
     }
 
-    private getBusyJibris(instanceStates: Array<InstanceState>): Array<InstanceDetails> {
+    private getBusyJibris(instanceStates: InstanceState[]): InstanceDetails[] {
         const states = instanceStates.filter((instanceState) => {
             return (
                 instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Busy

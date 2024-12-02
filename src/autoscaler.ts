@@ -1,11 +1,11 @@
-import { InstanceMetric, InstanceTracker } from './instance_tracker';
-import CloudManager from './cloud_manager';
-import Redlock from 'redlock';
-import { Redis } from 'ioredis';
-import InstanceGroupManager, { InstanceGroup } from './instance_group';
+import { InstanceMetric } from './metrics_store';
+import { InstanceTracker } from './instance_tracker';
+import { AutoscalerLock } from './lock';
+import InstanceGroupManager from './instance_group';
 import LockManager from './lock_manager';
 import { Context } from './context';
 import Audit from './audit';
+import { InstanceGroup } from './instance_store';
 
 interface ScaleChoiceFunction {
     (group: InstanceGroup, count: number, value: number): boolean;
@@ -13,18 +13,14 @@ interface ScaleChoiceFunction {
 
 export interface AutoscaleProcessorOptions {
     instanceTracker: InstanceTracker;
-    cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
     lockManager: LockManager;
-    redisClient: Redis;
     audit: Audit;
 }
 
 export default class AutoscaleProcessor {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
-    private cloudManager: CloudManager;
-    private redisClient: Redis;
     private lockManager: LockManager;
     private audit: Audit;
 
@@ -33,17 +29,15 @@ export default class AutoscaleProcessor {
 
     constructor(options: AutoscaleProcessorOptions) {
         this.instanceTracker = options.instanceTracker;
-        this.cloudManager = options.cloudManager;
         this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
-        this.redisClient = options.redisClient;
         this.audit = options.audit;
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
 
     async processAutoscalingByGroup(ctx: Context, groupName: string): Promise<boolean> {
-        let lock: Redlock.Lock = undefined;
+        let lock: AutoscalerLock = undefined;
         try {
             lock = await this.lockManager.lockGroup(ctx, groupName);
         } catch (err) {
@@ -92,7 +86,7 @@ export default class AutoscaleProcessor {
             const scaleMetrics = await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
             await this.audit.updateLastAutoScalerRun(ctx, group.name, scaleMetrics);
         } finally {
-            await lock.unlock();
+            await lock.release();
         }
 
         return true;
@@ -102,8 +96,8 @@ export default class AutoscaleProcessor {
         ctx: Context,
         group: InstanceGroup,
         count: number,
-        metricInventoryPerPeriod: Array<Array<InstanceMetric>>,
-    ): Promise<Array<number>> {
+        metricInventoryPerPeriod: InstanceMetric[][],
+    ): Promise<number[]> {
         ctx.logger.debug(
             `[AutoScaler] Begin desired count adjustments for group ${group.name} with ${count} instances and current desired count ${group.scalingOptions.desiredCount}`,
         );
@@ -118,7 +112,7 @@ export default class AutoscaleProcessor {
             return;
         }
 
-        const scaleMetrics: Array<number> = await this.instanceTracker.getSummaryMetricPerPeriod(
+        const scaleMetrics: number[] = await this.instanceTracker.getSummaryMetricPerPeriod(
             ctx,
             group,
             metricInventoryPerPeriod,
@@ -234,7 +228,7 @@ export default class AutoscaleProcessor {
 
     private evalScaleConditionForAllPeriods(
         ctx: Context,
-        scaleMetrics: Array<number>,
+        scaleMetrics: number[],
         count: number,
         group: InstanceGroup,
         direction: string,

@@ -7,7 +7,7 @@ import { ClientOpts } from 'redis';
 import InstanceLauncher from './instance_launcher';
 import AutoscaleProcessor from './autoscaler';
 import LockManager from './lock_manager';
-import Redlock from 'redlock';
+import { AutoscalerLock } from './lock';
 import * as promClient from 'prom-client';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
@@ -250,7 +250,7 @@ export default class JobManager {
             return;
         }
 
-        let lock: Redlock.Lock = undefined;
+        let lock: AutoscalerLock = undefined;
         try {
             lock = await this.lockManager.lockJobCreation(ctx);
         } catch (err) {
@@ -279,7 +279,7 @@ export default class JobManager {
             ctx.logger.error(`[JobManager] Error while creating sanity jobs for group ${err}`);
             jobCreateFailureCounter.inc({ type: JobType.Sanity });
         } finally {
-            await lock.unlock();
+            await lock.release();
         }
     }
 
@@ -289,7 +289,7 @@ export default class JobManager {
             return;
         }
 
-        let lock: Redlock.Lock = undefined;
+        let lock: AutoscalerLock = undefined;
         try {
             lock = await this.lockManager.lockJobCreation(ctx);
         } catch (err) {
@@ -327,13 +327,13 @@ export default class JobManager {
             ctx.logger.error(`[JobManager] Error while creating jobs for group ${err}`);
             jobCreateFailureCounter.inc();
         } finally {
-            await lock.unlock();
+            await lock.release();
         }
     }
 
     async createJobs(
         ctx: context.Context,
-        instanceGroupNames: Array<string>,
+        instanceGroupNames: string[],
         jobQueue: Queue,
         jobType: JobType,
         processingTimeoutMillis: number,

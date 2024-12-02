@@ -76,7 +76,7 @@ switch (config.MetricsStoreProvider) {
         });
         break;
     default:
-    case 'redis':
+        // redis
         metricsStore = new RedisStore({
             redisClient,
             redisScanCount: config.RedisScanCount,
@@ -100,7 +100,7 @@ switch (config.InstanceStoreProvider) {
     //     });
     //     break;
     default:
-    case 'redis':
+        // redis
         instanceStore = new RedisStore({
             redisClient,
             redisScanCount: config.RedisScanCount,

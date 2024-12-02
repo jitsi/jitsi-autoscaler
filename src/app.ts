@@ -243,7 +243,13 @@ const sanityLoop = new SanityLoop({
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
     logger,
-    queueRedisOptions: { host: config.RedisHost, port: config.RedisPort, password: config.RedisPassword },
+    queueRedisOptions: {
+        host: config.RedisHost,
+        port: config.RedisPort,
+        password: config.RedisPassword ? config.RedisPassword : undefined,
+        db: config.RedisDb ? config.RedisDb : undefined,
+        tls: config.RedisTLS ? {} : undefined,
+    },
     lockManager,
     instanceGroupManager,
     instanceLauncher,

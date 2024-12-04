@@ -1,7 +1,6 @@
 import * as promClient from 'prom-client';
 import { pushMetrics, Result, Options } from 'prometheus-remote-write';
 import { PrometheusDriver, QueryResult } from 'prometheus-query';
-import { Logger } from 'winston';
 import MetricsStore, { InstanceMetric } from './metrics_store';
 import { Context } from './context';
 
@@ -14,18 +13,15 @@ export interface PromMetrics {
 }
 
 export interface PrometheusOptions {
-    logger: Logger;
     endpoint: string;
     baseURL?: string;
+    promDriver?: PrometheusDriver;
+    promWriter?: PrometheusWriter;
 }
 
 interface PromQueryValue {
     time: string;
     value: number;
-}
-
-interface PrometheusWriter {
-    pushMetrics: (metrics: PromMetrics, options: Options) => Promise<Result>;
 }
 
 //metrics for prometheus query
@@ -60,43 +56,58 @@ const promWriteSum = new promClient.Counter({
     help: 'Sum of timings for high level prometheus remote write',
 });
 
+export class PrometheusWriter {
+    private url: string;
+    constructor(url = 'localhost:9090/api/v1/write') {
+        this.url = url;
+    }
+
+    async pushMetrics(metrics: PromMetrics, labels: PromLabels): Promise<Result> {
+        const options = <Options>{
+            url: this.url,
+            labels,
+            // verbose: true,
+            headers: { 'Content-Type': 'application/x-protobuf' },
+        };
+        return pushMetrics(metrics, options);
+    }
+}
+
 export default class PrometheusClient implements MetricsStore {
-    private logger: Logger;
     private endpoint: string;
     private baseURL = '/api/v1';
     private writeURL = '/api/v1/write';
 
+    private promDriver: PrometheusDriver;
+    private promWriter: PrometheusWriter;
+
     constructor(options: PrometheusOptions) {
-        this.logger = options.logger;
         this.endpoint = options.endpoint;
         if (options.baseURL) {
             this.baseURL = options.baseURL;
         }
+        if (options.promDriver) {
+            this.promDriver = options.promDriver;
+        } else {
+            this.promDriver = new PrometheusDriver({
+                endpoint: this.endpoint,
+                baseURL: this.baseURL,
+            });
+        }
+        if (options.promWriter) {
+            this.promWriter = options.promWriter;
+        } else {
+            this.promWriter = new PrometheusWriter(this.endpoint + this.writeURL);
+        }
     }
 
-    prometheusDriver(): PrometheusDriver {
-        return new PrometheusDriver({
-            endpoint: this.endpoint,
-            baseURL: this.baseURL,
-        });
-    }
-
-    prometheusWriter(): PrometheusWriter {
-        return {
-            pushMetrics(metrics: PromMetrics, options: Options): Promise<Result> {
-                return pushMetrics(metrics, options);
-            },
-        };
-    }
-
-    public async prometheusRangeQuery(query: string, driver = <PrometheusDriver>{}): Promise<QueryResult> {
-        if (!driver) driver = this.prometheusDriver();
+    public async prometheusRangeQuery(ctx: Context, query: string): Promise<QueryResult> {
         const start = new Date().getTime() - 1 * 60 * 60 * 1000;
         const end = new Date();
         const step = 60; // 1 point every minute
         try {
             const qStart = process.hrtime();
-            const res = await driver.rangeQuery(query, start, end, step);
+            const res = await this.promDriver.rangeQuery(query, start, end, step);
             const qEnd = process.hrtime(qStart);
             promQueryCount.inc();
             promQuerySum.inc(qEnd[0] * 1000 + qEnd[1] / 1000000);
@@ -104,27 +115,19 @@ export default class PrometheusClient implements MetricsStore {
             return res;
         } catch (err) {
             promQueryErrors.inc();
-            this.logger.error('Error querying Prometheus:', { query, err });
+            ctx.logger.error('Error querying Prometheus:', { query, err });
         }
     }
 
-    async pushMetric(metrics: PromMetrics, labels: PromLabels, writer: PrometheusWriter): Promise<boolean> {
-        if (!writer) writer = this.prometheusWriter();
-        const pushUrl = this.endpoint + this.writeURL;
+    async pushMetric(ctx: Context, metrics: PromMetrics, labels: PromLabels): Promise<boolean> {
         try {
-            const options = {
-                url: pushUrl,
-                labels,
-                // verbose: true,
-                headers: { 'Content-Type': 'application/x-protobuf' },
-            };
             const pushStart = process.hrtime();
-            const res = await writer.pushMetrics(metrics, options);
+            const res = await this.promWriter.pushMetrics(metrics, labels);
             const pushEnd = process.hrtime(pushStart);
 
             if (res.status !== 204) {
                 promWriteErrors.inc();
-                this.logger.error('Returned status != 204 while pushing metrics to Prometheus:', res);
+                ctx.logger.error('Returned status != 204 while pushing metrics to Prometheus:', res);
             } else {
                 promWriteCount.inc();
                 promWriteSum.inc(pushEnd[0] * 1000 + pushEnd[1] / 1000000);
@@ -132,16 +135,16 @@ export default class PrometheusClient implements MetricsStore {
             }
         } catch (err) {
             promWriteErrors.inc();
-            this.logger.error('Error pushing metrics to Prometheus:', err);
+            ctx.logger.error('Error pushing metrics to Prometheus:', err);
         }
         return false;
     }
 
-    async fetchInstanceMetrics(ctx: Context, group: string, driver = <PrometheusDriver>{}): Promise<InstanceMetric[]> {
+    async fetchInstanceMetrics(ctx: Context, group: string): Promise<InstanceMetric[]> {
         const query = `autoscaler_instance_stress_level{group="${group}"}`;
         const metricItems: InstanceMetric[] = [];
         try {
-            const res = await this.prometheusRangeQuery(query, driver);
+            const res = await this.prometheusRangeQuery(ctx, query);
             res.result.forEach((promItem) => {
                 promItem.values.forEach((v: PromQueryValue) => {
                     metricItems.push(<InstanceMetric>{
@@ -152,26 +155,21 @@ export default class PrometheusClient implements MetricsStore {
                 });
             });
         } catch (err) {
-            this.logger.error('Error fetching instance metrics:', { group, err });
+            ctx.logger.error('Error fetching instance metrics:', { group, err });
         }
         return metricItems;
     }
 
-    async writeInstanceMetric(
-        ctx: Context,
-        group: string,
-        item: InstanceMetric,
-        writer = <PrometheusWriter>{},
-    ): Promise<boolean> {
+    async writeInstanceMetric(ctx: Context, group: string, item: InstanceMetric): Promise<boolean> {
         const labels = { instance: item.instanceId, group };
         const metrics = { autoscaler_instance_stress_level: item.value };
-        return this.pushMetric(metrics, labels, writer);
+        return this.pushMetric(ctx, metrics, labels);
     }
 
-    saveMetricUnTrackedCount(groupName: string, count: number, writer = <PrometheusWriter>{}): Promise<boolean> {
+    saveMetricUnTrackedCount(ctx: Context, groupName: string, count: number): Promise<boolean> {
         const metrics = { autoscaler_untracked_instance_count: count };
         const labels = { group: groupName };
-        return this.pushMetric(metrics, labels, writer);
+        return this.pushMetric(ctx, metrics, labels);
     }
 
     async cleanInstanceMetrics(_ctx: Context, _group: string): Promise<boolean> {

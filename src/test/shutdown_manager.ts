@@ -4,7 +4,8 @@
 import assert from 'node:assert';
 import test, { afterEach, describe, mock } from 'node:test';
 
-import RedisStore from '../redis';
+import { mockStore } from './mock_store';
+
 import ShutdownManager from '../shutdown_manager';
 
 describe('ShutdownManager', () => {
@@ -17,42 +18,18 @@ describe('ShutdownManager', () => {
         },
     };
 
-    let _keys = [];
-
-    const mockPipeline = {
-        get: mock.fn((key) => _keys.push(key)),
-        set: mock.fn(),
-        exec: mock.fn(() => Promise.resolve(_keys.map(() => [null, null]))),
-    };
-
-    const redisClient = {
-        expire: mock.fn(),
-        zremrangebyscore: mock.fn(() => 0),
-        hgetall: mock.fn(),
-        hset: mock.fn(),
-        hdel: mock.fn(),
-        del: mock.fn(),
-        scan: mock.fn(),
-        zrange: mock.fn(),
-        get: mock.fn(),
-        pipeline: mock.fn(() => mockPipeline),
-    };
-
-    const instanceStore = new RedisStore({ redisClient });
     const audit = {
         log: mock.fn(),
     };
 
     const shutdownManager = new ShutdownManager({
-        instanceStore,
+        instanceStore: mockStore,
         audit,
         shutdownTTL: 86400,
     });
 
     afterEach(() => {
-        _keys = [];
-        mockPipeline.exec.mock.resetCalls();
-        mockPipeline.get.mock.resetCalls();
+        mockStore.getShutdownConfirmations.mock.resetCalls();
         context = {
             logger: {
                 info: mock.fn(),
@@ -67,14 +44,13 @@ describe('ShutdownManager', () => {
     // these tests are for the shutdown confirmation statuses
     describe('shutdownConfirmationStatuses', () => {
         test('read non-existent shutdown confirmation status', async () => {
-            redisClient.get.mock.mockImplementationOnce(() => null);
             const result = await shutdownManager.getShutdownConfirmation(context, 'instanceId');
             assert.equal(result, false, 'expect no shutdown confirmation when no key exists');
         });
 
         test('read existing shutdown confirmation status', async () => {
             const shutdownConfirmation = new Date().toISOString();
-            redisClient.get.mock.mockImplementationOnce(() => shutdownConfirmation);
+            mockStore.getShutdownConfirmation.mock.mockImplementationOnce(() => shutdownConfirmation);
             const result = await shutdownManager.getShutdownConfirmation(context, 'instanceId');
             assert.ok(result, 'expect ok result');
             assert.equal(result, shutdownConfirmation, 'expect shutdown confirmation to match mock date');
@@ -82,6 +58,7 @@ describe('ShutdownManager', () => {
 
         test('read multiple non-existent shutdown confirmation statuses', async () => {
             const instances = ['instanceId', 'instanceId2'];
+            mockStore.getShutdownConfirmations.mock.mockImplementationOnce(() => [false, false]);
             const result = await shutdownManager.getShutdownConfirmations(context, instances);
             assert.ok(result, 'expect ok result');
             assert.equal(result.length, instances.length, 'expect confirmation length to match instances length');
@@ -93,17 +70,17 @@ describe('ShutdownManager', () => {
             const shutdownConfirmation = new Date().toISOString();
 
             const instances = ['instanceId', 'instanceId2'];
-            mockPipeline.exec.mock.mockImplementationOnce(() =>
-                Promise.resolve(instances.map(() => [null, shutdownConfirmation])),
-            );
+            mockStore.getShutdownConfirmations.mock.mockImplementationOnce(() => [
+                shutdownConfirmation,
+                shutdownConfirmation,
+            ]);
 
             const result = await shutdownManager.getShutdownConfirmations(context, instances);
             assert.ok(result, 'expect ok result');
-            assert.equal(mockPipeline.exec.mock.callCount(), 1, 'expect exec to be called once');
             assert.equal(
-                mockPipeline.get.mock.callCount(),
-                instances.length,
-                'expect get to be called once per instance',
+                mockStore.getShutdownConfirmations.mock.callCount(),
+                1,
+                'expect getShutdownConfirmations to be called once',
             );
             assert.equal(result.length, instances.length, 'expect confirmation length to match instances length');
             assert.equal(result[0], shutdownConfirmation, 'expect first confirmation to match mock date');
@@ -114,20 +91,14 @@ describe('ShutdownManager', () => {
             const shutdownConfirmation = new Date().toISOString();
 
             const instances = ['instanceId', 'instanceId2'];
-            mockPipeline.exec.mock.mockImplementationOnce(() =>
-                Promise.resolve([
-                    [null, null],
-                    [null, shutdownConfirmation],
-                ]),
-            );
+            mockStore.getShutdownConfirmations.mock.mockImplementationOnce(() => [false, shutdownConfirmation]);
 
             const result = await shutdownManager.getShutdownConfirmations(context, instances);
             assert.ok(result, 'expect ok result');
-            assert.equal(mockPipeline.exec.mock.callCount(), 1, 'expect exec to be called once');
             assert.equal(
-                mockPipeline.get.mock.callCount(),
-                instances.length,
-                'expect get to be called once per instance',
+                mockStore.getShutdownConfirmations.mock.callCount(),
+                1,
+                'expect getShutdownConfirmations to be called once',
             );
             assert.equal(result.length, instances.length, 'expect confirmation length to match instances length');
             assert.equal(result[0], false, 'expect first confirmation to be false');

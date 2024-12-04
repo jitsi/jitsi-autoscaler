@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import test, { afterEach, describe, mock } from 'node:test';
 
 import { InstanceTracker } from '../instance_tracker';
-import RedisStore from '../redis';
+import { mockStore } from './mock_store';
 
 describe('InstanceTracker', () => {
     let context = {
@@ -15,17 +15,6 @@ describe('InstanceTracker', () => {
             error: mock.fn(),
             warn: mock.fn(),
         },
-    };
-
-    const redisClient = {
-        expire: mock.fn(),
-        zremrangebyscore: mock.fn(() => 0),
-        hgetall: mock.fn(),
-        hset: mock.fn(),
-        hdel: mock.fn(),
-        del: mock.fn(),
-        scan: mock.fn(),
-        zrange: mock.fn(),
     };
 
     const shutdownManager = {
@@ -62,19 +51,11 @@ describe('InstanceTracker', () => {
         },
     };
 
-    const redisStore = new RedisStore({ redisClient });
-
     const instanceTracker = new InstanceTracker({
-        instanceStore: redisStore,
-        metricsStore: redisStore,
-        redisScanCount: 100,
+        instanceStore: mockStore,
+        metricsStore: mockStore,
         shutdownManager,
         audit,
-        idleTTL: 300,
-        metricTTL: 3600,
-        provisioningTTL: 900,
-        shutdownStatusTTL: 86400,
-        groupRelatedDataTTL: 172800,
     });
 
     afterEach(() => {
@@ -112,7 +93,7 @@ describe('InstanceTracker', () => {
                 hfGroupDetails.scalingOptions.scaleDownPeriodsCount,
                 hfGroupDetails.scalingOptions.scaleUpPeriodsCount,
             );
-            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => metricInventory);
 
             const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
                 context,
@@ -138,7 +119,7 @@ describe('InstanceTracker', () => {
                 hfGroupDetails.scalingOptions.scaleDownPeriodsCount,
                 hfGroupDetails.scalingOptions.scaleUpPeriodsCount,
             );
-            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => metricInventory);
 
             const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
                 context,
@@ -162,7 +143,7 @@ describe('InstanceTracker', () => {
                 hfGroupDetails.scalingOptions.scaleDownPeriodsCount,
                 hfGroupDetails.scalingOptions.scaleUpPeriodsCount,
             );
-            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => metricInventory);
 
             const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
                 context,
@@ -179,10 +160,10 @@ describe('InstanceTracker', () => {
             });
 
             assert.deepEqual(
-                context.logger.info.mock.calls[1].arguments[0],
+                context.logger.info.mock.calls[0].arguments[0],
                 `Filling in for missing metric from previous period`,
             );
-            assert.deepEqual(context.logger.info.mock.calls[1].arguments[1], {
+            assert.deepEqual(context.logger.info.mock.calls[0].arguments[1], {
                 group: groupName,
                 instanceId: 'i-0a1b2c3d4e5f6g7h8',
                 periodIdx: 0,
@@ -206,7 +187,7 @@ describe('InstanceTracker', () => {
                 groupDetails.scalingOptions.scaleDownPeriodsCount,
                 groupDetails.scalingOptions.scaleUpPeriodsCount,
             );
-            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => metricInventory);
             const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
                 context,
                 groupDetails,
@@ -236,7 +217,7 @@ describe('InstanceTracker', () => {
                 groupDetails.scalingOptions.scaleDownPeriodsCount,
                 groupDetails.scalingOptions.scaleUpPeriodsCount,
             );
-            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => metricInventory);
             const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
                 context,
                 groupDetails,
@@ -266,7 +247,7 @@ describe('InstanceTracker', () => {
                 groupDetails.scalingOptions.scaleUpPeriodsCount,
             );
 
-            redisClient.zrange.mock.mockImplementationOnce(() => metricInventory.map(JSON.stringify));
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => metricInventory);
             const metricInventoryPerPeriod = await instanceTracker.getMetricInventoryPerPeriod(
                 context,
                 groupDetails,

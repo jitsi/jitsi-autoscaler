@@ -14,7 +14,7 @@ interface MetricsStore {
         (ctx: Context, group: string, item: InstanceMetric): Promise<boolean>;
     };
     cleanInstanceMetrics: { (ctx: Context, group: string): Promise<boolean> };
-    saveMetricUnTrackedCount: { (groupName: string, count: number): Promise<boolean> };
+    saveMetricUnTrackedCount: { (ctx: Context, groupName: string, count: number): Promise<boolean> };
 }
 
 export default MetricsStore;

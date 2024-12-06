@@ -50,8 +50,8 @@ export default class InstanceGroupManager {
         return this.instanceStore.upsertInstanceGroup(ctx, group);
     }
 
-    async getInstanceGroup(groupName: string): Promise<InstanceGroup> {
-        return this.instanceStore.getInstanceGroup(groupName);
+    async getInstanceGroup(ctx: Context, groupName: string): Promise<InstanceGroup> {
+        return this.instanceStore.getInstanceGroup(ctx, groupName);
     }
 
     async getAllInstanceGroupsAsMap(ctx: Context): Promise<Map<string, InstanceGroup>> {

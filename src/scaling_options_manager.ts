@@ -93,7 +93,7 @@ export default class ScalingManager {
         }
 
         try {
-            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(group.name);
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(ctx, group.name);
             if (instanceGroup) {
                 ScalingManager.setNewScalingOptions(ctx, request.options, instanceGroup, request.direction);
                 await this.instanceGroupManager.upsertInstanceGroup(ctx, instanceGroup);

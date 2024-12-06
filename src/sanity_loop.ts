@@ -34,7 +34,7 @@ export default class SanityLoop {
     }
 
     async reportUntrackedInstances(ctx: Context, groupName: string): Promise<boolean> {
-        const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(groupName);
+        const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(ctx, groupName);
         if (group) {
             const cloudStart = process.hrtime();
             ctx.logger.info(`Retrieving ${group.cloud} instances for ${groupName}`);

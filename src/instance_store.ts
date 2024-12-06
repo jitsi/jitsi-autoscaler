@@ -133,9 +133,9 @@ export interface InstanceState {
     lastReconfigured?: string;
 }
 
-interface InstanceStore {
+export interface InstanceStore {
     // instance related methods
-    fetchInstanceGroups: { (): Promise<string[]> };
+    fetchInstanceGroups: { (ctx: Context): Promise<string[]> };
     fetchInstanceStates: { (ctx: Context, group: string): Promise<InstanceState[]> };
     saveInstanceStatus: { (ctx: Context, group: string, state: InstanceState): Promise<boolean> };
     filterOutAndTrimExpiredStates: { (ctx: Context, group: string, states: InstanceState[]): Promise<InstanceState[]> };
@@ -165,7 +165,7 @@ interface InstanceStore {
     // group related methods
     existsAtLeastOneGroup: { (): Promise<boolean> };
     upsertInstanceGroup: { (ctx: Context, group: InstanceGroup): Promise<boolean> };
-    getInstanceGroup: { (groupName: string): Promise<InstanceGroup> };
+    getInstanceGroup: { (ctx: Context, groupName: string): Promise<InstanceGroup> };
     getAllInstanceGroups: { (ctx: Context): Promise<InstanceGroup[]> };
     getAllInstanceGroupNames: { (ctx: Context): Promise<string[]> };
     deleteInstanceGroup: { (ctx: Context, groupName: string): Promise<void> };

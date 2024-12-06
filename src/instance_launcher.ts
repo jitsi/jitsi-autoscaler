@@ -61,7 +61,7 @@ export default class InstanceLauncher {
     }
 
     async launchOrShutdownInstancesByGroup(ctx: Context, groupName: string): Promise<boolean> {
-        const group = await this.instanceGroupManager.getInstanceGroup(groupName);
+        const group = await this.instanceGroupManager.getInstanceGroup(ctx, groupName);
         if (!group) {
             throw new Error(`Group ${groupName} not found, failed to make launch decisions.`);
         }

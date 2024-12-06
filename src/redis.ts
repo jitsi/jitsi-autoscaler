@@ -158,7 +158,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return instanceStatesResponse;
     }
 
-    async fetchInstanceGroups(): Promise<string[]> {
+    async fetchInstanceGroups(_ctx: Context): Promise<string[]> {
         const groups = await this.redisClient.keys('instances:status:*');
         return groups.map((group) => group.split(':')[2]);
     }
@@ -435,7 +435,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return true;
     }
 
-    async getInstanceGroup(groupName: string): Promise<InstanceGroup> {
+    async getInstanceGroup(_ctx: Context, groupName: string): Promise<InstanceGroup> {
         const result = await this.redisClient.hget(this.GROUPS_HASH_NAME, groupName);
         if (result !== null && result.length > 0) {
             return JSON.parse(result);

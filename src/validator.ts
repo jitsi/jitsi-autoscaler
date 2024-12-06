@@ -62,8 +62,12 @@ export default class Validator {
         return desiredCount >= minDesired && desiredCount <= maxDesired && minDesired <= maxDesired;
     }
 
-    async groupHasValidDesiredInput(name: string, request: InstanceGroupDesiredValuesRequest): Promise<boolean> {
-        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(name);
+    async groupHasValidDesiredInput(
+        ctx: Context,
+        name: string,
+        request: InstanceGroupDesiredValuesRequest,
+    ): Promise<boolean> {
+        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(ctx, name);
 
         const minDesired = request.minDesired != null ? request.minDesired : instanceGroup.scalingOptions.minDesired;
         const maxDesired = request.maxDesired != null ? request.maxDesired : instanceGroup.scalingOptions.maxDesired;

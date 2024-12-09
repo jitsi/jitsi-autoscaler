@@ -26,6 +26,7 @@ import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
 import ScalingManager from './scaling_options_manager';
 import RedisStore from './redis';
+import ConsulStore from './consul';
 import PrometheusClient from './prometheus';
 import MetricsStore from './metrics_store';
 import InstanceStore from './instance_store';
@@ -92,12 +93,13 @@ switch (config.MetricsStoreProvider) {
 let instanceStore: InstanceStore;
 
 switch (config.InstanceStoreProvider) {
-    // case 'consul':
-    //     instanceStore = new ConsulClient({
-    //         logger,
-    //         endpoint: config.ConsulURL,
-    //     });
-    //     break;
+    case 'consul':
+        instanceStore = new ConsulStore({
+            host: config.ConsulHost,
+            port: config.ConsulPort,
+            secure: config.ConsulSecure,
+        });
+        break;
     default:
         // redis
         instanceStore = new RedisStore({
@@ -113,17 +115,16 @@ switch (config.InstanceStoreProvider) {
         break;
 }
 
-mapp.get('/health', (req: express.Request, res: express.Response) => {
+mapp.get('/health', async (req: express.Request, res: express.Response) => {
     logger.debug('Health check');
     if (req.query['deep']) {
-        redisClient.ping((err, reply) => {
-            if (err) {
-                res.status(500).send('unhealthy');
-            } else {
-                logger.debug('Redis ping reply', { reply });
-                res.send('deeply healthy');
-            }
-        });
+        const reply = await instanceStore.ping(req.context);
+        if (!reply) {
+            res.status(500).send('unhealthy');
+        } else {
+            logger.debug('instance store ping reply', { reply });
+            res.send('deeply healthy');
+        }
     } else {
         res.send('healthy!');
     }

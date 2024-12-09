@@ -527,7 +527,7 @@ class Handlers {
 
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
                 await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, group);
-                await this.instanceGroupManager.setScaleDownProtected(group);
+                await this.instanceGroupManager.setScaleDownProtected(req.context, group);
 
                 req.context.logger.info(
                     `Newly launched instances in group ${groupName} will be protected for ${scaleDownProtectedTTL} seconds`,

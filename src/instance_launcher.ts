@@ -115,7 +115,7 @@ export default class InstanceLauncher {
                     ctx.logger.debug(`[Launcher] Scaling throttle disabled for group ${groupName}.`);
                 }
 
-                const scaleDownProtected = await this.instanceGroupManager.isScaleDownProtected(group.name);
+                const scaleDownProtected = await this.instanceGroupManager.isScaleDownProtected(ctx, group.name);
                 const scaleUpCount = await this.cloudManager.scaleUp(
                     ctx,
                     group,

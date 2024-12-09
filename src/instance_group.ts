@@ -130,41 +130,41 @@ export default class InstanceGroupManager {
     }
 
     async allowAutoscaling(ctx: Context, group: string): Promise<boolean> {
-        return this.instanceStore.checkValue(`autoScaleGracePeriod:${group}`);
+        return this.instanceStore.checkValue(ctx, `autoScaleGracePeriod:${group}`);
     }
 
     async setAutoScaleGracePeriod(ctx: Context, group: InstanceGroup): Promise<boolean> {
         ctx.logger.info(`resetting autoscale grace period for group ${group.name}: ${group.gracePeriodTTLSec}`, {
             gracePeriodTTLSec: group.gracePeriodTTLSec,
         });
-        return this.setValue(`autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
+        return this.setValue(ctx, `autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
     }
 
-    async setScaleDownProtected(group: InstanceGroup): Promise<boolean> {
-        return this.setValue(`isScaleDownProtected:${group.name}`, group.protectedTTLSec);
+    async setScaleDownProtected(ctx: Context, group: InstanceGroup): Promise<boolean> {
+        return this.setValue(ctx, `isScaleDownProtected:${group.name}`, group.protectedTTLSec);
     }
 
-    async isScaleDownProtected(group: string): Promise<boolean> {
-        return this.instanceStore.checkValue(`isScaleDownProtected:${group}`);
+    async isScaleDownProtected(ctx: Context, group: string): Promise<boolean> {
+        return this.instanceStore.checkValue(ctx, `isScaleDownProtected:${group}`);
     }
 
-    async isGroupJobsCreationAllowed(): Promise<boolean> {
-        return this.instanceStore.checkValue('groupJobsCreationGracePeriod');
+    async isGroupJobsCreationAllowed(ctx: Context): Promise<boolean> {
+        return this.instanceStore.checkValue(ctx, 'groupJobsCreationGracePeriod');
     }
 
-    async setGroupJobsCreationGracePeriod(): Promise<boolean> {
-        return this.setValue(`groupJobsCreationGracePeriod`, this.processingIntervalSeconds);
+    async setGroupJobsCreationGracePeriod(ctx: Context): Promise<boolean> {
+        return this.setValue(ctx, `groupJobsCreationGracePeriod`, this.processingIntervalSeconds);
     }
 
-    async isSanityJobsCreationAllowed(): Promise<boolean> {
-        return this.instanceStore.checkValue('sanityJobsCreationGracePeriod');
+    async isSanityJobsCreationAllowed(ctx: Context): Promise<boolean> {
+        return this.instanceStore.checkValue(ctx, 'sanityJobsCreationGracePeriod');
     }
 
-    async setSanityJobsCreationGracePeriod(): Promise<boolean> {
-        return this.setValue(`sanityJobsCreationGracePeriod`, this.sanityJobsIntervalSeconds);
+    async setSanityJobsCreationGracePeriod(ctx: Context): Promise<boolean> {
+        return this.setValue(ctx, `sanityJobsCreationGracePeriod`, this.sanityJobsIntervalSeconds);
     }
 
-    async setValue(key: string, ttl: number): Promise<boolean> {
-        return this.instanceStore.setValue(key, 'false', ttl);
+    async setValue(ctx: Context, key: string, ttl: number): Promise<boolean> {
+        return this.instanceStore.setValue(ctx, key, 'false', ttl);
     }
 }

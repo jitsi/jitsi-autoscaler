@@ -172,8 +172,8 @@ export interface InstanceStore {
     deleteInstanceGroup: { (ctx: Context, groupName: string): Promise<void> };
 
     // key related methods
-    checkValue: { (key: string): Promise<boolean> };
-    setValue: { (key: string, value: string, ttl: number): Promise<boolean> };
+    checkValue: { (ctx: Context, key: string): Promise<boolean> };
+    setValue: { (ctx: Context, key: string, value: string, ttl: number): Promise<boolean> };
 
     // sanity related
     saveCloudInstances: { (ctx: Context, groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> };

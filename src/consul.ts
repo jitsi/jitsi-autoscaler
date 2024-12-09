@@ -357,24 +357,19 @@ export default class ConsulStore implements InstanceStore {
         return this.write(ctx, key, JSON.stringify(<TTLValue>{ status, expires: Date.now() + ttl * 1000 }));
     }
 
-    // save the value as the timestamp after which the value is considered expired
-    async setValue(key: string, value: string, ttl: number): Promise<boolean> {
-        // ttl is in seconds
-        return this.client.kv.set(
-            this.valuesPrefix + key,
-            JSON.stringify(<TTLValue>{ status: value, expires: Date.now() + ttl * 1000 }),
-        );
+    // save alongside a ttl with the timestamp after which the value is considered expired
+    async setValue(ctx: Context, key: string, value: string, ttl: number): Promise<boolean> {
+        return this.writeTTLValue(ctx, this.valuesPrefix + key, value, ttl);
     }
 
     // the value is considered expired if the timestamp is in the past
-    async checkValue(key: string): Promise<boolean> {
+    async checkValue(ctx: Context, key: string): Promise<boolean> {
         try {
-            const res = await this.client.kv.get(this.valuesPrefix + key);
+            const res = this.fetchTTLValue(ctx, key);
             if (!res) {
                 return false;
             }
-            const expiry = parseInt(res.Value, 10);
-            return expiry > Date.now();
+            return true;
         } catch (err) {
             return false;
         }

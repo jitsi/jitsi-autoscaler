@@ -505,11 +505,11 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         ctx.logger.info(`Group ${groupName} is deleted`);
     }
 
-    async checkValue(key: string): Promise<boolean> {
+    async checkValue(_ctx: Context, key: string): Promise<boolean> {
         const result = await this.redisClient.get(key);
         return !(result !== null && result.length > 0);
     }
-    async setValue(key: string, value: string, ttl: number): Promise<boolean> {
+    async setValue(_ctx: Context, key: string, value: string, ttl: number): Promise<boolean> {
         const result = await this.redisClient.set(key, value, 'EX', ttl);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);

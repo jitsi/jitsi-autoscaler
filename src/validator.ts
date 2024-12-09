@@ -78,7 +78,10 @@ export default class Validator {
     }
 
     async canLaunchInstances(req: Request, count: number): Promise<boolean> {
-        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(
+            req.context,
+            req.params.name,
+        );
         // take new maximum into consideration, if set
         let max;
         if (req.body.maxDesired != null) {

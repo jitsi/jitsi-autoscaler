@@ -1,7 +1,7 @@
 import Consul from 'consul';
 import { Context } from './context';
 import { GetItem } from 'consul/lib/kv';
-import InstanceStore, { InstanceGroup } from './instance_store';
+import { InstanceGroup } from './instance_store';
 
 // implments the InstanceStore interface using consul K/V API calls
 // uses the got library to make HTTP requests

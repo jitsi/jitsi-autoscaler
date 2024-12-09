@@ -268,7 +268,7 @@ class Handlers {
 
         const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
-            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context,req.params.name);
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
             if (instanceGroup) {
                 if (scalingActivitiesRequest.enableAutoScale != null) {
                     instanceGroup.enableAutoScale = scalingActivitiesRequest.enableAutoScale;

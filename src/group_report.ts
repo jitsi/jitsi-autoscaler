@@ -9,6 +9,7 @@ import { InstanceGroup, InstanceState, JibriStatusState } from './instance_store
 export interface InstanceReport {
     instanceId: string;
     displayName?: string;
+    group?: string;
     instanceName?: string;
     scaleStatus?: string;
     cloudStatus?: string;
@@ -110,10 +111,10 @@ export default class GroupReportGenerator {
             groupReport.instances.push(instanceReport);
         });
 
-        await this.addShutdownStatus(ctx, groupReport.instances);
-        await this.addShutdownConfirmations(ctx, groupReport.instances);
-        await this.addReconfigureDate(ctx, groupReport.instances);
-        await this.addShutdownProtectedStatus(ctx, groupReport.instances);
+        await this.addShutdownStatus(ctx, group.name, groupReport.instances);
+        await this.addShutdownConfirmations(ctx, group.name, groupReport.instances);
+        await this.addReconfigureDate(ctx, group.name, groupReport.instances);
+        await this.addShutdownProtectedStatus(ctx, group.name, groupReport.instances);
 
         groupReport.instances.forEach((instanceReport) => {
             if (this.isProvisioningOrRunningCloudInstance(instanceReport)) {
@@ -187,6 +188,7 @@ export default class GroupReportGenerator {
         instanceStates.forEach((instanceState) => {
             const instanceReport = <InstanceReport>{
                 instanceId: instanceState.instanceId,
+                group: group.name,
                 displayName: 'unknown',
                 instanceName: 'unknown',
                 scaleStatus: 'unknown',
@@ -285,9 +287,10 @@ export default class GroupReportGenerator {
         return instanceReports;
     }
 
-    private async addReconfigureDate(ctx: Context, instanceReports: InstanceReport[]): Promise<void> {
+    private async addReconfigureDate(ctx: Context, group: string, instanceReports: InstanceReport[]): Promise<void> {
         const reconfigureDates = await this.reconfigureManager.getReconfigureDates(
             ctx,
+            group,
             instanceReports.map((instanceReport) => {
                 return instanceReport.instanceId;
             }),
@@ -298,9 +301,10 @@ export default class GroupReportGenerator {
         }
     }
 
-    private async addShutdownStatus(ctx: Context, instanceReports: InstanceReport[]): Promise<void> {
+    private async addShutdownStatus(ctx: Context, group: string, instanceReports: InstanceReport[]): Promise<void> {
         const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(
             ctx,
+            group,
             instanceReports.map((instanceReport) => {
                 return instanceReport.instanceId;
             }),
@@ -316,10 +320,15 @@ export default class GroupReportGenerator {
         });
     }
 
-    private async addShutdownConfirmations(ctx: Context, instanceReports: InstanceReport[]): Promise<void> {
+    private async addShutdownConfirmations(
+        ctx: Context,
+        group: string,
+        instanceReports: InstanceReport[],
+    ): Promise<void> {
         (
             await this.shutdownManager.getShutdownConfirmations(
                 ctx,
+                group,
                 instanceReports.map((instanceReport) => {
                     return instanceReport.instanceId;
                 }),
@@ -329,9 +338,14 @@ export default class GroupReportGenerator {
         });
     }
 
-    private async addShutdownProtectedStatus(ctx: Context, instanceReports: InstanceReport[]): Promise<void> {
+    private async addShutdownProtectedStatus(
+        ctx: Context,
+        group: string,
+        instanceReports: InstanceReport[],
+    ): Promise<void> {
         const instanceReportsProtectedStatus: boolean[] = await this.shutdownManager.areScaleDownProtected(
             ctx,
+            group,
             instanceReports.map((instanceReport) => {
                 return instanceReport.instanceId;
             }),

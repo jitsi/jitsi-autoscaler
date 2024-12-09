@@ -19,6 +19,19 @@ const mockClient = {
         set: mock.fn(),
         del: mock.fn(),
     },
+    status: {
+        leader: mock.fn(),
+    },
+    session: {
+        create: mock.fn(),
+        destroy: mock.fn(),
+    },
+    agent: {
+        service: {
+            register: mock.fn(),
+            deregister: mock.fn(),
+        },
+    },
 };
 
 const options = <ConsulOptions>{
@@ -49,7 +62,7 @@ describe('ConsulClient', () => {
 
     describe('testListInstanceGroups', () => {
         test('will list all instance groups', async () => {
-            const res = await client.fetchInstanceGroups(ctx);
+            const res = await client.getAllInstanceGroups(ctx);
             assert.strictEqual(res.length, 0);
         });
 
@@ -59,14 +72,16 @@ describe('ConsulClient', () => {
         });
 
         test('will find upserted group when listing all instance groups', async () => {
-            mockClient.kv.get.mock.mockImplementationOnce(() => [
-                {
-                    Key: options.groupsPrefix + group.name,
-                    Value: JSON.stringify(group),
-                },
-            ]);
+            mockClient.kv.get.mock.mockImplementationOnce(() => {
+                return {
+                    0: {
+                        Key: options.groupsPrefix + group.name,
+                        Value: JSON.stringify(group),
+                    },
+                };
+            });
 
-            const res = await client.fetchInstanceGroups(ctx);
+            const res = await client.getAllInstanceGroupNames(ctx);
             assert.strictEqual(res.length, 1);
             assert.strictEqual(res[0], group.name);
             mockClient.kv.get.mock.mockImplementationOnce(
@@ -82,8 +97,10 @@ describe('ConsulClient', () => {
         });
 
         test('will delete upserted test group', async () => {
-            const res = await client.deleteInstanceGroup(ctx, group.name);
-            assert.strictEqual(res, true);
+            await client.deleteInstanceGroup(ctx, group.name);
+
+            const res = await client.getInstanceGroup(ctx, group.name);
+            assert.strictEqual(res, undefined);
         });
     });
 });

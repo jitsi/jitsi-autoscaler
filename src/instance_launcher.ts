@@ -328,7 +328,7 @@ export default class InstanceLauncher {
         const desiredScaleDownQuantity =
             currentInventory.length - Math.max(group.scalingOptions.minDesired, group.scalingOptions.desiredCount);
 
-        const unprotectedInstances = await this.filterOutProtectedInstances(ctx, currentInventory);
+        const unprotectedInstances = await this.filterOutProtectedInstances(ctx, group, currentInventory);
 
         let listOfInstancesForScaleDown: InstanceDetails[] = [];
         switch (group.type) {
@@ -369,9 +369,14 @@ export default class InstanceLauncher {
         return listOfInstancesForScaleDown;
     }
 
-    async filterOutProtectedInstances(ctx: Context, instanceDetails: InstanceState[]): Promise<InstanceState[]> {
+    async filterOutProtectedInstances(
+        ctx: Context,
+        group: InstanceGroup,
+        instanceDetails: InstanceState[],
+    ): Promise<InstanceState[]> {
         const protectedInstances: boolean[] = await this.shutdownManager.areScaleDownProtected(
             ctx,
+            group.name,
             instanceDetails.map((instance) => {
                 return instance.instanceId;
             }),

@@ -25,12 +25,11 @@ export default class InstanceGroupManager {
         this.getAllInstanceGroupNames = this.getAllInstanceGroupNames.bind(this);
         this.getAllInstanceGroups = this.getAllInstanceGroups.bind(this);
         this.upsertInstanceGroup = this.upsertInstanceGroup.bind(this);
-        this.existsAtLeastOneGroup = this.existsAtLeastOneGroup.bind(this);
     }
 
     async init(ctx: Context): Promise<void> {
         ctx.logger.info('Initializing instance group manager...');
-        const existsAtLeastOneGroup = await this.existsAtLeastOneGroup();
+        const existsAtLeastOneGroup = await this.existsAtLeastOneGroup(ctx);
         if (!existsAtLeastOneGroup) {
             ctx.logger.info('Storing instance groups into instance store');
             await Promise.all(this.initialGroupList.map((group) => this.upsertInstanceGroup(ctx, group)));
@@ -42,8 +41,8 @@ export default class InstanceGroupManager {
         return this.initialGroupList;
     }
 
-    async existsAtLeastOneGroup(): Promise<boolean> {
-        return this.instanceStore.existsAtLeastOneGroup();
+    async existsAtLeastOneGroup(ctx: Context): Promise<boolean> {
+        return this.instanceStore.existsAtLeastOneGroup(ctx);
     }
 
     async upsertInstanceGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {

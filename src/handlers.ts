@@ -135,8 +135,8 @@ class Handlers {
         statsCounter.inc();
         try {
             const [shutdownStatus, reconfigureDate] = await Promise.all([
-                this.shutdownManager.getShutdownStatus(req.context, details.instanceId),
-                this.reconfigureManager.getReconfigureDate(req.context, details.instanceId),
+                this.shutdownManager.getShutdownStatus(req.context, details.group, details.instanceId),
+                this.reconfigureManager.getReconfigureDate(req.context, details.group, details.instanceId),
             ]);
 
             const sendResponse: SidecarResponse = {
@@ -181,8 +181,12 @@ class Handlers {
         statsCounter.inc();
         try {
             const [shutdownStatus, reconfigureDate] = await Promise.all([
-                this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
-                this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
+                this.shutdownManager.getShutdownStatus(req.context, report.instance.group, report.instance.instanceId),
+                this.reconfigureManager.getReconfigureDate(
+                    req.context,
+                    report.instance.group,
+                    report.instance.instanceId,
+                ),
             ]);
 
             await this.reconfigureManager.processInstanceReport(req.context, report, reconfigureDate);
@@ -205,8 +209,12 @@ class Handlers {
         statsCounter.inc();
         try {
             const [shutdownStatus, reconfigureDate] = await Promise.all([
-                this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
-                this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
+                this.shutdownManager.getShutdownStatus(req.context, report.instance.group, report.instance.instanceId),
+                this.reconfigureManager.getReconfigureDate(
+                    req.context,
+                    report.instance.group,
+                    report.instance.instanceId,
+                ),
             ]);
 
             let postReconfigureDate = reconfigureDate;

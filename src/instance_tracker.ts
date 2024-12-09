@@ -414,7 +414,7 @@ export class InstanceTracker {
 
         if (filterShutdown) {
             const filterShutdownStart = process.hrtime();
-            const statesExceptShutDown = await this.filterOutInstancesShuttingDown(ctx, states);
+            const statesExceptShutDown = await this.filterOutInstancesShuttingDown(ctx, group, states);
             const filterShutdownEnd = process.hrtime(filterShutdownStart);
             ctx.logger.debug(`instance filtered states, with no shutdown instances: ${statesExceptShutDown}`, {
                 group,
@@ -449,13 +449,17 @@ export class InstanceTracker {
         return shutdownStatus;
     }
 
-    async filterOutInstancesShuttingDown(ctx: Context, states: InstanceState[]): Promise<InstanceState[]> {
+    async filterOutInstancesShuttingDown(
+        ctx: Context,
+        group: string,
+        states: InstanceState[],
+    ): Promise<InstanceState[]> {
         const instanceIds = states.map((state) => {
             return state.instanceId;
         });
-        const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(ctx, instanceIds);
+        const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(ctx, group, instanceIds);
 
-        const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(ctx, instanceIds);
+        const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(ctx, group, instanceIds);
 
         const statesShutdownStatus: boolean[] = [];
         for (let i = 0; i < states.length; i++) {

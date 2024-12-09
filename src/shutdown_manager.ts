@@ -25,20 +25,20 @@ export default class ShutdownManager {
         return save;
     }
 
-    async getShutdownStatuses(ctx: Context, instanceIds: string[]): Promise<boolean[]> {
-        return this.instanceStore.getShutdownStatuses(ctx, instanceIds);
+    async getShutdownStatuses(ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> {
+        return this.instanceStore.getShutdownStatuses(ctx, group, instanceIds);
     }
 
-    async getShutdownConfirmations(ctx: Context, instanceIds: string[]): Promise<(string | false)[]> {
-        return this.instanceStore.getShutdownConfirmations(ctx, instanceIds);
+    async getShutdownConfirmations(ctx: Context, group: string, instanceIds: string[]): Promise<(string | false)[]> {
+        return this.instanceStore.getShutdownConfirmations(ctx, group, instanceIds);
     }
 
-    async getShutdownStatus(ctx: Context, instanceId: string): Promise<boolean> {
-        return this.instanceStore.getShutdownStatus(ctx, instanceId);
+    async getShutdownStatus(ctx: Context, group: string, instanceId: string): Promise<boolean> {
+        return this.instanceStore.getShutdownStatus(ctx, group, instanceId);
     }
 
-    async getShutdownConfirmation(ctx: Context, instanceId: string): Promise<false | string> {
-        return this.instanceStore.getShutdownConfirmation(ctx, instanceId);
+    async getShutdownConfirmation(ctx: Context, group: string, instanceId: string): Promise<false | string> {
+        return this.instanceStore.getShutdownConfirmation(ctx, group, instanceId);
     }
 
     async setShutdownConfirmation(
@@ -53,14 +53,15 @@ export default class ShutdownManager {
 
     async setScaleDownProtected(
         ctx: Context,
+        group: string,
         instanceId: string,
         protectedTTL: number,
         mode = 'isScaleDownProtected',
     ): Promise<boolean> {
-        return this.instanceStore.setScaleDownProtected(ctx, instanceId, protectedTTL, mode);
+        return this.instanceStore.setScaleDownProtected(ctx, group, instanceId, protectedTTL, mode);
     }
 
-    async areScaleDownProtected(ctx: Context, instanceIds: string[]): Promise<boolean[]> {
-        return this.instanceStore.areScaleDownProtected(ctx, instanceIds);
+    async areScaleDownProtected(ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> {
+        return this.instanceStore.areScaleDownProtected(ctx, group, instanceIds);
     }
 }

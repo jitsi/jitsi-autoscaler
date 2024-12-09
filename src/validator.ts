@@ -44,7 +44,7 @@ export default class Validator {
 
         const instanceIds = instanceStates.map((v, _) => v.instanceId);
 
-        const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(context, instanceIds);
+        const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(context, name, instanceIds);
 
         return (
             instanceStates.filter((v, i) => {

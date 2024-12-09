@@ -64,7 +64,12 @@ export default class CloudManager {
                 };
                 await this.instanceTracker.track(ctx, state);
                 if (isScaleDownProtected) {
-                    await this.shutdownManager.setScaleDownProtected(ctx, instanceId, group.protectedTTLSec);
+                    await this.shutdownManager.setScaleDownProtected(
+                        ctx,
+                        group.name,
+                        instanceId,
+                        group.protectedTTLSec,
+                    );
                     ctx.logger.info(
                         `[CloudManager] Instance ${instanceId} from group ${group.name} is in protected mode`,
                     );

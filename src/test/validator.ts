@@ -29,7 +29,7 @@ describe('Validator', () => {
     };
 
     const shutdownManager = {
-        getShutdownConfirmations: mock.fn((_, instanceIds) => instanceIds.map(() => false)),
+        getShutdownConfirmations: mock.fn((_ctx, _group, instanceIds) => instanceIds.map(() => false)),
     };
 
     const groupName = 'group';

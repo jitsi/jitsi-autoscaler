@@ -44,7 +44,7 @@ export default class Validator {
 
         const instanceIds = instanceStates.map((v, _) => v.instanceId);
 
-        const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(context, instanceIds);
+        const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(context, name, instanceIds);
 
         return (
             instanceStates.filter((v, i) => {
@@ -62,8 +62,12 @@ export default class Validator {
         return desiredCount >= minDesired && desiredCount <= maxDesired && minDesired <= maxDesired;
     }
 
-    async groupHasValidDesiredInput(name: string, request: InstanceGroupDesiredValuesRequest): Promise<boolean> {
-        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(name);
+    async groupHasValidDesiredInput(
+        ctx: Context,
+        name: string,
+        request: InstanceGroupDesiredValuesRequest,
+    ): Promise<boolean> {
+        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(ctx, name);
 
         const minDesired = request.minDesired != null ? request.minDesired : instanceGroup.scalingOptions.minDesired;
         const maxDesired = request.maxDesired != null ? request.maxDesired : instanceGroup.scalingOptions.maxDesired;
@@ -74,7 +78,10 @@ export default class Validator {
     }
 
     async canLaunchInstances(req: Request, count: number): Promise<boolean> {
-        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+        const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(
+            req.context,
+            req.params.name,
+        );
         // take new maximum into consideration, if set
         let max;
         if (req.body.maxDesired != null) {

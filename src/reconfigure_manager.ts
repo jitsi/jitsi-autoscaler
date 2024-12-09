@@ -33,12 +33,12 @@ export default class ReconfigureManager {
         return save;
     }
 
-    async getReconfigureDates(ctx: Context, instanceIds: string[]): Promise<string[]> {
-        return this.instanceStore.getReconfigureDates(ctx, instanceIds);
+    async getReconfigureDates(ctx: Context, group: string, instanceIds: string[]): Promise<string[]> {
+        return this.instanceStore.getReconfigureDates(ctx, group, instanceIds);
     }
 
-    async getReconfigureDate(ctx: Context, instanceId: string): Promise<string> {
-        return this.instanceStore.getReconfigureDate(ctx, instanceId);
+    async getReconfigureDate(ctx: Context, group: string, instanceId: string): Promise<string> {
+        return this.instanceStore.getReconfigureDate(ctx, group, instanceId);
     }
 
     async processInstanceReport(ctx: Context, report: StatsReport, reconfigureDate: string): Promise<string> {

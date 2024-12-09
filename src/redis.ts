@@ -47,19 +47,21 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         group: string,
         states: InstanceState[],
     ): Promise<InstanceState[]> {
-        return this.doFilterOutAndTrimExpiredStates(ctx, this.getGroupInstancesStatesKey(group), states);
+        return this.doFilterOutAndTrimExpiredStates(ctx, group, states);
     }
 
     private async doFilterOutAndTrimExpiredStates(
         ctx: Context,
-        groupInstancesStatesKey: string,
+        group: string,
         instanceStates: InstanceState[],
     ): Promise<InstanceState[]> {
+        const groupInstancesStatesKey = this.getGroupInstancesStatesKey(group);
         const groupInstancesStatesResponse = <InstanceState[]>[];
         const deletePipeline = this.redisClient.pipeline();
 
         const shutdownStatuses: boolean[] = await this.getShutdownStatuses(
             ctx,
+            group,
             instanceStates.map((instanceState) => {
                 return instanceState.instanceId;
             }),
@@ -158,7 +160,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return instanceStatesResponse;
     }
 
-    async fetchInstanceGroups(): Promise<string[]> {
+    async fetchInstanceGroups(_ctx: Context): Promise<string[]> {
         const groups = await this.redisClient.keys('instances:status:*');
         return groups.map((group) => group.split(':')[2]);
     }
@@ -246,7 +248,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return true;
     }
 
-    async getShutdownStatuses(ctx: Context, instanceIds: string[]): Promise<boolean[]> {
+    async getShutdownStatuses(ctx: Context, _group: string, instanceIds: string[]): Promise<boolean[]> {
         const pipeline = this.redisClient.pipeline();
         instanceIds.forEach((instanceId) => {
             const key = this.shutDownKey(instanceId);
@@ -263,7 +265,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         }
     }
 
-    async getShutdownConfirmations(ctx: Context, instanceIds: string[]): Promise<(string | false)[]> {
+    async getShutdownConfirmations(ctx: Context, _group: string, instanceIds: string[]): Promise<(string | false)[]> {
         const pipeline = this.redisClient.pipeline();
         instanceIds.forEach((instanceId) => {
             const key = this.shutDownConfirmedKey(instanceId);
@@ -284,7 +286,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         }
     }
 
-    async getShutdownStatus(ctx: Context, instanceId: string): Promise<boolean> {
+    async getShutdownStatus(ctx: Context, _group: string, instanceId: string): Promise<boolean> {
         const key = this.shutDownKey(instanceId);
         const res = await this.redisClient.get(key);
         ctx.logger.debug('Read shutdown status', { key, res });
@@ -319,17 +321,18 @@ export default class RedisStore implements MetricsStore, InstanceStore {
 
     async setScaleDownProtected(
         ctx: Context,
+        group: string,
         instanceId: string,
         protectedTTL: number,
         mode = 'isScaleDownProtected',
     ): Promise<boolean> {
         const key = this.protectedKey(instanceId);
-        ctx.logger.debug('Writing protected mode', { key, mode });
+        ctx.logger.debug('Writing protected mode', { group, key, mode });
         await this.redisClient.set(key, mode, 'EX', protectedTTL);
         return true;
     }
 
-    async areScaleDownProtected(ctx: Context, instanceIds: string[]): Promise<boolean[]> {
+    async areScaleDownProtected(ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> {
         const pipeline = this.redisClient.pipeline();
         instanceIds.forEach((instanceId) => {
             const key = this.protectedKey(instanceId);
@@ -341,7 +344,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
                 return instance[1] == 'isScaleDownProtected';
             });
         } else {
-            ctx.logger.error('ScaleDownProtected Failed in pipeline.exec()');
+            ctx.logger.error('ScaleDownProtected Failed in pipeline.exec()', { group });
             return [];
         }
     }
@@ -373,7 +376,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return true;
     }
 
-    async getReconfigureDates(ctx: Context, instanceIds: string[]): Promise<string[]> {
+    async getReconfigureDates(ctx: Context, group: string, instanceIds: string[]): Promise<string[]> {
         const pipeline = this.redisClient.pipeline();
         instanceIds.forEach((instanceId) => {
             const key = this.reconfigureKey(instanceId);
@@ -385,7 +388,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
                 return <string>instance[1];
             });
         } else {
-            ctx.logger.error('ReconfigureDates Failed in pipeline.exec()');
+            ctx.logger.error('ReconfigureDates Failed in pipeline.exec()', { group });
             return [];
         }
     }
@@ -397,7 +400,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return res;
     }
 
-    async existsAtLeastOneGroup(): Promise<boolean> {
+    async existsAtLeastOneGroup(_ctx: Context): Promise<boolean> {
         let cursor = '0';
         do {
             const result = await this.redisClient.hscan(
@@ -435,7 +438,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return true;
     }
 
-    async getInstanceGroup(groupName: string): Promise<InstanceGroup> {
+    async getInstanceGroup(_ctx: Context, groupName: string): Promise<InstanceGroup> {
         const result = await this.redisClient.hget(this.GROUPS_HASH_NAME, groupName);
         if (result !== null && result.length > 0) {
             return JSON.parse(result);
@@ -502,11 +505,11 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         ctx.logger.info(`Group ${groupName} is deleted`);
     }
 
-    async checkValue(key: string): Promise<boolean> {
+    async checkValue(_ctx: Context, key: string): Promise<boolean> {
         const result = await this.redisClient.get(key);
         return !(result !== null && result.length > 0);
     }
-    async setValue(key: string, value: string, ttl: number): Promise<boolean> {
+    async setValue(_ctx: Context, key: string, value: string, ttl: number): Promise<boolean> {
         const result = await this.redisClient.set(key, value, 'EX', ttl);
         if (result !== 'OK') {
             throw new Error(`unable to set ${key}`);

@@ -447,7 +447,7 @@ app.put(
     body('maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('desiredCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body().custom(async (value, { req }) => {
-        if (!(await validator.groupHasValidDesiredInput(req.params.name, value))) {
+        if (!(await validator.groupHasValidDesiredInput(req.context, req.params.name, value))) {
             throw new Error('Desired count must be between min and max; min cannot be grater than max');
         }
         return true;

@@ -135,8 +135,8 @@ class Handlers {
         statsCounter.inc();
         try {
             const [shutdownStatus, reconfigureDate] = await Promise.all([
-                this.shutdownManager.getShutdownStatus(req.context, details.instanceId),
-                this.reconfigureManager.getReconfigureDate(req.context, details.instanceId),
+                this.shutdownManager.getShutdownStatus(req.context, details.group, details.instanceId),
+                this.reconfigureManager.getReconfigureDate(req.context, details.group, details.instanceId),
             ]);
 
             const sendResponse: SidecarResponse = {
@@ -181,8 +181,12 @@ class Handlers {
         statsCounter.inc();
         try {
             const [shutdownStatus, reconfigureDate] = await Promise.all([
-                this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
-                this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
+                this.shutdownManager.getShutdownStatus(req.context, report.instance.group, report.instance.instanceId),
+                this.reconfigureManager.getReconfigureDate(
+                    req.context,
+                    report.instance.group,
+                    report.instance.instanceId,
+                ),
             ]);
 
             await this.reconfigureManager.processInstanceReport(req.context, report, reconfigureDate);
@@ -205,8 +209,12 @@ class Handlers {
         statsCounter.inc();
         try {
             const [shutdownStatus, reconfigureDate] = await Promise.all([
-                this.shutdownManager.getShutdownStatus(req.context, report.instance.instanceId),
-                this.reconfigureManager.getReconfigureDate(req.context, report.instance.instanceId),
+                this.shutdownManager.getShutdownStatus(req.context, report.instance.group, report.instance.instanceId),
+                this.reconfigureManager.getReconfigureDate(
+                    req.context,
+                    report.instance.group,
+                    report.instance.instanceId,
+                ),
             ]);
 
             let postReconfigureDate = reconfigureDate;
@@ -239,7 +247,7 @@ class Handlers {
         const request: InstanceGroupDesiredValuesRequest = req.body;
         const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
-            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
             if (instanceGroup) {
                 if (request.desiredCount != null) {
                     instanceGroup.scalingOptions.desiredCount = request.desiredCount;
@@ -268,7 +276,7 @@ class Handlers {
 
         const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
-            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
             if (instanceGroup) {
                 if (scalingActivitiesRequest.enableAutoScale != null) {
                     instanceGroup.enableAutoScale = scalingActivitiesRequest.enableAutoScale;
@@ -298,7 +306,7 @@ class Handlers {
     }
 
     async reconfigureInstanceGroup(req: Request, res: Response): Promise<void> {
-        const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+        const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
         if (instanceGroup) {
             if (instanceGroup.enableReconfiguration) {
                 // add audit item recording the request
@@ -330,7 +338,7 @@ class Handlers {
         const instanceConfigurationUpdateRequest: InstanceConfigurationUpdateRequest = req.body;
         const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
-            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
             if (instanceGroup) {
                 instanceGroup.instanceConfigurationId = instanceConfigurationUpdateRequest.instanceConfigurationId;
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
@@ -390,7 +398,7 @@ class Handlers {
     }
 
     async getInstanceGroup(req: Request, res: Response): Promise<void> {
-        const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+        const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
 
         if (instanceGroup) {
             res.status(200);
@@ -415,7 +423,7 @@ class Handlers {
     async getGroupReport(req: Request, res: Response): Promise<void> {
         const groupName = req.params.name;
         const ctx = req.context;
-        const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(groupName);
+        const group: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, groupName);
         if (group) {
             const groupReport = await this.groupReportGenerator.generateReport(ctx, group, null);
             res.status(200);
@@ -490,7 +498,7 @@ class Handlers {
                 scaleDownProtectedTTL,
             });
 
-            const group = await this.instanceGroupManager.getInstanceGroup(groupName);
+            const group = await this.instanceGroupManager.getInstanceGroup(req.context, groupName);
             if (group) {
                 if (requestBody.instanceConfigurationId != null) {
                     group.instanceConfigurationId = requestBody.instanceConfigurationId;
@@ -519,7 +527,7 @@ class Handlers {
 
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
                 await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, group);
-                await this.instanceGroupManager.setScaleDownProtected(group);
+                await this.instanceGroupManager.setScaleDownProtected(req.context, group);
 
                 req.context.logger.info(
                     `Newly launched instances in group ${groupName} will be protected for ${scaleDownProtectedTTL} seconds`,
@@ -539,7 +547,7 @@ class Handlers {
         const scalingOptionsRequest: InstanceGroupScalingOptionsRequest = req.body;
         const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
-            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.params.name);
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
             if (instanceGroup) {
                 if (scalingOptionsRequest.scaleUpQuantity != null) {
                     instanceGroup.scalingOptions.scaleUpQuantity = scalingOptionsRequest.scaleUpQuantity;

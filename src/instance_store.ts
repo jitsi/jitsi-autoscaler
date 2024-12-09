@@ -133,9 +133,8 @@ export interface InstanceState {
     lastReconfigured?: string;
 }
 
-interface InstanceStore {
+export interface InstanceStore {
     // instance related methods
-    fetchInstanceGroups: { (): Promise<string[]> };
     fetchInstanceStates: { (ctx: Context, group: string): Promise<InstanceState[]> };
     saveInstanceStatus: { (ctx: Context, group: string, state: InstanceState): Promise<boolean> };
     filterOutAndTrimExpiredStates: { (ctx: Context, group: string, states: InstanceState[]): Promise<InstanceState[]> };
@@ -144,35 +143,37 @@ interface InstanceStore {
     setShutdownStatus: {
         (ctx: Context, instanceDetails: InstanceDetails[], status: string, ttl: number): Promise<boolean>;
     };
-    getShutdownStatuses: { (ctx: Context, instanceIds: string[]): Promise<boolean[]> };
-    getShutdownConfirmations: { (ctx: Context, instanceIds: string[]): Promise<(string | false)[]> };
-    getShutdownStatus: { (ctx: Context, instanceId: string): Promise<boolean> };
-    getShutdownConfirmation: { (ctx: Context, instanceId: string): Promise<false | string> };
+    getShutdownStatuses: { (ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> };
+    getShutdownConfirmations: { (ctx: Context, group: string, instanceIds: string[]): Promise<(string | false)[]> };
+    getShutdownStatus: { (ctx: Context, group: string, instanceId: string): Promise<boolean> };
+    getShutdownConfirmation: { (ctx: Context, group: string, instanceId: string): Promise<false | string> };
     setShutdownConfirmation: {
         (ctx: Context, instanceDetails: InstanceDetails[], status: string, ttl: number): Promise<boolean>;
     };
-    setScaleDownProtected: { (ctx: Context, instanceId: string, protectedTTL: number, mode: string): Promise<boolean> };
-    areScaleDownProtected: { (ctx: Context, instanceIds: string[]): Promise<boolean[]> };
+    setScaleDownProtected: {
+        (ctx: Context, group: string, instanceId: string, protectedTTL: number, mode: string): Promise<boolean>;
+    };
+    areScaleDownProtected: { (ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> };
 
     // reconfigure related methods
     setReconfigureDate: {
         (ctx: Context, instanceDetails: InstanceDetails[], date: string, ttl: number): Promise<boolean>;
     };
     unsetReconfigureDate: { (ctx: Context, instanceId: string, group: string): Promise<boolean> };
-    getReconfigureDates: { (ctx: Context, instanceIds: string[]): Promise<string[]> };
-    getReconfigureDate: { (ctx: Context, instanceId: string): Promise<string> };
+    getReconfigureDates: { (ctx: Context, group: string, instanceIds: string[]): Promise<string[]> };
+    getReconfigureDate: { (ctx: Context, group: string, instanceId: string): Promise<string> };
 
     // group related methods
-    existsAtLeastOneGroup: { (): Promise<boolean> };
+    existsAtLeastOneGroup: { (ctx: Context): Promise<boolean> };
     upsertInstanceGroup: { (ctx: Context, group: InstanceGroup): Promise<boolean> };
-    getInstanceGroup: { (groupName: string): Promise<InstanceGroup> };
+    getInstanceGroup: { (ctx: Context, groupName: string): Promise<InstanceGroup> };
     getAllInstanceGroups: { (ctx: Context): Promise<InstanceGroup[]> };
     getAllInstanceGroupNames: { (ctx: Context): Promise<string[]> };
     deleteInstanceGroup: { (ctx: Context, groupName: string): Promise<void> };
 
     // key related methods
-    checkValue: { (key: string): Promise<boolean> };
-    setValue: { (key: string, value: string, ttl: number): Promise<boolean> };
+    checkValue: { (ctx: Context, key: string): Promise<boolean> };
+    setValue: { (ctx: Context, key: string, value: string, ttl: number): Promise<boolean> };
 
     // sanity related
     saveCloudInstances: { (ctx: Context, groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> };

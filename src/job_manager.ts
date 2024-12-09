@@ -245,7 +245,7 @@ export default class JobManager {
     }
 
     async createSanityProcessingJobs(ctx: context.Context): Promise<void> {
-        if (!(await this.instanceGroupManager.isSanityJobsCreationAllowed())) {
+        if (!(await this.instanceGroupManager.isSanityJobsCreationAllowed(ctx))) {
             ctx.logger.info('[JobManager] Wait before allowing sanity job creation');
             return;
         }
@@ -259,7 +259,7 @@ export default class JobManager {
         }
 
         try {
-            if (!(await this.instanceGroupManager.isSanityJobsCreationAllowed())) {
+            if (!(await this.instanceGroupManager.isSanityJobsCreationAllowed(ctx))) {
                 ctx.logger.info('[JobManager] Wait before allowing sanity job creation');
                 return;
             }
@@ -274,7 +274,7 @@ export default class JobManager {
                 this.sanityLoopProcessingTimeoutMs,
             );
 
-            await this.instanceGroupManager.setSanityJobsCreationGracePeriod();
+            await this.instanceGroupManager.setSanityJobsCreationGracePeriod(ctx);
         } catch (err) {
             ctx.logger.error(`[JobManager] Error while creating sanity jobs for group ${err}`);
             jobCreateFailureCounter.inc({ type: JobType.Sanity });
@@ -284,7 +284,7 @@ export default class JobManager {
     }
 
     async createGroupProcessingJobs(ctx: context.Context): Promise<void> {
-        if (!(await this.instanceGroupManager.isGroupJobsCreationAllowed())) {
+        if (!(await this.instanceGroupManager.isGroupJobsCreationAllowed(ctx))) {
             ctx.logger.info('[JobManager] Wait before allowing job creation');
             return;
         }
@@ -298,7 +298,7 @@ export default class JobManager {
         }
 
         try {
-            if (!(await this.instanceGroupManager.isGroupJobsCreationAllowed())) {
+            if (!(await this.instanceGroupManager.isGroupJobsCreationAllowed(ctx))) {
                 ctx.logger.info('[JobManager] Wait before allowing job creation');
                 return;
             }
@@ -322,7 +322,7 @@ export default class JobManager {
             // populate some queue health metrics
             const healthCheckResult = await this.jobQueue.checkHealth();
             await this.metricsLoop.saveMetricQueueWaiting(healthCheckResult.waiting);
-            await this.instanceGroupManager.setGroupJobsCreationGracePeriod();
+            await this.instanceGroupManager.setGroupJobsCreationGracePeriod(ctx);
         } catch (err) {
             ctx.logger.error(`[JobManager] Error while creating jobs for group ${err}`);
             jobCreateFailureCounter.inc();

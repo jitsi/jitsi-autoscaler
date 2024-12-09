@@ -13,12 +13,22 @@ const ctx = { logger };
 ctx.logger.debug = mock.fn();
 ctx.logger.error = mock.fn();
 
+const mockClient = {
+    kv: {
+        get: mock.fn(),
+        set: mock.fn(),
+        del: mock.fn(),
+    },
+};
+
 const options = <ConsulOptions>{
     host: 'localhost',
     port: 8500,
     secure: false,
     groupsPrefix: '_test/autoscaler/groups/',
+    client: mockClient,
 };
+
 const client = new ConsulClient(options);
 
 const group = {
@@ -49,9 +59,23 @@ describe('ConsulClient', () => {
         });
 
         test('will find upserted group when listing all instance groups', async () => {
+            mockClient.kv.get.mock.mockImplementationOnce(() => [
+                {
+                    Key: options.groupsPrefix + group.name,
+                    Value: JSON.stringify(group),
+                },
+            ]);
+
             const res = await client.fetchInstanceGroups(ctx);
             assert.strictEqual(res.length, 1);
             assert.strictEqual(res[0], group.name);
+            mockClient.kv.get.mock.mockImplementationOnce(
+                () =>
+                    <Consul.KVGetResponse>{
+                        Key: options.groupsPrefix + group.name,
+                        Value: JSON.stringify(group),
+                    },
+            );
 
             const res2 = await client.getInstanceGroup(ctx, group.name);
             assert.deepEqual(res2, group);

@@ -11,6 +11,7 @@ export interface ConsulOptions {
     port: number;
     secure: boolean;
     groupsPrefix?: string;
+    client?: Consul;
 }
 
 export default class ConsulStore {
@@ -18,7 +19,11 @@ export default class ConsulStore {
     private groupsPrefix = 'autoscaler/groups/';
 
     constructor(options: ConsulOptions) {
-        this.client = new Consul(options);
+        if (options.client) {
+            this.client = options.client;
+        } else {
+            this.client = new Consul(options);
+        }
         if (options.groupsPrefix) {
             this.groupsPrefix = options.groupsPrefix;
         }

@@ -8,9 +8,9 @@ import { CloudInstance } from './cloud_manager';
 // uses the got library to make HTTP requests
 
 export interface ConsulOptions {
-    host: string;
-    port: number;
-    secure: boolean;
+    host?: string;
+    port?: number;
+    secure?: boolean;
     groupsPrefix?: string;
     valuesPrefix?: string;
     instancesPrefix?: string;
@@ -33,6 +33,9 @@ export default class ConsulStore implements InstanceStore {
     private instancesPrefix = 'autoscaler/instances/';
 
     constructor(options: ConsulOptions) {
+        if (!options.client && (!options.host || !options.port)) {
+            throw new Error('Consul client or at least host and port must be provided to ConsulStore');
+        }
         if (options.client) {
             this.client = options.client;
         } else {

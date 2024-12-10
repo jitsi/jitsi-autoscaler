@@ -6,8 +6,7 @@ import { Logger } from 'winston';
 import { ClientOpts } from 'redis';
 import InstanceLauncher from './instance_launcher';
 import AutoscaleProcessor from './autoscaler';
-import LockManager from './lock_manager';
-import { AutoscalerLock } from './lock';
+import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import * as promClient from 'prom-client';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
@@ -16,7 +15,7 @@ import { Context } from './context';
 export interface JobManagerOptions {
     logger: Logger;
     queueRedisOptions: ClientOpts;
-    lockManager: LockManager;
+    lockManager: AutoscalerLockManager;
     instanceGroupManager: InstanceGroupManager;
     instanceLauncher: InstanceLauncher;
     autoscaler: AutoscaleProcessor;
@@ -87,7 +86,7 @@ export interface JobData {
 export default class JobManager {
     private static readonly jobQueueName = 'AutoscalerJobs';
 
-    private lockManager: LockManager;
+    private lockManager: AutoscalerLockManager;
     private instanceGroupManager: InstanceGroupManager;
     private instanceLauncher: InstanceLauncher;
     private autoscaler: AutoscaleProcessor;

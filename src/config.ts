@@ -60,6 +60,7 @@ const env = cleanEnv(process.env, {
     SANITY_LOOP_PROCESSING_TIMEOUT_MS: num({ default: 180000 }), // max time allowed for a sanity job to finish processing until it times out - in ms
     INSTANCE_STORE_PROVIDER: str({ default: 'redis' }),
     METRICS_STORE_PROVIDER: str({ default: 'redis' }),
+    LOCK_PROVIDER: str({ default: 'redis' }),
     PROMETHEUS_URL: str({ default: 'http://localhost:9090' }),
     METRICS_LOOP_INTERVAL_MS: num({ default: 60000 }), // time in ms
     REPORT_EXT_CALL_MAX_TIME_IN_SECONDS: num({ default: 60 }),
@@ -159,6 +160,8 @@ export default {
     InstanceStoreProvider: env.INSTANCE_STORE_PROVIDER,
     // metrics storage provider
     MetricsStoreProvider: env.METRICS_STORE_PROVIDER,
+    // lock provider
+    LockProvider: env.LOCK_PROVIDER,
     // other
     CloudProviders: cloudProviders,
     OciConfigurationFilePath: env.OCI_CONFIGURATION_FILE_PATH,

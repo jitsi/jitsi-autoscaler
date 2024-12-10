@@ -68,9 +68,9 @@ describe('ConsulLockManager', () => {
         lockManager = new ConsulLockManager({ consulClient, consulKeyPrefix: '_test/autoscaler/locks' });
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         // end the session renewal loop
-        lockManager.shutdown();
+        await lockManager.shutdown();
         mock.restoreAll();
     });
 
@@ -117,7 +117,7 @@ describe('ConsulLockManager', () => {
             assert.ok(res3.session, 'session is set');
             assert.strictEqual(res3.key, '_test/autoscaler/locks/group/test');
             res3.release();
-            secondLockManager.shutdown();
+            await secondLockManager.shutdown();
         });
     });
 });

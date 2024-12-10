@@ -88,9 +88,9 @@ export class ConsulLockManager implements AutoscalerLockManager {
         }
     }
 
-    shutdown(): void {
+    async shutdown(): Promise<void> {
         if (this.consulSession) {
-            this.consulClient.session.destroy(this.consulSession);
+            await this.consulClient.session.destroy(this.consulSession);
         }
         if (this.consulRenewTimeout) {
             clearTimeout(this.consulRenewTimeout);

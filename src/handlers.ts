@@ -1,8 +1,7 @@
 import { Request, Response } from 'express';
 import { InstanceTracker, StatsReport } from './instance_tracker';
 import InstanceGroupManager from './instance_group';
-import LockManager from './lock_manager';
-import { AutoscalerLock } from './lock';
+import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import ShutdownManager from './shutdown_manager';
 import ReconfigureManager from './reconfigure_manager';
 import GroupReportGenerator from './group_report';
@@ -101,7 +100,7 @@ interface HandlersOptions {
     reconfigureManager: ReconfigureManager;
     instanceGroupManager: InstanceGroupManager;
     groupReportGenerator: GroupReportGenerator;
-    lockManager: LockManager;
+    lockManager: AutoscalerLockManager;
     scalingManager: ScalingManager;
 }
 
@@ -112,7 +111,7 @@ class Handlers {
     private reconfigureManager: ReconfigureManager;
     private instanceGroupManager: InstanceGroupManager;
     private groupReportGenerator: GroupReportGenerator;
-    private lockManager: LockManager;
+    private lockManager: AutoscalerLockManager;
     private audit: Audit;
     private scalingManager: ScalingManager;
 
@@ -267,7 +266,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -301,7 +300,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -348,7 +347,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -366,7 +365,7 @@ class Handlers {
             res.status(200);
             res.send({ save: 'OK' });
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -416,7 +415,7 @@ class Handlers {
             res.status(200);
             res.send({ instanceGroups: instanceGroups });
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -477,7 +476,7 @@ class Handlers {
                         await this.instanceGroupManager.upsertInstanceGroup(ctx, initialGroup);
                     }
                 } finally {
-                    await lock.release();
+                    await lock.release(req.context);
                 }
             }),
         );
@@ -539,7 +538,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -580,7 +579,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 

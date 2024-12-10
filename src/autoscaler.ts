@@ -1,8 +1,7 @@
 import { InstanceMetric } from './metrics_store';
 import { InstanceTracker } from './instance_tracker';
-import { AutoscalerLock } from './lock';
 import InstanceGroupManager from './instance_group';
-import LockManager from './lock_manager';
+import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import { Context } from './context';
 import Audit from './audit';
 import { InstanceGroup } from './instance_store';
@@ -14,14 +13,14 @@ interface ScaleChoiceFunction {
 export interface AutoscaleProcessorOptions {
     instanceTracker: InstanceTracker;
     instanceGroupManager: InstanceGroupManager;
-    lockManager: LockManager;
+    lockManager: AutoscalerLockManager;
     audit: Audit;
 }
 
 export default class AutoscaleProcessor {
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
-    private lockManager: LockManager;
+    private lockManager: AutoscalerLockManager;
     private audit: Audit;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
@@ -86,7 +85,7 @@ export default class AutoscaleProcessor {
             const scaleMetrics = await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
             await this.audit.updateLastAutoScalerRun(ctx, group.name, scaleMetrics);
         } finally {
-            await lock.release();
+            await lock.release(ctx);
         }
 
         return true;

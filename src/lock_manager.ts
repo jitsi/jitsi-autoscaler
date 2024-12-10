@@ -1,14 +1,42 @@
 // import { Redis } from 'ioredis';
 import Redis from 'ioredis';
+import Consul from 'consul';
 import Redlock, { Lock, ResourceLockedError } from 'redlock';
 import { Logger } from 'winston';
 import { Context } from './context';
 import AutoscalerLock, { AutoscalerLockManager } from './lock';
 
 export interface LockManagerOptions {
-    redisClient: Redis;
+    redisClient?: Redis;
     groupLockTTLMs: number;
     jobCreationLockTTL: number;
+}
+
+export interface ConsulLockManagerOptions {
+    consulClient: Consul;
+    groupLockTTLMs: number;
+    jobCreationLockTTL: number;
+    consulKeyPrefix?: string;
+}
+
+export class ConsulLocker implements AutoscalerLock {
+    private client: Consul;
+    public session: string;
+    public key: string;
+
+    constructor(client: Consul, session: string, key: string) {
+        this.client = client;
+        this.session = session;
+        this.key = key;
+    }
+
+    async release(ctx: Context): Promise<void> {
+        ctx.logger.debug(`Releasing consul lock ${this.key}`, { key: this.key, session: this.session });
+        const res = await this.client.kv.set({ key: this.key, value: 'false', release: this.session });
+        if (!res) {
+            ctx.logger.error(`Failed to release consul lock ${this.key}`, { key: this.key, session: this.session });
+        }
+    }
 }
 
 export class RedLocker implements AutoscalerLock {
@@ -16,12 +44,94 @@ export class RedLocker implements AutoscalerLock {
     constructor(lock: Lock) {
         this.lock = lock;
     }
-    async release(): Promise<void> {
+
+    async release(ctx: Context): Promise<void> {
+        ctx.logger.debug('Releasing lock');
         await this.lock.release();
     }
 }
 
-export default class LockManager implements AutoscalerLockManager {
+export class ConsulLockManager implements AutoscalerLockManager {
+    private consulClient: Consul;
+    private consulSession: string;
+    private consulSessionTTL = '1h';
+    private consulKeyPrefix = 'autoscaler/locks';
+    // 30 minutes
+    private consulSessionRenewInterval = 30 * 60 * 1000;
+
+    private consulRenewTimeout: NodeJS.Timeout;
+
+    constructor(options: ConsulLockManagerOptions) {
+        this.consulClient = options.consulClient;
+        if (options.consulKeyPrefix) {
+            this.consulKeyPrefix = options.consulKeyPrefix;
+        }
+    }
+
+    async initConsulSession(): Promise<void> {
+        if (!this.consulSession) {
+            const s = await this.consulClient.session.create({
+                behavior: 'release',
+                ttl: this.consulSessionTTL,
+                lockdelay: '1s',
+            });
+            this.consulSession = s.ID;
+            this.consulRenewTimeout = setTimeout(() => {
+                this.renewConsulSession();
+            }, this.consulSessionRenewInterval);
+        }
+    }
+
+    async renewConsulSession(): Promise<boolean> {
+        if (this.consulSession) {
+            await this.consulClient.session.renew(this.consulSession);
+            // schedule the next renewal
+            this.consulRenewTimeout = setTimeout(() => {
+                this.renewConsulSession();
+            }, this.consulSessionRenewInterval);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    async shutdown(): Promise<void> {
+        if (this.consulSession) {
+            await this.consulClient.session.destroy(this.consulSession);
+        }
+        if (this.consulRenewTimeout) {
+            clearTimeout(this.consulRenewTimeout);
+        }
+    }
+
+    async lockGroup(ctx: Context, group: string): Promise<AutoscalerLock> {
+        const lockKey = `${this.consulKeyPrefix}/group/${group}`;
+        return this.lockKey(ctx, lockKey);
+    }
+
+    async lockKey(ctx: Context, key: string): Promise<AutoscalerLock> {
+        await this.initConsulSession();
+        try {
+            ctx.logger.debug(`Obtaining consul lock ${key}`);
+            const lock = await this.consulClient.kv.set({ key, value: 'true', acquire: this.consulSession });
+            if (!lock) {
+                throw new Error(`Failed to obtain lock for key ${key}`);
+            }
+            ctx.logger.debug(`Lock obtained for consul ${key}`, { key, session: this.consulSession });
+            return new ConsulLocker(this.consulClient, this.consulSession, key);
+        } catch (err) {
+            ctx.logger.error(`Error obtaining consul lock for key ${key}`, err);
+            throw err;
+        }
+    }
+
+    async lockJobCreation(ctx: Context): Promise<AutoscalerLock> {
+        const lockKey = `${this.consulKeyPrefix}/jobCreation`;
+        return this.lockKey(ctx, lockKey);
+    }
+}
+
+export class RedisLockManager implements AutoscalerLockManager {
     private redisClient: Redis;
     private groupProcessingLockManager: Redlock;
     private groupLockTTLMs: number;
@@ -45,7 +155,6 @@ export default class LockManager implements AutoscalerLockManager {
                 retryJitter: 200, // time in ms
             },
         );
-
         this.groupProcessingLockManager.on('clientError', (err) => {
             this.logger.error('A redis error has occurred on the autoscalerLock:', err);
         });
@@ -60,22 +169,22 @@ export default class LockManager implements AutoscalerLockManager {
     }
 
     async lockGroup(ctx: Context, group: string): Promise<AutoscalerLock> {
-        ctx.logger.debug(`Obtaining lock ${LockManager.groupLockKey}`);
+        ctx.logger.debug(`Obtaining lock ${RedisLockManager.groupLockKey}`);
         const lock = await this.groupProcessingLockManager.acquire(
-            [`${LockManager.groupLockKey}:${group}`],
+            [`${RedisLockManager.groupLockKey}:${group}`],
             this.groupLockTTLMs,
         );
-        ctx.logger.debug(`Lock obtained for ${LockManager.groupLockKey}`);
+        ctx.logger.debug(`Lock obtained for ${RedisLockManager.groupLockKey}`);
         return new RedLocker(lock);
     }
 
     async lockJobCreation(ctx: Context): Promise<AutoscalerLock> {
-        ctx.logger.debug(`Obtaining lock ${LockManager.groupJobsCreationLockKey}`);
+        ctx.logger.debug(`Obtaining lock ${RedisLockManager.groupJobsCreationLockKey}`);
         const lock = await this.groupProcessingLockManager.acquire(
-            [LockManager.groupJobsCreationLockKey],
+            [RedisLockManager.groupJobsCreationLockKey],
             this.jobCreationLockTTL,
         );
-        ctx.logger.debug(`Lock obtained for ${LockManager.groupJobsCreationLockKey}`);
+        ctx.logger.debug(`Lock obtained for ${RedisLockManager.groupJobsCreationLockKey}`);
         return new RedLocker(lock);
     }
 }

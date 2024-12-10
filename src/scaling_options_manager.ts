@@ -1,18 +1,17 @@
 import { Context } from './context';
 import InstanceGroupManager from './instance_group';
 import { FullScalingOptionsRequest, FullScalingOptionsResponse, ScalingOptionsRequest } from './handlers';
-import { AutoscalerLock } from './lock';
-import LockManager from './lock_manager';
+import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import { InstanceGroup } from './instance_store';
 
 interface ScalingManagerOptions {
     instanceGroupManager: InstanceGroupManager;
-    lockManager: LockManager;
+    lockManager: AutoscalerLockManager;
 }
 
 export default class ScalingManager {
     private instanceGroupManager: InstanceGroupManager;
-    private lockManager: LockManager;
+    private lockManager: AutoscalerLockManager;
 
     constructor(options: ScalingManagerOptions) {
         this.lockManager = options.lockManager;
@@ -102,7 +101,7 @@ export default class ScalingManager {
                 success = false;
             }
         } finally {
-            await lock.release();
+            await lock.release(ctx);
         }
 
         return success;

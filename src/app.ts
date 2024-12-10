@@ -1,6 +1,7 @@
 import config from './config';
 import express from 'express';
 import * as context from './context';
+import Consul from 'consul';
 import Handlers from './handlers';
 import Validator from './validator';
 import Redis, { RedisOptions } from 'ioredis';
@@ -14,7 +15,7 @@ import CloudManager from './cloud_manager';
 import InstanceGroupManager from './instance_group';
 import AutoscaleProcessor from './autoscaler';
 import InstanceLauncher from './instance_launcher';
-import LockManager from './lock_manager';
+import { RedisLockManager, ConsulLockManager } from './lock_manager';
 import * as stats from './stats';
 import ShutdownManager from './shutdown_manager';
 import ReconfigureManager from './reconfigure_manager';
@@ -30,6 +31,7 @@ import ConsulStore from './consul';
 import PrometheusClient from './prometheus';
 import MetricsStore from './metrics_store';
 import InstanceStore from './instance_store';
+import { AutoscalerLockManager } from './lock';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -47,6 +49,12 @@ app.use(express.json());
 
 // TODO: unittesting
 // TODO: readme updates and docker compose allthethings
+
+const consulClient = new Consul({
+    host: config.ConsulHost,
+    port: config.ConsulPort,
+    secure: config.ConsulSecure,
+});
 
 const redisOptions = <RedisOptions>{
     host: config.RedisHost,
@@ -95,9 +103,7 @@ let instanceStore: InstanceStore;
 switch (config.InstanceStoreProvider) {
     case 'consul':
         instanceStore = new ConsulStore({
-            host: config.ConsulHost,
-            port: config.ConsulPort,
-            secure: config.ConsulSecure,
+            client: consulClient,
         });
         break;
     default:
@@ -170,11 +176,21 @@ const cloudManager = new CloudManager({
     customConfigurationLaunchScriptTimeoutMs: config.CustomConfigurationLaunchScriptTimeoutMs,
 });
 
-const lockManager: LockManager = new LockManager(logger, {
-    redisClient,
-    jobCreationLockTTL: config.JobsCreationLockTTLMs,
-    groupLockTTLMs: config.GroupLockTTLMs,
-});
+let lockManager: AutoscalerLockManager;
+
+if (config.LockProvider === 'consul') {
+    lockManager = new ConsulLockManager({
+        consulClient,
+        jobCreationLockTTL: config.JobsCreationLockTTLMs,
+        groupLockTTLMs: config.GroupLockTTLMs,
+    });
+} else {
+    lockManager = new RedisLockManager(logger, {
+        redisClient,
+        jobCreationLockTTL: config.JobsCreationLockTTLMs,
+        groupLockTTLMs: config.GroupLockTTLMs,
+    });
+}
 
 const instanceGroupManager = new InstanceGroupManager({
     instanceStore,

@@ -278,7 +278,7 @@ export default class JobManager {
             ctx.logger.error(`[JobManager] Error while creating sanity jobs for group ${err}`);
             jobCreateFailureCounter.inc({ type: JobType.Sanity });
         } finally {
-            await lock.release();
+            await lock.release(ctx);
         }
     }
 
@@ -326,7 +326,7 @@ export default class JobManager {
             ctx.logger.error(`[JobManager] Error while creating jobs for group ${err}`);
             jobCreateFailureCounter.inc();
         } finally {
-            await lock.release();
+            await lock.release(ctx);
         }
     }
 

@@ -29,8 +29,13 @@ export class ConsulLocker implements AutoscalerLock {
         this.session = session;
         this.key = key;
     }
-    async release(): Promise<void> {
-        this.client.kv.set({ key: this.key, value: 'false', release: this.session });
+
+    async release(ctx: Context): Promise<void> {
+        ctx.logger.debug(`Releasing consul lock ${this.key}`, { key: this.key, session: this.session });
+        const res = await this.client.kv.set({ key: this.key, value: 'false', release: this.session });
+        if (!res) {
+            ctx.logger.error(`Failed to release consul lock ${this.key}`, { key: this.key, session: this.session });
+        }
     }
 }
 
@@ -39,7 +44,9 @@ export class RedLocker implements AutoscalerLock {
     constructor(lock: Lock) {
         this.lock = lock;
     }
-    async release(): Promise<void> {
+
+    async release(ctx: Context): Promise<void> {
+        ctx.logger.debug('Releasing lock');
         await this.lock.release();
     }
 }
@@ -110,7 +117,7 @@ export class ConsulLockManager implements AutoscalerLockManager {
             if (!lock) {
                 throw new Error(`Failed to obtain lock for key ${key}`);
             }
-            ctx.logger.debug(`Lock obtained for consul ${key}`);
+            ctx.logger.debug(`Lock obtained for consul ${key}`, { key, session: this.consulSession });
             return new ConsulLocker(this.consulClient, this.consulSession, key);
         } catch (err) {
             ctx.logger.error(`Error obtaining consul lock for key ${key}`, err);

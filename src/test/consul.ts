@@ -80,7 +80,7 @@ describe('ConsulLockManager', () => {
             const res = await lockManager.lockGroup(ctx, 'test');
             assert.ok(res.session, 'session is set');
             assert.strictEqual(res.key, '_test/autoscaler/locks/group/test');
-            res.release();
+            res.release(ctx);
         });
 
         test('will attempt a second lock on a group', async () => {
@@ -105,9 +105,9 @@ describe('ConsulLockManager', () => {
             }
 
             if (res2) {
-                res2.release();
+                res2.release(ctx);
             }
-            res.release();
+            res.release(ctx);
             // sleep 1 second
             await new Promise((resolve) => setTimeout(resolve, 1000));
 
@@ -116,7 +116,7 @@ describe('ConsulLockManager', () => {
             const res3 = await secondLockManager.lockGroup(ctx, 'test');
             assert.ok(res3.session, 'session is set');
             assert.strictEqual(res3.key, '_test/autoscaler/locks/group/test');
-            res3.release();
+            res3.release(ctx);
             await secondLockManager.shutdown();
         });
     });

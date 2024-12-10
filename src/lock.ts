@@ -1,7 +1,7 @@
 import { Context } from './context';
 
 export interface AutoscalerLock {
-    release(): Promise<void>;
+    release(ctx: Context): Promise<void>;
 }
 
 export interface AutoscalerLockManager {

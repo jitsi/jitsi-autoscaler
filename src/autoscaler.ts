@@ -85,7 +85,7 @@ export default class AutoscaleProcessor {
             const scaleMetrics = await this.updateDesiredCountIfNeeded(ctx, group, count, metricInventoryPerPeriod);
             await this.audit.updateLastAutoScalerRun(ctx, group.name, scaleMetrics);
         } finally {
-            await lock.release();
+            await lock.release(ctx);
         }
 
         return true;

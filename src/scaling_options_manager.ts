@@ -101,7 +101,7 @@ export default class ScalingManager {
                 success = false;
             }
         } finally {
-            await lock.release();
+            await lock.release(ctx);
         }
 
         return success;

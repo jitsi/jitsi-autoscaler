@@ -266,7 +266,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -300,7 +300,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -347,7 +347,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -365,7 +365,7 @@ class Handlers {
             res.status(200);
             res.send({ save: 'OK' });
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -415,7 +415,7 @@ class Handlers {
             res.status(200);
             res.send({ instanceGroups: instanceGroups });
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -476,7 +476,7 @@ class Handlers {
                         await this.instanceGroupManager.upsertInstanceGroup(ctx, initialGroup);
                     }
                 } finally {
-                    await lock.release();
+                    await lock.release(req.context);
                 }
             }),
         );
@@ -538,7 +538,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 
@@ -579,7 +579,7 @@ class Handlers {
                 res.sendStatus(404);
             }
         } finally {
-            await lock.release();
+            await lock.release(req.context);
         }
     }
 

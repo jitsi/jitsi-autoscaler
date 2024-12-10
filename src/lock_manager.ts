@@ -16,12 +16,13 @@ export interface ConsulLockManagerOptions {
     consulClient: Consul;
     groupLockTTLMs: number;
     jobCreationLockTTL: number;
+    consulKeyPrefix?: string;
 }
 
 export class ConsulLocker implements AutoscalerLock {
     private client: Consul;
-    private session: string;
-    private key: string;
+    public session: string;
+    public key: string;
 
     constructor(client: Consul, session: string, key: string) {
         this.client = client;
@@ -51,8 +52,13 @@ export class ConsulLockManager implements AutoscalerLockManager {
     // 30 minutes
     private consulSessionRenewInterval = 30 * 60 * 1000;
 
+    private consulRenewTimeout: NodeJS.Timeout;
+
     constructor(options: ConsulLockManagerOptions) {
         this.consulClient = options.consulClient;
+        if (options.consulKeyPrefix) {
+            this.consulKeyPrefix = options.consulKeyPrefix;
+        }
     }
 
     async initConsulSession(): Promise<void> {
@@ -60,9 +66,10 @@ export class ConsulLockManager implements AutoscalerLockManager {
             const s = await this.consulClient.session.create({
                 behavior: 'release',
                 ttl: this.consulSessionTTL,
+                lockdelay: '1s',
             });
             this.consulSession = s.ID;
-            setTimeout(() => {
+            this.consulRenewTimeout = setTimeout(() => {
                 this.renewConsulSession();
             }, this.consulSessionRenewInterval);
         }
@@ -72,12 +79,21 @@ export class ConsulLockManager implements AutoscalerLockManager {
         if (this.consulSession) {
             await this.consulClient.session.renew(this.consulSession);
             // schedule the next renewal
-            setTimeout(() => {
+            this.consulRenewTimeout = setTimeout(() => {
                 this.renewConsulSession();
             }, this.consulSessionRenewInterval);
             return true;
         } else {
             return false;
+        }
+    }
+
+    shutdown(): void {
+        if (this.consulSession) {
+            this.consulClient.session.destroy(this.consulSession);
+        }
+        if (this.consulRenewTimeout) {
+            clearTimeout(this.consulRenewTimeout);
         }
     }
 

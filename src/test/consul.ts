@@ -2,9 +2,11 @@
 // @ts-nocheck
 import AutoscalerLogger from '../logger';
 import assert from 'node:assert';
-import test, { afterEach, describe, mock } from 'node:test';
+import test, { beforeEach, afterEach, describe, mock } from 'node:test';
 
 import ConsulClient, { ConsulOptions } from '../consul';
+import { ConsulLockManager } from '../lock_manager';
+import Consul from 'consul';
 
 const asLogger = new AutoscalerLogger({ logLevel: 'debug' });
 const logger = asLogger.createLogger('debug');
@@ -23,7 +25,9 @@ const mockClient = {
         leader: mock.fn(),
     },
     session: {
-        create: mock.fn(),
+        create: mock.fn(() => {
+            return { ID: 'test' };
+        }),
         destroy: mock.fn(),
     },
     agent: {
@@ -54,6 +58,69 @@ const group = {
         test: 'test',
     },
 };
+
+describe('ConsulLockManager', () => {
+    //    const consulClient = new Consul({ host: 'localhost', port: 8500, secure: false });
+    const consulClient = mockClient;
+    let lockManager: ConsulLockManager;
+
+    beforeEach(() => {
+        lockManager = new ConsulLockManager({ consulClient, consulKeyPrefix: '_test/autoscaler/locks' });
+    });
+
+    afterEach(() => {
+        // end the session renewal loop
+        lockManager.shutdown();
+        mock.restoreAll();
+    });
+
+    describe('will lock a group', () => {
+        test('will lock a group', async () => {
+            mockClient.kv.set.mock.mockImplementationOnce(() => true);
+            const res = await lockManager.lockGroup(ctx, 'test');
+            assert.ok(res.session, 'session is set');
+            assert.strictEqual(res.key, '_test/autoscaler/locks/group/test');
+            res.release();
+        });
+
+        test('will attempt a second lock on a group', async () => {
+            mockClient.kv.set.mock.mockImplementationOnce(() => true);
+            const res = await lockManager.lockGroup(ctx, 'test');
+            assert.ok(res.session, 'session is set');
+            assert.strictEqual(res.key, '_test/autoscaler/locks/group/test');
+
+            const secondLockManager = new ConsulLockManager({
+                consulClient,
+                consulKeyPrefix: '_test/autoscaler/locks',
+            });
+            let res2;
+            mockClient.kv.set.mock.mockImplementationOnce(() => {
+                throw new Error('Failed to obtain lock for key _test/autoscaler/locks/group/test');
+            });
+            try {
+                res2 = await secondLockManager.lockGroup(ctx, 'test');
+                assert.fail('should not have obtained lock');
+            } catch (err) {
+                assert.strictEqual(err.message, 'Failed to obtain lock for key _test/autoscaler/locks/group/test');
+            }
+
+            if (res2) {
+                res2.release();
+            }
+            res.release();
+            // sleep 1 second
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+
+            // now attempt to lock the group with second lock manager
+            mockClient.kv.set.mock.mockImplementationOnce(() => true);
+            const res3 = await secondLockManager.lockGroup(ctx, 'test');
+            assert.ok(res3.session, 'session is set');
+            assert.strictEqual(res3.key, '_test/autoscaler/locks/group/test');
+            res3.release();
+            secondLockManager.shutdown();
+        });
+    });
+});
 
 describe('ConsulClient', () => {
     afterEach(() => {

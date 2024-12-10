@@ -177,6 +177,9 @@ export interface InstanceStore {
 
     // sanity related
     saveCloudInstances: { (ctx: Context, groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> };
+
+    // health
+    ping: { (ctx: Context): Promise<boolean | string> };
 }
 
 export default InstanceStore;

@@ -21,6 +21,9 @@ if (result.error) {
 const env = cleanEnv(process.env, {
     PORT: num({ default: 3000 }),
     LOG_LEVEL: str({ default: 'info' }),
+    CONSUL_HOST: str({ default: 'localhost' }),
+    CONSUL_PORT: num({ default: 8500 }),
+    CONSUL_SECURE: bool({ default: false }),
     REDIS_HOST: str({ default: '127.0.0.1' }),
     REDIS_PORT: num({ default: 6379 }),
     REDIS_PASSWORD: str({ default: '' }),
@@ -108,6 +111,9 @@ groupList.forEach((group) => {
 export default {
     HTTPServerPort: env.PORT,
     LogLevel: env.LOG_LEVEL,
+    ConsulHost: env.CONSUL_HOST,
+    ConsulPort: env.CONSUL_PORT,
+    ConsulSecure: env.CONSUL_SECURE,
     RedisHost: env.REDIS_HOST,
     RedisPort: env.REDIS_PORT,
     RedisPassword: env.REDIS_PASSWORD,

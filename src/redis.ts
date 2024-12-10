@@ -536,4 +536,17 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         );
         return true;
     }
+
+    async ping(ctx: Context): Promise<boolean | string> {
+        return await new Promise((resolve) => {
+            this.redisClient.ping((err, reply) => {
+                if (err) {
+                    ctx.logger.error('Redis ping error', { err });
+                    resolve(false);
+                } else {
+                    resolve(reply);
+                }
+            });
+        });
+    }
 }

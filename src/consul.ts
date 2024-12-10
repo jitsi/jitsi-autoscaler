@@ -225,11 +225,13 @@ export default class ConsulStore implements InstanceStore {
 
     async getAllInstanceGroups(ctx: Context): Promise<InstanceGroup[]> {
         ctx.logger.debug('fetching consul k/v keys');
-        const res = await this.client.kv.get({ key: this.groupsPrefix, recurse: true });
-        ctx.logger.debug('received consul k/v keys', { res });
+        const key = this.groupsPrefix;
+        const res = await this.client.kv.get({ key, recurse: true });
         if (!res) {
+            ctx.logger.debug('received consul k/v results', { key });
             return [];
         }
+        ctx.logger.debug('received consul k/v results', { key, res });
         return Object.entries(res).map(([_k, v]) => <InstanceGroup>JSON.parse(v.Value));
     }
 
@@ -336,7 +338,7 @@ export default class ConsulStore implements InstanceStore {
     async fetch(ctx: Context, key: string): Promise<GetItem | undefined> {
         ctx.logger.debug(`reading consul k/v key`, { key });
         const v = await this.client.kv.get(key);
-        ctx.logger.debug(`received consul k/v item`, { v });
+        ctx.logger.debug(`received consul k/v item`, { key, v });
         return v;
     }
 
@@ -365,7 +367,7 @@ export default class ConsulStore implements InstanceStore {
     // the value is considered expired if the timestamp is in the past
     async checkValue(ctx: Context, key: string): Promise<boolean> {
         try {
-            const res = this.fetchTTLValue(ctx, key);
+            const res = this.fetchTTLValue(ctx, this.valuesPrefix + key);
             if (!res) {
                 return false;
             }
@@ -394,5 +396,15 @@ export default class ConsulStore implements InstanceStore {
     async delete(key: string): Promise<boolean> {
         await this.client.kv.del(key);
         return true;
+    }
+
+    async ping(ctx: Context): Promise<boolean | string> {
+        try {
+            await this.client.status.leader();
+            return true;
+        } catch (err) {
+            ctx.logger.error(`Failed to ping consul: ${err}`, { err });
+            return err;
+        }
     }
 }

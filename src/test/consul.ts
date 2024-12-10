@@ -39,9 +39,6 @@ const mockClient = {
 };
 
 const options = <ConsulOptions>{
-    host: 'localhost',
-    port: 8500,
-    secure: false,
     groupsPrefix: '_test/autoscaler/groups/',
     client: mockClient,
 };
@@ -60,7 +57,6 @@ const group = {
 };
 
 describe('ConsulLockManager', () => {
-    //    const consulClient = new Consul({ host: 'localhost', port: 8500, secure: false });
     const consulClient = mockClient;
     let lockManager: ConsulLockManager;
 

@@ -276,6 +276,7 @@ const jobManager = new JobManager({
     launcherProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,
 });
+jobManager.start();
 
 const scalingManager = new ScalingManager({
     lockManager: lockManager,

@@ -1,4 +1,3 @@
-import Queue, { DoneCallback, Job } from 'bee-queue';
 import InstanceGroupManager from './instance_group';
 import * as context from './context';
 import { nanoid } from 'nanoid/non-secure';
@@ -11,6 +10,7 @@ import * as promClient from 'prom-client';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
 import { Context } from './context';
+import Queue, { DoneCallback, Job } from './queue';
 
 export interface JobManagerOptions {
     logger: Logger;
@@ -92,7 +92,7 @@ export default class JobManager {
     private autoscaler: AutoscaleProcessor;
     private sanityLoop: SanityLoop;
     private metricsLoop: MetricsLoop;
-    private jobQueue: Queue;
+    private jobQueue: Queue<JobData>;
     private autoscalerProcessingTimeoutMs: number;
     private launcherProcessingTimeoutMs: number;
     private sanityLoopProcessingTimeoutMs: number;
@@ -110,20 +110,16 @@ export default class JobManager {
         this.launcherProcessingTimeoutMs = options.launcherProcessingTimeoutMs;
         this.sanityLoopProcessingTimeoutMs = options.sanityLoopProcessingTimeoutMs;
 
-        this.jobQueue = this.createQueue(JobManager.jobQueueName, options.queueRedisOptions);
+        this.jobQueue = this.createQueue(JobManager.jobQueueName);
     }
 
-    createQueue(queueName: string, redisClientOptions: ClientOpts): Queue {
-        const newQueue = new Queue(queueName, {
-            redis: redisClientOptions,
-            removeOnSuccess: true,
-            removeOnFailure: true,
-        });
-        newQueue.on('error', (err) => {
+    createQueue(queueName: string): Queue<JobData> {
+        const newQueue = new Queue<JobData>(queueName);
+        newQueue.on('error', (err: Error) => {
             this.logger.error(`[QueueProcessor] A queue error happened in queue ${queueName}: ${err.message}`, { err });
             queueErrorCounter.inc();
         });
-        newQueue.on('failed', (job, err) => {
+        newQueue.on('failed', (job: Job<JobData>, err: Error) => {
             this.logger.error(
                 `[QueueProcessor] Failed processing job ${job.data.type}:${job.id} with error message ${err.message}`,
                 { err },
@@ -132,15 +128,18 @@ export default class JobManager {
             jobProcessTotalCounter.inc({ type: jobData.type });
             jobProcessFailureCounter.inc({ type: jobData.type });
         });
-        newQueue.on('stalled', (jobId) => {
+        newQueue.on('stalled', (jobId: string) => {
             this.logger.error(`[QueueProcessor] Stalled job ${jobId}; will be reprocessed`);
             queueStalledCounter.inc();
         });
-        newQueue.on('job succeeded', (jobId, result) => {
+        newQueue.on('job succeeded', (jobId: string, result: boolean) => {
             this.logger.info(`Job ${jobId} succeeded with result: ${result}`);
         });
-        newQueue.on('job retrying', (jobId, err) => {
+        newQueue.on('job retrying', (jobId: string, err: Error) => {
             this.logger.info(`Job ${jobId} failed with error ${err.message} but is being retried!`);
+        });
+        newQueue.on('idle', () => {
+            this.logger.debug(`[QueueProcessor] Idle event received`);
         });
 
         newQueue.process((job: Job<JobData>, done: DoneCallback<boolean>) => {
@@ -201,6 +200,13 @@ export default class JobManager {
 
     async handleUnknownJobType(): Promise<boolean> {
         throw new Error('Unkown job type');
+    }
+
+    async start(): Promise<void> {
+        if (!this.jobQueue) {
+            this.jobQueue = this.createQueue(JobManager.jobQueueName);
+        }
+        await this.jobQueue.start();
     }
 
     processJob(
@@ -303,6 +309,9 @@ export default class JobManager {
             }
 
             const instanceGroupNames = await this.instanceGroupManager.getAllInstanceGroupNames(ctx);
+
+            // randomize the group names
+            instanceGroupNames.sort(() => Math.random() - 0.5);
             await this.createJobs(
                 ctx,
                 instanceGroupNames,
@@ -333,7 +342,7 @@ export default class JobManager {
     async createJobs(
         ctx: context.Context,
         instanceGroupNames: string[],
-        jobQueue: Queue,
+        jobQueue: Queue<JobData>,
         jobType: JobType,
         processingTimeoutMillis: number,
     ): Promise<void> {
@@ -351,10 +360,10 @@ export default class JobManager {
                 .timeout(processingTimeoutMillis)
                 .retries(0)
                 .save()
-                .then((job) => {
+                .then((job: Job<JobData>) => {
                     ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
                 })
-                .catch((error) => {
+                .catch((error: Error) => {
                     ctx.logger.info(
                         `[JobManager] Error while creating ${jobType} job for group ${instanceGroupName}: ${error}`,
                     );

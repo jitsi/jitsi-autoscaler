@@ -159,7 +159,7 @@ export default class GroupReportGenerator {
                     break;
                 case 'jigasi':
                 case 'nomad':
-                case 'streaming-whisper':
+                case 'whisper':
                 case 'JVB':
                     // @TODO: implement JVB instance counting
                     break;
@@ -248,7 +248,7 @@ export default class GroupReportGenerator {
                             instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
                         }
                         break;
-                    case 'streaming-whisper':
+                    case 'whisper':
                         instanceReport.scaleStatus = 'ONLINE';
                         if (instanceState.status.whisperStatus && instanceState.status.whisperStatus.connections) {
                             instanceReport.scaleStatus = 'IN USE';

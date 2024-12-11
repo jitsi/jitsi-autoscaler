@@ -117,7 +117,7 @@ export class InstanceTracker {
                 case 'JVB':
                     instanceState.status.jvbStatus = <JVBStatus>report.stats;
                     break;
-                case 'streaming-whisper':
+                case 'whisper':
                     instanceState.status.whisperStatus = <whisperStatus>report.stats;
                     break;
             }
@@ -209,9 +209,9 @@ export class InstanceTracker {
                         metricValue = state.status.jvbStatus.stress_level;
                     }
                     break;
-                case 'streaming-whisper':
+                case 'whisper':
                     if (!state.status.whisperStatus) {
-                        // If streaming-whisper is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
+                        // If whisper is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
                         trackMetric = false;
                     } else if (state.status.whisperStatus.stress_level) {
                         metricValue = state.status.whisperStatus.stress_level;
@@ -248,7 +248,7 @@ export class InstanceTracker {
             case 'jigasi':
             case 'JVB':
                 return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
-            case 'streaming-whisper':
+            case 'whisper':
                 return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
         }
         return;
@@ -449,7 +449,7 @@ export class InstanceTracker {
         let shutdownStatus = false;
         shutdownStatus = state.shutdownStatus;
         if (!shutdownStatus) {
-            // check whether jigasi, JVB or streaming-whisper reports graceful shutdown, treat as if sidecar has acknowledge shutdown command
+            // check whether jigasi, JVB or whisper reports graceful shutdown, treat as if sidecar has acknowledge shutdown command
             if (
                 state.status &&
                 ((state.status.jvbStatus && state.status.jvbStatus.graceful_shutdown) ||

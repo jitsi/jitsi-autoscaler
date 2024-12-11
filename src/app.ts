@@ -614,7 +614,7 @@ app.put(
     body('instanceType').custom(async (value) => {
         if (!(await validator.supportedInstanceType(value))) {
             throw new Error(
-                'Instance type not supported. Use jvb, jigasi, nomad, jibri, streaming-whisper or sip-jibri instead',
+                'Instance type not supported. Use jvb, jigasi, nomad, jibri, whisper or sip-jibri instead',
             );
         }
         return true;

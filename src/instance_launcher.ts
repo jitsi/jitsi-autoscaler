@@ -292,7 +292,7 @@ export default class InstanceLauncher {
         const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {
             ctx.logger.error(
-                '[Launcher] Nr of streaming-whisper instances in group for scale down is less than desired scale down quantity',
+                '[Launcher] Nr of whisper instances in group for scale down is less than desired scale down quantity',
                 { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
             );
         }
@@ -397,7 +397,7 @@ export default class InstanceLauncher {
                     desiredScaleDownQuantity,
                 );
                 break;
-            case 'streaming-whisper':
+            case 'whisper':
                 listOfInstancesForScaleDown = this.getWhisperForScaleDown(
                     ctx,
                     group,

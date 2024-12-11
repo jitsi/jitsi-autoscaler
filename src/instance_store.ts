@@ -110,12 +110,19 @@ export interface JVBStatus {
     graceful_shutdown: boolean;
 }
 
+export interface WhisperStatus {
+    stress_level: number;
+    connections: number;
+    graceful_shutdown: boolean;
+}
+
 export interface InstanceStatus {
     provisioning: boolean;
     jibriStatus?: JibriStatus;
     jvbStatus?: JVBStatus;
     jigasiStatus?: JigasiStatus;
     nomadStatus?: NomadStatus;
+    whisperStatus?: WhisperStatus;
 }
 
 export interface InstanceState {

@@ -277,6 +277,38 @@ export default class InstanceLauncher {
         return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
     }
 
+    getWhisperForScaleDown(
+        ctx: Context,
+        group: InstanceGroup,
+        unprotectedInstances: InstanceState[],
+        desiredScaleDownQuantity: number,
+    ): InstanceDetails[] {
+        // first sort by participant count
+        unprotectedInstances.sort((a, b) => {
+            const aConnections = a.status.whisperStatus ? a.status.whisperStatus.connections : 0;
+            const bConnections = b.status.whisperStatus ? b.status.whisperStatus.connections : 0;
+            return aConnections - bConnections;
+        });
+        const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
+        if (actualScaleDownQuantity < desiredScaleDownQuantity) {
+            ctx.logger.error(
+                '[Launcher] Nr of whisper instances in group for scale down is less than desired scale down quantity',
+                { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
+            );
+        }
+        // Try to not scale down the running instances unless needed
+        // This is needed in case of scale up problems, when we should terminate the provisioning instances first
+        let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
+        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
+            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
+                this.getRunningInstances(unprotectedInstances),
+            );
+        }
+
+        // now return first N instances, least loaded first
+        return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
+    }
+
     getJibrisForScaleDown(
         ctx: Context,
         group: InstanceGroup,
@@ -359,6 +391,14 @@ export default class InstanceLauncher {
                 break;
             case 'JVB':
                 listOfInstancesForScaleDown = this.getJVBsForScaleDown(
+                    ctx,
+                    group,
+                    unprotectedInstances,
+                    desiredScaleDownQuantity,
+                );
+                break;
+            case 'whisper':
+                listOfInstancesForScaleDown = this.getWhisperForScaleDown(
                     ctx,
                     group,
                     unprotectedInstances,

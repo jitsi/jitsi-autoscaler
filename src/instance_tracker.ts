@@ -12,6 +12,7 @@ import InstanceStore, {
     JigasiStatus,
     JVBStatus,
     NomadStatus,
+    WhisperStatus,
 } from './instance_store';
 
 /* eslint-disable */
@@ -116,6 +117,9 @@ export class InstanceTracker {
                 case 'JVB':
                     instanceState.status.jvbStatus = <JVBStatus>report.stats;
                     break;
+                case 'whisper':
+                    instanceState.status.whisperStatus = <WhisperStatus>report.stats;
+                    break;
             }
         }
         ctx.logger.debug('Tracking instance state', { instanceState });
@@ -205,6 +209,14 @@ export class InstanceTracker {
                         metricValue = state.status.jvbStatus.stress_level;
                     }
                     break;
+                case 'whisper':
+                    if (!state.status.whisperStatus) {
+                        // If whisper is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
+                        trackMetric = false;
+                    } else if (state.status.whisperStatus.stress_level) {
+                        metricValue = state.status.whisperStatus.stress_level;
+                    }
+                    break;
             }
 
             if (trackMetric) {
@@ -235,6 +247,8 @@ export class InstanceTracker {
             case 'nomad':
             case 'jigasi':
             case 'JVB':
+                return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
+            case 'whisper':
                 return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
         }
         return;
@@ -435,11 +449,12 @@ export class InstanceTracker {
         let shutdownStatus = false;
         shutdownStatus = state.shutdownStatus;
         if (!shutdownStatus) {
-            // check whether jigasi or JVB reports graceful shutdown, treat as if sidecar has acknowledge shutdown command
+            // check whether jigasi, JVB or whisper reports graceful shutdown, treat as if sidecar has acknowledge shutdown command
             if (
                 state.status &&
                 ((state.status.jvbStatus && state.status.jvbStatus.graceful_shutdown) ||
                     (state.status.jigasiStatus && state.status.jigasiStatus.graceful_shutdown) ||
+                    (state.status.whisperStatus && state.status.whisperStatus.graceful_shutdown) ||
                     (state.status.nomadStatus && !state.status.nomadStatus.eligibleForScheduling))
             ) {
                 shutdownStatus = true;

@@ -205,6 +205,11 @@ export default class AutoscaleProcessor {
                     (count < group.scalingOptions.maxDesired && value >= group.scalingOptions.scaleUpThreshold) ||
                     count < group.scalingOptions.minDesired
                 );
+            case 'whisper':
+                return (
+                    (count < group.scalingOptions.maxDesired && value >= group.scalingOptions.scaleUpThreshold) ||
+                    count < group.scalingOptions.minDesired
+                );
         }
         return false;
     }
@@ -219,6 +224,8 @@ export default class AutoscaleProcessor {
             case 'nomad':
             case 'JVB':
                 // in the case of JVB scale down only if value (average stress level) is below threshhold
+                return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;
+            case 'whisper':
                 return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;
         }
 

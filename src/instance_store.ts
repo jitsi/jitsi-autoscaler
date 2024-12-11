@@ -40,6 +40,7 @@ export interface InstanceGroupTags {
 
 export interface NomadStatus {
     stress_level: number;
+    graceful_shutdown?: boolean;
     totalCPU: number;
     eligibleForScheduling: boolean;
     allocatedCPU: number;
@@ -100,6 +101,14 @@ export interface JibriHealth {
     healthStatus: JibriHealthState;
 }
 
+export interface StressStatus {
+    stress_level: number;
+    graceful_shutdown: boolean;
+    participants?: number;
+    connections?: number;
+    allocatedCPU?: number;
+}
+
 export interface JVBStatus {
     stress_level: number;
     muc_clients_configured: number;
@@ -119,6 +128,7 @@ export interface WhisperStatus {
 export interface InstanceStatus {
     provisioning: boolean;
     jibriStatus?: JibriStatus;
+    stats?: StressStatus;
     jvbStatus?: JVBStatus;
     jigasiStatus?: JigasiStatus;
     nomadStatus?: NomadStatus;

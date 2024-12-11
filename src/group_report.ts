@@ -4,7 +4,7 @@ import { CloudInstance } from './cloud_manager';
 import ShutdownManager from './shutdown_manager';
 import MetricsLoop from './metrics_loop';
 import ReconfigureManager from './reconfigure_manager';
-import { InstanceGroup, InstanceState, JibriStatusState } from './instance_store';
+import { InstanceGroup, InstanceState, JibriStatusState, StressStatus } from './instance_store';
 
 export interface InstanceReport {
     instanceId: string;
@@ -148,6 +148,7 @@ export default class GroupReportGenerator {
             switch (group.type) {
                 case 'jibri':
                 case 'sip-jibri':
+                case 'availability':
                     if (instanceReport.scaleStatus == JibriStatusState.Idle) {
                         groupReport.availableCount++;
                     }
@@ -162,6 +163,7 @@ export default class GroupReportGenerator {
                 case 'nomad':
                 case 'whisper':
                 case 'JVB':
+                case 'stress':
                     // @TODO: implement JVB instance counting
                     break;
             }
@@ -209,57 +211,50 @@ export default class GroupReportGenerator {
             } else if (instanceState.status.provisioning) {
                 instanceReport.scaleStatus = 'PROVISIONING';
             } else {
+                let stats: StressStatus;
                 switch (group.type) {
                     case 'jibri':
                     case 'sip-jibri':
+                    case 'availability':
                         instanceReport.scaleStatus = 'SIDECAR_RUNNING';
                         if (instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus) {
                             instanceReport.scaleStatus = instanceState.status.jibriStatus.busyStatus.toString();
                         }
                         break;
                     case 'nomad':
-                        // @TODO: convert nomad stats into more explict statuses
-                        instanceReport.scaleStatus = 'SIDECAR_RUNNING';
-                        if (instanceState.status.nomadStatus && instanceState.status.nomadStatus.allocatedCPU > 1000) {
-                            instanceReport.scaleStatus = 'IN USE';
-                        }
-                        if (
-                            instanceState.status.jigasiStatus &&
-                            !instanceState.status.nomadStatus.eligibleForScheduling
-                        ) {
-                            instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
-                        }
-                        break;
                     case 'jigasi':
-                        // @TODO: convert Jigasi stats into more explict statuses
-                        instanceReport.scaleStatus = 'ONLINE';
-                        if (instanceState.status.jigasiStatus && instanceState.status.jigasiStatus.participants) {
-                            instanceReport.scaleStatus = 'IN USE';
-                        }
-                        if (instanceState.status.jigasiStatus && instanceState.status.jigasiStatus.graceful_shutdown) {
-                            instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
-                        }
-                        break;
                     case 'JVB':
-                        // @TODO: convert JVB stats into more explict statuses
-                        instanceReport.scaleStatus = 'ONLINE';
-                        if (instanceState.status.jvbStatus && instanceState.status.jvbStatus.participants) {
-                            instanceReport.scaleStatus = 'IN USE';
-                        }
-                        if (instanceState.status.jvbStatus && instanceState.status.jvbStatus.graceful_shutdown) {
-                            instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
-                        }
-                        break;
                     case 'whisper':
+                    case 'stress':
+                        stats = <StressStatus>(
+                            (instanceState.status.stats
+                                ? instanceState.status.stats
+                                : instanceState.status.jvbStatus
+                                ? instanceState.status.jvbStatus
+                                : instanceState.status.jigasiStatus
+                                ? instanceState.status.jigasiStatus
+                                : instanceState.status.whisperStatus
+                                ? instanceState.status.whisperStatus
+                                : instanceState.status.nomadStatus
+                                ? instanceState.status.nomadStatus
+                                : null)
+                        );
+
                         instanceReport.scaleStatus = 'ONLINE';
-                        if (instanceState.status.whisperStatus && instanceState.status.whisperStatus.connections) {
-                            instanceReport.scaleStatus = 'IN USE';
-                        }
-                        if (
-                            instanceState.status.whisperStatus &&
-                            instanceState.status.whisperStatus.graceful_shutdown
-                        ) {
-                            instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
+                        if (stats) {
+                            instanceReport.scaleStatus = 'SIDECAR_RUNNING';
+                            if (stats.participants) {
+                                instanceReport.scaleStatus = 'IN USE';
+                            }
+                            if (stats.connections) {
+                                instanceReport.scaleStatus = 'IN USE';
+                            }
+                            if (stats.allocatedCPU > 1000) {
+                                instanceReport.scaleStatus = 'IN USE';
+                            }
+                            if (stats.graceful_shutdown) {
+                                instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
+                            }
                         }
                         break;
                 }

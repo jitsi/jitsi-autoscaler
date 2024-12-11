@@ -192,7 +192,8 @@ export default class AutoscaleProcessor {
         switch (group.type) {
             case 'jibri':
             case 'sip-jibri':
-                // in the jibri case only scale up if value (available count) is below threshold
+            case 'availability':
+                // in the availability case only scale up if value (available count) is below threshold
                 return (
                     (count < group.scalingOptions.maxDesired && value < group.scalingOptions.scaleUpThreshold) ||
                     count < group.scalingOptions.minDesired
@@ -200,12 +201,9 @@ export default class AutoscaleProcessor {
             case 'jigasi':
             case 'nomad':
             case 'JVB':
-                // in the case of JVB scale up only if value (average stress level) is above or equal to threshhold
-                return (
-                    (count < group.scalingOptions.maxDesired && value >= group.scalingOptions.scaleUpThreshold) ||
-                    count < group.scalingOptions.minDesired
-                );
             case 'whisper':
+            case 'stress':
+                // in the case of stress scale up only if value (average stress level) is above or equal to threshhold
                 return (
                     (count < group.scalingOptions.maxDesired && value >= group.scalingOptions.scaleUpThreshold) ||
                     count < group.scalingOptions.minDesired
@@ -218,14 +216,15 @@ export default class AutoscaleProcessor {
         switch (group.type) {
             case 'jibri':
             case 'sip-jibri':
-                // in the jibri case only scale up if value (available count) is above threshold
+            case 'availability':
+                // in the availability case only scale up if value (available count) is above threshold
                 return count > group.scalingOptions.minDesired && value > group.scalingOptions.scaleDownThreshold;
             case 'jigasi':
             case 'nomad':
-            case 'JVB':
-                // in the case of JVB scale down only if value (average stress level) is below threshhold
-                return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;
             case 'whisper':
+            case 'JVB':
+            case 'stress':
+                // in the case of stress scale down only if value (average stress level) is below threshhold
                 return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;
         }
 

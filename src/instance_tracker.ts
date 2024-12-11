@@ -9,10 +9,8 @@ import InstanceStore, {
     InstanceState,
     JibriStatus,
     JibriStatusState,
-    JigasiStatus,
-    JVBStatus,
     NomadStatus,
-    WhisperStatus,
+    StressStatus,
 } from './instance_store';
 
 /* eslint-disable */
@@ -105,20 +103,20 @@ export class InstanceTracker {
             switch (report.instance.instanceType) {
                 case 'jibri':
                 case 'sip-jibri':
+                case 'availability':
                     jibriStatusReport = <JibriStatusReport>report.stats;
                     instanceState.status.jibriStatus = jibriStatusReport.status;
                     break;
                 case 'jigasi':
-                    instanceState.status.jigasiStatus = <JigasiStatus>report.stats;
+                case 'JVB':
+                case 'whisper':
+                case 'stress':
+                    instanceState.status.stats = <StressStatus>report.stats;
                     break;
                 case 'nomad':
-                    instanceState.status.nomadStatus = this.nomadStatusFromStats(<NomadReportStats>report.stats);
-                    break;
-                case 'JVB':
-                    instanceState.status.jvbStatus = <JVBStatus>report.stats;
-                    break;
-                case 'whisper':
-                    instanceState.status.whisperStatus = <WhisperStatus>report.stats;
+                    instanceState.status.stats = <StressStatus>(
+                        this.nomadStatusFromStats(<NomadReportStats>report.stats)
+                    );
                     break;
             }
         }
@@ -148,6 +146,7 @@ export class InstanceTracker {
         return <NomadStatus>{
             totalCPU,
             stress_level: nomadStats['nomad.client.allocated.cpu'] / totalCPU,
+            graceful_shutdown: nomadLabels['node_scheduling_eligibility'] != 'eligible',
             eligibleForScheduling: nomadLabels['node_scheduling_eligibility'] == 'eligible',
             allocatedCPU: nomadStats['nomad.client.allocated.cpu'],
             allocatedMemory: nomadStats['nomad.client.allocated.memory'],
@@ -186,35 +185,15 @@ export class InstanceTracker {
                     // If Jibri is not up, the available metric is tracked with value 0
                     break;
                 case 'jigasi':
-                    if (!state.status.jigasiStatus) {
-                        // If Jigasi is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
-                        trackMetric = false;
-                    } else if (state.status.jigasiStatus.stress_level) {
-                        metricValue = state.status.jigasiStatus.stress_level;
-                    }
-                    break;
                 case 'nomad':
-                    if (!state.status.nomadStatus) {
-                        // If nomad node is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
-                        trackMetric = false;
-                    } else if (state.status.nomadStatus.stress_level) {
-                        metricValue = state.status.nomadStatus.stress_level;
-                    }
-                    break;
                 case 'JVB':
-                    if (!state.status.jvbStatus) {
-                        // If JVB is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
-                        trackMetric = false;
-                    } else if (state.status.jvbStatus.stress_level) {
-                        metricValue = state.status.jvbStatus.stress_level;
-                    }
-                    break;
                 case 'whisper':
-                    if (!state.status.whisperStatus) {
-                        // If whisper is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
+                case 'stress':
+                    // If node is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
+                    if (!state.status.stats || state.status.stats.stress_level == undefined) {
                         trackMetric = false;
-                    } else if (state.status.whisperStatus.stress_level) {
-                        metricValue = state.status.whisperStatus.stress_level;
+                    } else {
+                        metricValue = state.status.stats.stress_level;
                     }
                     break;
             }
@@ -243,12 +222,13 @@ export class InstanceTracker {
         switch (group.type) {
             case 'jibri':
             case 'sip-jibri':
+            case 'availability':
                 return this.getAvailableMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
             case 'nomad':
             case 'jigasi':
             case 'JVB':
-                return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
             case 'whisper':
+            case 'stress':
                 return this.getAverageMetricPerPeriod(ctx, metricInventoryPerPeriod, periodCount);
         }
         return;
@@ -452,7 +432,8 @@ export class InstanceTracker {
             // check whether jigasi, JVB or whisper reports graceful shutdown, treat as if sidecar has acknowledge shutdown command
             if (
                 state.status &&
-                ((state.status.jvbStatus && state.status.jvbStatus.graceful_shutdown) ||
+                ((state.status.stats && state.status.stats.graceful_shutdown) ||
+                    (state.status.jvbStatus && state.status.jvbStatus.graceful_shutdown) ||
                     (state.status.jigasiStatus && state.status.jigasiStatus.graceful_shutdown) ||
                     (state.status.whisperStatus && state.status.whisperStatus.graceful_shutdown) ||
                     (state.status.nomadStatus && !state.status.nomadStatus.eligibleForScheduling))

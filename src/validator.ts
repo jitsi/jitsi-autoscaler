@@ -94,6 +94,7 @@ export default class Validator {
                 instanceType.toLowerCase() == 'sip-jibri' ||
                 instanceType.toLowerCase() == 'jigasi' ||
                 instanceType.toLowerCase() == 'nomad' ||
+                instanceType.toLowerCase() == 'streaming-whisper' ||
                 instanceType.toLowerCase() == 'jvb')
         );
     }

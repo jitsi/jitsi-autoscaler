@@ -613,7 +613,9 @@ app.put(
     body('options.scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('instanceType').custom(async (value) => {
         if (!(await validator.supportedInstanceType(value))) {
-            throw new Error('Instance type not supported. Use jvb, jigasi, nomad, jibri or sip-jibri instead');
+            throw new Error(
+                'Instance type not supported. Use jvb, jigasi, nomad, jibri, streaming-whisper or sip-jibri instead',
+            );
         }
         return true;
     }),

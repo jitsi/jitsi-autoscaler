@@ -12,7 +12,7 @@ import InstanceStore, {
     JigasiStatus,
     JVBStatus,
     NomadStatus,
-    whisperStatus,
+    WhisperStatus,
 } from './instance_store';
 
 /* eslint-disable */
@@ -118,7 +118,7 @@ export class InstanceTracker {
                     instanceState.status.jvbStatus = <JVBStatus>report.stats;
                     break;
                 case 'whisper':
-                    instanceState.status.whisperStatus = <whisperStatus>report.stats;
+                    instanceState.status.whisperStatus = <WhisperStatus>report.stats;
                     break;
             }
         }

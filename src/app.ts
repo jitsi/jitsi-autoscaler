@@ -7,7 +7,7 @@ import Validator from './validator';
 import Redis, { RedisOptions } from 'ioredis';
 import * as promClient from 'prom-client';
 import AutoscalerLogger from './logger';
-import shortid from 'shortid';
+import { nanoid } from 'nanoid/non-secure';
 import { ASAPPubKeyFetcher } from './asap';
 import { expressjwt } from 'express-jwt';
 import { InstanceTracker } from './instance_tracker';
@@ -203,7 +203,7 @@ logger.info('Starting up autoscaler service with config', { config });
 
 logger.info('Initializing instance group manager...');
 const start = Date.now();
-const initId = shortid.generate();
+const initId = nanoid(10);
 const initLogger = logger.child({ id: initId });
 const initCtx = new context.Context(initLogger, start, initId);
 instanceGroupManager.init(initCtx).catch((err) => {
@@ -297,7 +297,7 @@ const groupProcessingErrorCounter = new promClient.Counter({
 
 async function createGroupProcessingJobs() {
     const start = Date.now();
-    const pollId = shortid.generate();
+    const pollId = nanoid(10);
     const pollLogger = logger.child({
         id: pollId,
     });
@@ -316,7 +316,7 @@ createSanityProcessingJobs();
 
 async function createSanityProcessingJobs() {
     const start = Date.now();
-    const pollId = shortid.generate();
+    const pollId = nanoid(10);
     const pollLogger = logger.child({
         id: pollId,
     });

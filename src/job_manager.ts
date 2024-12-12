@@ -270,6 +270,7 @@ export default class JobManager {
             }
 
             const instanceGroupNames = await this.instanceGroupManager.getAllInstanceGroupNames(ctx);
+            instanceGroupNames.sort(() => Math.random() - 0.5);
 
             await this.createJobs(
                 ctx,

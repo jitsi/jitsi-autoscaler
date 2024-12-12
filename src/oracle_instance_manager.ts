@@ -8,6 +8,9 @@ import { CloudRetryStrategy } from './cloud_manager';
 import { AbstractCloudInstanceManager, CloudInstanceManager, CloudInstance } from './cloud_instance_manager';
 import { InstanceGroup } from './instance_store';
 
+// disable circuit breaker
+common.CircuitBreaker.EnableGlobalCircuitBreaker = false;
+
 interface FaultDomainMap {
     [key: string]: string[];
 }

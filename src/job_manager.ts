@@ -1,7 +1,7 @@
 import Queue, { DoneCallback, Job } from 'bee-queue';
 import InstanceGroupManager from './instance_group';
 import * as context from './context';
-import shortid from 'shortid';
+import { nanoid } from 'nanoid/non-secure';
 import { Logger } from 'winston';
 import { ClientOpts } from 'redis';
 import InstanceLauncher from './instance_launcher';
@@ -149,7 +149,7 @@ export default class JobManager {
 
             try {
                 const start = Date.now();
-                const pollId = shortid.generate();
+                const pollId = nanoid(10);
                 const pollLogger = this.logger.child({
                     id: pollId,
                 });

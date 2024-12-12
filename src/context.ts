@@ -1,6 +1,6 @@
 import { Logger } from 'winston';
 import { Request, Response, NextFunction } from 'express';
-import shortid from 'shortid';
+import { nanoid } from 'nanoid/non-secure';
 import AutoscalerLogger from './logger';
 import config from './config';
 
@@ -27,7 +27,7 @@ export class Context {
 // context or anything it contains.
 export function injectContext(req: Request, res: Response, next: NextFunction): void {
     const start = Date.now();
-    const reqId = shortid.generate();
+    const reqId = nanoid(10);
     const asLogger = new AutoscalerLogger({ logLevel: config.LogLevel });
     const logger = asLogger.createLogger(config.LogLevel);
 

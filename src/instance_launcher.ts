@@ -6,7 +6,7 @@ import * as promClient from 'prom-client';
 import ShutdownManager from './shutdown_manager';
 import Audit from './audit';
 import MetricsLoop from './metrics_loop';
-import { InstanceDetails, InstanceGroup, InstanceState, JibriStatusState } from './instance_store';
+import { InstanceDetails, InstanceGroup, InstanceState, JibriStatusState, StressStatus } from './instance_store';
 
 const instancesLaunchedCounter = new promClient.Counter({
     name: 'autoscaling_instance_launched_total',
@@ -182,7 +182,37 @@ export default class InstanceLauncher {
         return true;
     }
 
-    getJigasisForScaleDown(
+    getStatusMetricForScaleDown(state: InstanceState): number {
+        // pull stats from the first available status
+        const stats: StressStatus = <StressStatus>(
+            (state.status.stats
+                ? state.status.stats
+                : state.status.jvbStatus
+                ? state.status.jvbStatus
+                : state.status.jigasiStatus
+                ? state.status.jigasiStatus
+                : state.status.nomadStatus
+                ? state.status.nomadStatus
+                : state.status.whisperStatus
+                ? state.status.whisperStatus
+                : null)
+        );
+
+        // use specific provided values or fall back on stress level
+        return stats
+            ? stats.participants !== undefined
+                ? stats.participants
+                : stats.allocatedCPU !== undefined
+                ? stats.allocatedCPU
+                : stats.connections !== undefined
+                ? stats.connections
+                : stats.stress_level !== undefined
+                ? stats.stress_level
+                : 0
+            : 0;
+    }
+
+    getInstancesForScaleDownByStress(
         ctx: Context,
         group: InstanceGroup,
         unprotectedInstances: InstanceState[],
@@ -190,14 +220,12 @@ export default class InstanceLauncher {
     ): InstanceDetails[] {
         // first sort by participant count
         unprotectedInstances.sort((a, b) => {
-            const aParticipants = a.status.jigasiStatus ? a.status.jigasiStatus.participants : 0;
-            const bParticipants = b.status.jigasiStatus ? b.status.jigasiStatus.participants : 0;
-            return aParticipants - bParticipants;
+            return this.getStatusMetricForScaleDown(a) - this.getStatusMetricForScaleDown(b);
         });
         const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
         if (actualScaleDownQuantity < desiredScaleDownQuantity) {
             ctx.logger.error(
-                '[Launcher] Nr of Jigasi instances in group for scale down is less than desired scale down quantity',
+                '[Launcher] Nr of instances in group for scale down is less than desired scale down quantity',
                 { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
             );
         }
@@ -214,102 +242,7 @@ export default class InstanceLauncher {
         return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
     }
 
-    getNomadsForScaleDown(
-        ctx: Context,
-        group: InstanceGroup,
-        unprotectedInstances: InstanceState[],
-        desiredScaleDownQuantity: number,
-    ): InstanceDetails[] {
-        // first sort by participant count
-        unprotectedInstances.sort((a, b) => {
-            const aAllocatedCPU = a.status.nomadStatus ? a.status.nomadStatus.allocatedCPU : 0;
-            const bAllocatedCPU = b.status.nomadStatus ? b.status.nomadStatus.allocatedCPU : 0;
-            return aAllocatedCPU - bAllocatedCPU;
-        });
-        const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
-        if (actualScaleDownQuantity < desiredScaleDownQuantity) {
-            ctx.logger.error(
-                '[Launcher] Nr of Nomad instances in group for scale down is less than desired scale down quantity',
-                { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
-            );
-        }
-        // Try to not scale down the running instances unless needed
-        // This is needed in case of scale up problems, when we should terminate the provisioning instances first
-        let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
-        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
-            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
-                this.getRunningInstances(unprotectedInstances),
-            );
-        }
-
-        // now return first N instances, least loaded first
-        return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
-    }
-    getJVBsForScaleDown(
-        ctx: Context,
-        group: InstanceGroup,
-        unprotectedInstances: InstanceState[],
-        desiredScaleDownQuantity: number,
-    ): InstanceDetails[] {
-        // first sort by participant count
-        unprotectedInstances.sort((a, b) => {
-            const aParticipants = a.status.jvbStatus ? a.status.jvbStatus.participants : 0;
-            const bParticipants = b.status.jvbStatus ? b.status.jvbStatus.participants : 0;
-            return aParticipants - bParticipants;
-        });
-        const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
-        if (actualScaleDownQuantity < desiredScaleDownQuantity) {
-            ctx.logger.error(
-                '[Launcher] Nr of JVB instances in group for scale down is less than desired scale down quantity',
-                { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
-            );
-        }
-        // Try to not scale down the running instances unless needed
-        // This is needed in case of scale up problems, when we should terminate the provisioning instances first
-        let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
-        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
-            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
-                this.getRunningInstances(unprotectedInstances),
-            );
-        }
-
-        // now return first N instances, least loaded first
-        return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
-    }
-
-    getWhisperForScaleDown(
-        ctx: Context,
-        group: InstanceGroup,
-        unprotectedInstances: InstanceState[],
-        desiredScaleDownQuantity: number,
-    ): InstanceDetails[] {
-        // first sort by participant count
-        unprotectedInstances.sort((a, b) => {
-            const aConnections = a.status.whisperStatus ? a.status.whisperStatus.connections : 0;
-            const bConnections = b.status.whisperStatus ? b.status.whisperStatus.connections : 0;
-            return aConnections - bConnections;
-        });
-        const actualScaleDownQuantity = Math.min(desiredScaleDownQuantity, unprotectedInstances.length);
-        if (actualScaleDownQuantity < desiredScaleDownQuantity) {
-            ctx.logger.error(
-                '[Launcher] Nr of whisper instances in group for scale down is less than desired scale down quantity',
-                { groupName: group.name, actualScaleDownQuantity, desiredScaleDownQuantity },
-            );
-        }
-        // Try to not scale down the running instances unless needed
-        // This is needed in case of scale up problems, when we should terminate the provisioning instances first
-        let listOfInstancesForScaleDown = this.getProvisioningOrWithoutStatusInstances(unprotectedInstances);
-        if (listOfInstancesForScaleDown.length < actualScaleDownQuantity) {
-            listOfInstancesForScaleDown = listOfInstancesForScaleDown.concat(
-                this.getRunningInstances(unprotectedInstances),
-            );
-        }
-
-        // now return first N instances, least loaded first
-        return listOfInstancesForScaleDown.slice(0, actualScaleDownQuantity);
-    }
-
-    getJibrisForScaleDown(
+    getInstancesForScaleDownByAvailability(
         ctx: Context,
         group: InstanceGroup,
         unprotectedInstances: InstanceState[],
@@ -366,15 +299,8 @@ export default class InstanceLauncher {
         switch (group.type) {
             case 'jibri':
             case 'sip-jibri':
-                listOfInstancesForScaleDown = this.getJibrisForScaleDown(
-                    ctx,
-                    group,
-                    unprotectedInstances,
-                    desiredScaleDownQuantity,
-                );
-                break;
-            case 'jigasi':
-                listOfInstancesForScaleDown = this.getJigasisForScaleDown(
+            case 'availability':
+                listOfInstancesForScaleDown = this.getInstancesForScaleDownByAvailability(
                     ctx,
                     group,
                     unprotectedInstances,
@@ -382,23 +308,11 @@ export default class InstanceLauncher {
                 );
                 break;
             case 'nomad':
-                listOfInstancesForScaleDown = this.getNomadsForScaleDown(
-                    ctx,
-                    group,
-                    unprotectedInstances,
-                    desiredScaleDownQuantity,
-                );
-                break;
+            case 'jigasi':
             case 'JVB':
-                listOfInstancesForScaleDown = this.getJVBsForScaleDown(
-                    ctx,
-                    group,
-                    unprotectedInstances,
-                    desiredScaleDownQuantity,
-                );
-                break;
             case 'whisper':
-                listOfInstancesForScaleDown = this.getWhisperForScaleDown(
+            case 'stress':
+                listOfInstancesForScaleDown = this.getInstancesForScaleDownByStress(
                     ctx,
                     group,
                     unprotectedInstances,
@@ -428,7 +342,8 @@ export default class InstanceLauncher {
     private getProvisioningOrWithoutStatusInstances(instanceStates: InstanceState[]): InstanceDetails[] {
         const states = instanceStates.filter((instanceState) => {
             return (
-                (!instanceState.status.jibriStatus &&
+                (!instanceState.status.stats &&
+                    !instanceState.status.jibriStatus &&
                     !instanceState.status.jvbStatus &&
                     !instanceState.status.jigasiStatus &&
                     !instanceState.status.nomadStatus) ||
@@ -441,7 +356,8 @@ export default class InstanceLauncher {
     private getRunningInstances(instanceStates: InstanceState[]): InstanceDetails[] {
         const states = instanceStates.filter((instanceState) => {
             return (
-                (instanceState.status.jibriStatus ||
+                (instanceState.status.stats ||
+                    instanceState.status.jibriStatus ||
                     instanceState.status.jvbStatus ||
                     instanceState.status.jigasiStatus ||
                     instanceState.status.nomadStatus) &&

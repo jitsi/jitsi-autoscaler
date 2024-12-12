@@ -10,7 +10,7 @@ An autoscaler for Jitsi instances (`jibri`, `sip-jibri`, `jigasi`, `JVB`, `nomad
 * as a Droplet in Digital Ocean
 * custom deployment model
 
-The autoscaler manages multiple `groups` of instances, each having a `type` (`jibri`, `sip-jibri`, `jigasi`, `JVB`, `nomad`, `whisper`) and being deployed in a specific `cloud` (`oracle`, `digitalocean`, `custom`).
+The autoscaler manages multiple `groups` of instances, each having a `type` `stress`or `availability` and being deployed in a specific `cloud` (`oracle`, `digitalocean`, `custom`).
 
 The autoscaler knows the Jitsi instances status and communicates with them via the [jitsi-autoscaler-sidecar](https://github.com/jitsi/jitsi-autoscaler-sidecar),
 which needs to be co-located on each Jitsi instance. The sidecar periodically checks in with the autoscaler via a REST call and sends its status. 

@@ -2,7 +2,6 @@ import InstanceGroupManager from './instance_group';
 import * as context from './context';
 import { nanoid } from 'nanoid/non-secure';
 import { Logger } from 'winston';
-import { ClientOpts } from 'redis';
 import InstanceLauncher from './instance_launcher';
 import AutoscaleProcessor from './autoscaler';
 import { AutoscalerLock, AutoscalerLockManager } from './lock';
@@ -10,11 +9,11 @@ import * as promClient from 'prom-client';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
 import { Context } from './context';
-import Queue, { DoneCallback, Job } from './queue';
+import Queue, { QueueDoneCallback, QueueJob, QueueProvider } from './queue';
 
 export interface JobManagerOptions {
     logger: Logger;
-    queueRedisOptions: ClientOpts;
+    queueProvider: QueueProvider;
     lockManager: AutoscalerLockManager;
     instanceGroupManager: InstanceGroupManager;
     instanceLauncher: InstanceLauncher;
@@ -97,6 +96,7 @@ export default class JobManager {
     private launcherProcessingTimeoutMs: number;
     private sanityLoopProcessingTimeoutMs: number;
     private logger: Logger;
+    private queueProvider: QueueProvider;
 
     constructor(options: JobManagerOptions) {
         this.logger = options.logger;
@@ -109,17 +109,18 @@ export default class JobManager {
         this.autoscalerProcessingTimeoutMs = options.autoscalerProcessingTimeoutMs;
         this.launcherProcessingTimeoutMs = options.launcherProcessingTimeoutMs;
         this.sanityLoopProcessingTimeoutMs = options.sanityLoopProcessingTimeoutMs;
+        this.queueProvider = options.queueProvider;
 
         this.jobQueue = this.createQueue(JobManager.jobQueueName);
     }
 
     createQueue(queueName: string): Queue<JobData> {
-        const newQueue = new Queue<JobData>(queueName);
+        const newQueue = <Queue<JobData>>this.queueProvider.createQueue(queueName);
         newQueue.on('error', (err: Error) => {
             this.logger.error(`[QueueProcessor] A queue error happened in queue ${queueName}: ${err.message}`, { err });
             queueErrorCounter.inc();
         });
-        newQueue.on('failed', (job: Job<JobData>, err: Error) => {
+        newQueue.on('failed', (job: QueueJob<JobData>, err: Error) => {
             this.logger.error(
                 `[QueueProcessor] Failed processing job ${job.data.type}:${job.id} with error message ${err.message}`,
                 { err },
@@ -138,11 +139,11 @@ export default class JobManager {
         newQueue.on('job retrying', (jobId: string, err: Error) => {
             this.logger.info(`Job ${jobId} failed with error ${err.message} but is being retried!`);
         });
-        newQueue.on('idle', () => {
-            this.logger.debug(`[QueueProcessor] Idle event received`);
-        });
+        // newQueue.on('idle', () => {
+        //     this.logger.debug(`[QueueProcessor] Idle event received`);
+        // });
 
-        newQueue.process((job: Job<JobData>, done: DoneCallback<boolean>) => {
+        newQueue.process((job: QueueJob<JobData>, done: QueueDoneCallback<boolean>) => {
             let ctx;
             const start = process.hrtime();
 
@@ -211,9 +212,9 @@ export default class JobManager {
 
     processJob(
         ctx: Context,
-        job: Job<JobData>,
+        job: QueueJob<JobData>,
         processingHandler: (ctx: context.Context, group: string) => Promise<boolean>,
-        done: DoneCallback<boolean>,
+        done: QueueDoneCallback<boolean>,
     ): void {
         const start = process.hrtime();
         const jobData: JobData = job.data;
@@ -361,7 +362,7 @@ export default class JobManager {
                 .timeout(processingTimeoutMillis)
                 .retries(0)
                 .save()
-                .then((job: Job<JobData>) => {
+                .then((job: QueueJob<JobData>) => {
                     ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
                 })
                 .catch((error: Error) => {

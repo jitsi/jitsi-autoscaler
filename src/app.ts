@@ -32,6 +32,9 @@ import PrometheusClient from './prometheus';
 import MetricsStore from './metrics_store';
 import InstanceStore from './instance_store';
 import { AutoscalerLockManager } from './lock';
+import { QueueProvider } from './queue';
+import { BeeQueueProvider } from './bee_queue';
+import { LocalQueueProvider } from './local_queue';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -255,17 +258,26 @@ const sanityLoop = new SanityLoop({
     instanceGroupManager,
 });
 
-// Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
-// Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
-const jobManager = new JobManager({
-    logger,
-    queueRedisOptions: {
+let queueProvider: QueueProvider;
+if (config.QueueProvider == 'redis') {
+    queueProvider = new BeeQueueProvider({
         host: config.RedisHost,
         port: config.RedisPort,
         password: config.RedisPassword ? config.RedisPassword : undefined,
         db: config.RedisDb ? config.RedisDb : undefined,
         tls: config.RedisTLS ? {} : undefined,
-    },
+    });
+}
+
+if (config.QueueProvider == 'local') {
+    queueProvider = new LocalQueueProvider();
+}
+
+// Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
+// Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
+const jobManager = new JobManager({
+    logger,
+    queueProvider,
     lockManager,
     instanceGroupManager,
     instanceLauncher,

@@ -247,6 +247,7 @@ const groupReportGenerator = new GroupReportGenerator({
 
 const sanityLoop = new SanityLoop({
     metricsStore,
+    lockManager,
     instanceStore,
     cloudManager,
     reportExtCallRetryStrategy: {

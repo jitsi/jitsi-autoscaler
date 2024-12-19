@@ -133,11 +133,22 @@ export default class InstanceGroupManager {
         return this.instanceStore.checkValue(ctx, `autoScaleGracePeriod:${group}`);
     }
 
+    async allowSanity(ctx: Context, group: string): Promise<boolean> {
+        return this.instanceStore.checkValue(ctx, `sanityGracePeriod:${group}`);
+    }
+
     async setAutoScaleGracePeriod(ctx: Context, group: InstanceGroup): Promise<boolean> {
         ctx.logger.info(`resetting autoscale grace period for group ${group.name}: ${group.gracePeriodTTLSec}`, {
             gracePeriodTTLSec: group.gracePeriodTTLSec,
         });
         return this.setValue(ctx, `autoScaleGracePeriod:${group.name}`, group.gracePeriodTTLSec);
+    }
+
+    async setSanityGracePeriod(ctx: Context, group: InstanceGroup): Promise<boolean> {
+        ctx.logger.info(`resetting sanity grace period for group ${group.name}: ${this.sanityJobsIntervalSeconds}`, {
+            sanityJobsIntervalSeconds: this.sanityJobsIntervalSeconds,
+        });
+        return this.setValue(ctx, `sanityGracePeriod:${group.name}`, this.sanityJobsIntervalSeconds);
     }
 
     async setScaleDownProtected(ctx: Context, group: InstanceGroup): Promise<boolean> {

@@ -61,7 +61,13 @@ describe('InstanceLauncher', () => {
         },
     };
 
-    const inventory = [{ instanceId: 'i-deadbeef007', status: { stats: { stress_level: 0.5, participants: 1 } } }];
+    const inventory = [
+        {
+            instanceId: 'i-deadbeef007',
+            metadata: { group: groupName },
+            status: { provisioning: false, stats: { stress_level: 0.5, participants: 1 } },
+        },
+    ];
 
     const instanceGroupManager = {
         getInstanceGroup: mock.fn(() => groupDetails),
@@ -92,6 +98,11 @@ describe('InstanceLauncher', () => {
         audit,
         metricsLoop,
     });
+
+    const groupDetailsDesired0 = {
+        ...groupDetails,
+        scalingOptions: { ...groupDetails.scalingOptions, desiredCount: 0, minDesired: 0 },
+    };
 
     afterEach(() => {
         audit.updateLastLauncherRun.mock.resetCalls();
@@ -128,10 +139,6 @@ describe('InstanceLauncher', () => {
 
         // now test if scaleDown occurs with desired of 0 and inventory of 1
         test('launchOrShutdownInstancesByGroup should return true if desired is 0 and inventory is 1', async () => {
-            const groupDetailsDesired0 = {
-                ...groupDetails,
-                scalingOptions: { ...groupDetails.scalingOptions, desiredCount: 0, minDesired: 0 },
-            };
             instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetailsDesired0);
 
             const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
@@ -172,6 +179,119 @@ describe('InstanceLauncher', () => {
                 context.logger.info.mock.calls[0].arguments[0],
                 '[Launcher] Will scale up to the desired count',
             );
+        });
+    });
+
+    describe('instanceLauncher scaleDown selection tests', () => {
+        test('getStatusMetricForScaleDown should give correct status', async () => {
+            const result = await instanceLauncher.getStatusMetricForScaleDown(inventory[0]);
+            assert.equal(result, inventory[0].status.stats.participants, 'participant count from inventory');
+        });
+
+        test('getRunningInstances should return instance', async () => {
+            const result = await instanceLauncher.getRunningInstances(inventory);
+            assert.equal(result.length, inventory.length, 'all instances running');
+        });
+
+        test('getInstancesForScaleDown should return empty array if no instances', async () => {
+            const result = await instanceLauncher.getInstancesForScaleDown(context, [], groupDetails);
+            assert.equal(result.length, 0, 'no instances to scale down');
+        });
+
+        test('getInstancesForScaleDown should select inventory item if present', async () => {
+            const result = await instanceLauncher.getInstancesForScaleDown(context, inventory, groupDetailsDesired0);
+            assert.equal(result.length, 1, 'should select existing instance');
+        });
+
+        test('filterOutProtectedInstances should return identical array by default', async () => {
+            const result = await instanceLauncher.filterOutProtectedInstances(context, groupDetailsDesired0, inventory);
+            assert.equal(result.length, inventory.length, 'no instances protected by default');
+        });
+
+        test('filterOutProtectedInstances should return blank array if instance is protected', async () => {
+            shutdownManager.areScaleDownProtected.mock.mockImplementationOnce(() => [true]);
+            const result = await instanceLauncher.filterOutProtectedInstances(context, groupDetailsDesired0, inventory);
+            assert.equal(result.length, 0, 'no instances unprotected');
+        });
+
+        test('getInstancesForScaleDown should return empty array if only instance is protected', async () => {
+            shutdownManager.areScaleDownProtected.mock.mockImplementationOnce(() => [true]);
+            const result = await instanceLauncher.getInstancesForScaleDown(context, inventory, groupDetailsDesired0);
+            assert.equal(result.length, 0, 'no instances unprotected');
+        });
+
+        test('getInstancesForScaleDown should select the instance that has fewer participants', async () => {
+            const inventoryProvisioning = [
+                ...inventory,
+                {
+                    instanceId: 'i-deadbeef008',
+                    metadata: { group: groupName },
+                    status: { provisioning: false, stats: { stress_level: 0, participants: 0 } },
+                },
+            ];
+            const result = await instanceLauncher.getInstancesForScaleDown(
+                context,
+                inventoryProvisioning,
+                groupDetails,
+            );
+            assert.equal(result.length, 1, '1 instance selected for shutdown');
+            assert.equal(result[0].instanceId, 'i-deadbeef008', 'correct instance selected');
+        });
+
+        test('getInstancesForScaleDown should select the instances that have fewer participants', async () => {
+            const inventoryProvisioning = [
+                ...inventory,
+                {
+                    instanceId: 'i-deadbeef008',
+                    metadata: { group: groupName },
+                    status: { provisioning: false, stats: { stress_level: 0, participants: 0 } },
+                },
+                {
+                    instanceId: 'i-deadbeef001',
+                    metadata: { group: groupName },
+                    status: { provisioning: false, stats: { stress_level: 0.9, participants: 100 } },
+                },
+            ];
+            const result = await instanceLauncher.getInstancesForScaleDown(
+                context,
+                inventoryProvisioning,
+                groupDetails,
+            );
+            assert.equal(result.length, 2, '2 instance selected for shutdown');
+            const instanceIds = result.map((v) => v.instanceId);
+            assert.ok(instanceIds.includes('i-deadbeef008'), 'one correct instance selected');
+            assert.ok(instanceIds.includes('i-deadbeef007'), 'one correct instance selected');
+            assert.ok(!instanceIds.includes('i-deadbeef001'), 'loaded instance not selected');
+        });
+
+        test('getInstancesForScaleDown should skip protected but still select the instances that have fewer participants', async () => {
+            shutdownManager.areScaleDownProtected.mock.mockImplementationOnce((_ctx, _group, instanceIds) => {
+                return instanceIds.map((v) => v === 'i-deadbeef008');
+            });
+
+            const inventoryProvisioning = [
+                ...inventory,
+                {
+                    instanceId: 'i-deadbeef008',
+                    metadata: { group: groupName },
+                    status: { provisioning: false, stats: { stress_level: 0, participants: 0 } },
+                },
+                {
+                    instanceId: 'i-deadbeef001',
+                    metadata: { group: groupName },
+                    status: { provisioning: false, stats: { stress_level: 0.9, participants: 100 } },
+                },
+            ];
+            const result = await instanceLauncher.getInstancesForScaleDown(
+                context,
+                inventoryProvisioning,
+                groupDetails,
+            );
+            assert.equal(result.length, 2, '2 instance selected for shutdown');
+            const instanceIds = result.map((v) => v.instanceId);
+            assert.ok(instanceIds.includes('i-deadbeef001'), 'one correct instance selected');
+            assert.ok(instanceIds.includes('i-deadbeef007'), 'one correct instance selected');
+            assert.ok(!instanceIds.includes('i-deadbeef008'), 'loaded instance not selected');
         });
     });
 });

@@ -56,8 +56,6 @@ export default class InstanceLauncher {
         if (options.maxThrottleThreshold) {
             this.maxThrottleThreshold = options.maxThrottleThreshold;
         }
-
-        this.launchOrShutdownInstancesByGroup = this.launchOrShutdownInstancesByGroup.bind(this);
     }
 
     async launchOrShutdownInstancesByGroup(ctx: Context, groupName: string): Promise<boolean> {
@@ -350,7 +348,7 @@ export default class InstanceLauncher {
                 instanceState.status.provisioning == true
             );
         });
-        return this.instanceTracker.mapToInstanceDetails(states);
+        return InstanceTracker.mapToInstanceDetails(states);
     }
 
     private getRunningInstances(instanceStates: InstanceState[]): InstanceDetails[] {
@@ -364,7 +362,7 @@ export default class InstanceLauncher {
                 instanceState.status.provisioning == false
             );
         });
-        return this.instanceTracker.mapToInstanceDetails(states);
+        return InstanceTracker.mapToInstanceDetails(states);
     }
 
     private getAvailableJibris(instanceStates: InstanceState[]): InstanceDetails[] {
@@ -373,7 +371,7 @@ export default class InstanceLauncher {
                 instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Idle
             );
         });
-        return this.instanceTracker.mapToInstanceDetails(states);
+        return InstanceTracker.mapToInstanceDetails(states);
     }
 
     private getExpiredJibris(instanceStates: InstanceState[]): InstanceDetails[] {
@@ -383,7 +381,7 @@ export default class InstanceLauncher {
                 instanceState.status.jibriStatus.busyStatus == JibriStatusState.Expired
             );
         });
-        return this.instanceTracker.mapToInstanceDetails(states);
+        return InstanceTracker.mapToInstanceDetails(states);
     }
 
     private getBusyJibris(instanceStates: InstanceState[]): InstanceDetails[] {
@@ -392,6 +390,6 @@ export default class InstanceLauncher {
                 instanceState.status.jibriStatus && instanceState.status.jibriStatus.busyStatus == JibriStatusState.Busy
             );
         });
-        return this.instanceTracker.mapToInstanceDetails(states);
+        return InstanceTracker.mapToInstanceDetails(states);
     }
 }

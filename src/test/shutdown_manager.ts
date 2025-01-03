@@ -41,6 +41,22 @@ describe('ShutdownManager', () => {
         mock.restoreAll();
     });
 
+    // these tests are for scale protection statuses
+    describe('scaleProtectionStatuses', () => {
+        test('areScaleDownProtected with no instances', async () => {
+            const result = await shutdownManager.areScaleDownProtected(context, 'group', []);
+            assert.ok(result, 'expect ok result');
+            assert.equal(result.length, 0, 'expect result to be empty');
+        });
+
+        test('areScaleDownProtected with default instances', async () => {
+            const result = await shutdownManager.areScaleDownProtected(context, 'group', ['instanceId']);
+            assert.ok(result, 'expect ok result');
+            assert.equal(result.length, 1, 'expect result to be 1 false');
+            assert.equal(result[0], false, 'expect result to be false');
+        });
+    });
+
     // these tests are for the shutdown confirmation statuses
     describe('shutdownConfirmationStatuses', () => {
         test('read non-existent shutdown confirmation status', async () => {

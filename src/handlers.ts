@@ -313,7 +313,7 @@ class Handlers {
                 // found the group, so find the instances and act upon them
                 // build the list of current instances
                 const currentInventory = await this.instanceTracker.trimCurrent(req.context, req.params.name);
-                const instances = this.instanceTracker.mapToInstanceDetails(currentInventory);
+                const instances = InstanceTracker.mapToInstanceDetails(currentInventory);
                 // set their reconfigure status to the current date
                 try {
                     await this.reconfigureManager.setReconfigureDate(req.context, instances);

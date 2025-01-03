@@ -145,7 +145,7 @@ export default class InstanceGroupManager {
     }
 
     async isScaleDownProtected(ctx: Context, group: string): Promise<boolean> {
-        return this.instanceStore.checkValue(ctx, `isScaleDownProtected:${group}`);
+        return !this.instanceStore.checkValue(ctx, `isScaleDownProtected:${group}`);
     }
 
     async isGroupJobsCreationAllowed(ctx: Context): Promise<boolean> {

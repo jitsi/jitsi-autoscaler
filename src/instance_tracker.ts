@@ -464,7 +464,7 @@ export class InstanceTracker {
         return states.filter((_, index) => !statesShutdownStatus[index] && !shutdownConfirmations[index]);
     }
 
-    mapToInstanceDetails(states: InstanceState[]): InstanceDetails[] {
+    static mapToInstanceDetails(states: InstanceState[]): InstanceDetails[] {
         return states.map((response) => {
             return <InstanceDetails>{
                 instanceId: response.instanceId,

@@ -17,4 +17,9 @@ export const mockStore = {
     getShutdownStatus: mock.fn(() => false),
     getShutdownConfirmation: mock.fn(() => false),
     getShutdownConfirmations: mock.fn(() => [false]),
+
+    setScaleDownProtected: mock.fn(() => true),
+    areScaleDownProtected: mock.fn((_ctx, _group, input) => {
+        return input.map(() => false);
+    }),
 };

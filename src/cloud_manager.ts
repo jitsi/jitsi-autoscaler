@@ -39,9 +39,6 @@ export default class CloudManager {
         this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
-
-        this.scaleUp = this.scaleUp.bind(this);
-        this.scaleDown = this.scaleDown.bind(this);
     }
 
     async recordLaunch(
@@ -88,7 +85,7 @@ export default class CloudManager {
         isScaleDownProtected: boolean,
     ): Promise<number> {
         const groupName = group.name;
-        ctx.logger.info('[CloudManager] Scaling up', { groupName, quantity });
+        ctx.logger.info('[CloudManager] Scaling up', { groupName, quantity, isScaleDownProtected });
 
         const instanceManager = this.cloudInstanceManagerSelector.selectInstanceManager(group.cloud);
         if (!instanceManager) {

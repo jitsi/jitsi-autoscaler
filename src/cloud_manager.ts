@@ -85,7 +85,7 @@ export default class CloudManager {
         isScaleDownProtected: boolean,
     ): Promise<number> {
         const groupName = group.name;
-        ctx.logger.info('[CloudManager] Scaling up', { groupName, quantity, isScaleDownProtected });
+        ctx.logger.info('[CloudManager] Scaling up', { scaleUp: { groupName, quantity, isScaleDownProtected } });
 
         const instanceManager = this.cloudInstanceManagerSelector.selectInstanceManager(group.cloud);
         if (!instanceManager) {

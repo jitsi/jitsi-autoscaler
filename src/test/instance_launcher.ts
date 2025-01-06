@@ -182,6 +182,33 @@ describe('InstanceLauncher', () => {
         });
     });
 
+    describe('instanceLauncher scaleUp protection tests', () => {
+        test('launchOrShutdownInstancesByGroup should launch an instance without protected mode if group is not protected', async () => {
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetailsDesired2);
+            const groupDetailsDesired2 = {
+                ...groupDetails,
+                scalingOptions: { ...groupDetails.scalingOptions, desiredCount: 2, maxDesired: 2 },
+            };
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.equal(result, true, 'launch unprotected instance');
+            assert.equal(cloudManager.scaleUp.mock.calls.length, 1, 'scaleUp called');
+            assert.equal(cloudManager.scaleUp.mock.calls[0].arguments[4], false, 'unprotected instance');
+        });
+
+        test('launchOrShutdownInstancesByGroup should launch an instance in protected mode if group is protected', async () => {
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetailsDesired2);
+            instanceGroupManager.isScaleDownProtected.mock.mockImplementationOnce(() => true);
+            const groupDetailsDesired2 = {
+                ...groupDetails,
+                scalingOptions: { ...groupDetails.scalingOptions, desiredCount: 2, maxDesired: 2 },
+            };
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.equal(result, true, 'launch protected instance');
+            assert.equal(cloudManager.scaleUp.mock.calls.length, 1, 'scaleUp called');
+            assert.equal(cloudManager.scaleUp.mock.calls[0].arguments[4], true, 'protected instance');
+        });
+    });
+
     describe('instanceLauncher scaleDown selection tests', () => {
         test('getStatusMetricForScaleDown should give correct status', async () => {
             const result = await instanceLauncher.getStatusMetricForScaleDown(inventory[0]);

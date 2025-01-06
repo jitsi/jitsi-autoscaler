@@ -15,6 +15,7 @@ export interface CloudManagerOptions extends CloudInstanceManagerSelectorOptions
     shutdownManager: ShutdownManager;
     instanceTracker: InstanceTracker;
     audit: Audit;
+    cloudInstanceManagerSelector?: CloudInstanceManagerSelector;
 }
 
 export interface CloudInstance {
@@ -34,7 +35,11 @@ export default class CloudManager {
     constructor(options: CloudManagerOptions) {
         this.isDryRun = options.isDryRun;
 
-        this.cloudInstanceManagerSelector = new CloudInstanceManagerSelector(options);
+        if (options.cloudInstanceManagerSelector) {
+            this.cloudInstanceManagerSelector = options.cloudInstanceManagerSelector;
+        } else {
+            this.cloudInstanceManagerSelector = new CloudInstanceManagerSelector(options);
+        }
 
         this.instanceTracker = options.instanceTracker;
         this.shutdownManager = options.shutdownManager;

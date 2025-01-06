@@ -58,8 +58,12 @@ describe('RedisStore', () => {
         zrange: mock.fn(),
         set: mock.fn((key, value) => {
             _values[key] = value;
+            return 'OK';
         }),
         get: mock.fn((key) => {
+            if (!_values[key]) {
+                return null;
+            }
             return _values[key];
         }),
         pipeline: mock.fn(() => mockPipeline),
@@ -121,5 +125,19 @@ describe('RedisStore', () => {
     test('redisStore does not find protected status for unknown instance', async () => {
         const res = await redisStore.areScaleDownProtected(context, 'test', ['instance-321b']);
         assert.deepEqual(res, [false], 'expect instance to be unprotected');
+    });
+
+    test('setValue and checkValue return as expected', async () => {
+        const key = 'test-key';
+        const value = 'test-value';
+        const ttl = 60;
+
+        const preCheckRes = await redisStore.checkValue(context, key);
+        assert.equal(preCheckRes, false, 'expect pre-check value to fail');
+
+        const res = await redisStore.setValue(context, key, value, ttl);
+        assert.equal(res, true, 'expect set value to succeed');
+        const checkRes = await redisStore.checkValue(context, key);
+        assert.equal(checkRes, true, 'expect check value to succeed');
     });
 });

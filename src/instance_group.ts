@@ -129,8 +129,9 @@ export default class InstanceGroupManager {
         await this.instanceStore.deleteInstanceGroup(ctx, groupName);
     }
 
+    // only allow autoscaling if the autoscale grace period has expired
     async allowAutoscaling(ctx: Context, group: string): Promise<boolean> {
-        return this.instanceStore.checkValue(ctx, `autoScaleGracePeriod:${group}`);
+        return !this.instanceStore.checkValue(ctx, `autoScaleGracePeriod:${group}`);
     }
 
     async setAutoScaleGracePeriod(ctx: Context, group: InstanceGroup): Promise<boolean> {
@@ -144,20 +145,23 @@ export default class InstanceGroupManager {
         return this.setValue(ctx, `isScaleDownProtected:${group.name}`, group.protectedTTLSec);
     }
 
+    // only show scale protection if value is set
     async isScaleDownProtected(ctx: Context, group: string): Promise<boolean> {
-        return !this.instanceStore.checkValue(ctx, `isScaleDownProtected:${group}`);
+        return this.instanceStore.checkValue(ctx, `isScaleDownProtected:${group}`);
     }
 
+    // only allow group jobs if the grace period has expired
     async isGroupJobsCreationAllowed(ctx: Context): Promise<boolean> {
-        return this.instanceStore.checkValue(ctx, 'groupJobsCreationGracePeriod');
+        return !this.instanceStore.checkValue(ctx, 'groupJobsCreationGracePeriod');
     }
 
     async setGroupJobsCreationGracePeriod(ctx: Context): Promise<boolean> {
         return this.setValue(ctx, `groupJobsCreationGracePeriod`, this.processingIntervalSeconds);
     }
 
+    // only allow sanity jobs if the grace period has expired
     async isSanityJobsCreationAllowed(ctx: Context): Promise<boolean> {
-        return this.instanceStore.checkValue(ctx, 'sanityJobsCreationGracePeriod');
+        return !this.instanceStore.checkValue(ctx, 'sanityJobsCreationGracePeriod');
     }
 
     async setSanityJobsCreationGracePeriod(ctx: Context): Promise<boolean> {

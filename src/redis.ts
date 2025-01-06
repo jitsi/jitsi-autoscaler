@@ -445,7 +445,6 @@ export default class RedisStore implements MetricsStore, InstanceStore {
 
     async getInstanceGroup(_ctx: Context, groupName: string): Promise<InstanceGroup> {
         const result = await this.redisClient.hget(this.GROUPS_HASH_NAME, groupName);
-        _ctx.logger.info('group is', { result });
         if (result !== null && result.length > 0) {
             return JSON.parse(result);
         } else {
@@ -513,8 +512,9 @@ export default class RedisStore implements MetricsStore, InstanceStore {
 
     async checkValue(_ctx: Context, key: string): Promise<boolean> {
         const result = await this.redisClient.get(key);
-        return !(result !== null && result.length > 0);
+        return result !== null && result.length > 0;
     }
+
     async setValue(_ctx: Context, key: string, value: string, ttl: number): Promise<boolean> {
         const result = await this.redisClient.set(key, value, 'EX', ttl);
         if (result !== 'OK') {

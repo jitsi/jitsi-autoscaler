@@ -400,7 +400,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         return res;
     }
 
-    async existsAtLeastOneGroup(_ctx: Context): Promise<boolean> {
+    async existsAtLeastOneGroup(ctx: Context): Promise<boolean> {
         let cursor = '0';
         do {
             const result = await this.redisClient.hscan(
@@ -411,21 +411,26 @@ export default class RedisStore implements MetricsStore, InstanceStore {
                 'COUNT',
                 this.redisScanCount,
             );
-            cursor = result[0];
-            if (result[1].length > 0) {
-                const pipeline = this.redisClient.pipeline();
-                result[1].forEach((key: string) => {
-                    pipeline.hget(this.GROUPS_HASH_NAME, key);
-                });
+            if (result) {
+                cursor = result[0];
+                if (result[1].length > 0) {
+                    const pipeline = this.redisClient.pipeline();
+                    result[1].forEach((key: string) => {
+                        pipeline.hget(this.GROUPS_HASH_NAME, key);
+                    });
 
-                const items = await pipeline.exec();
-                if (items) {
-                    if (items.length > 0) {
-                        return true;
+                    const items = await pipeline.exec();
+                    if (items) {
+                        if (items.length > 0) {
+                            return true;
+                        }
+                    } else {
+                        return false;
                     }
-                } else {
-                    return false;
                 }
+            } else {
+                ctx.logger.error('Error scanning groups for existsAtLeastOneGroup');
+                return false;
             }
         } while (cursor != '0');
 
@@ -433,7 +438,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
     }
 
     async upsertInstanceGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
-        ctx.logger.info(`Storing ${group.name}`);
+        ctx.logger.info(`Storing ${group.name}`, { group });
         await this.redisClient.hset(this.GROUPS_HASH_NAME, group.name, JSON.stringify(group));
         return true;
     }
@@ -507,8 +512,9 @@ export default class RedisStore implements MetricsStore, InstanceStore {
 
     async checkValue(_ctx: Context, key: string): Promise<boolean> {
         const result = await this.redisClient.get(key);
-        return !(result !== null && result.length > 0);
+        return result !== null && result.length > 0;
     }
+
     async setValue(_ctx: Context, key: string, value: string, ttl: number): Promise<boolean> {
         const result = await this.redisClient.set(key, value, 'EX', ttl);
         if (result !== 'OK') {

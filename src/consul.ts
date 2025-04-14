@@ -12,6 +12,7 @@ export interface ConsulOptions {
     port?: number;
     secure?: boolean;
     groupsPrefix?: string;
+    dataPrefix?: string;
     valuesPrefix?: string;
     instancesPrefix?: string;
     client?: Consul;
@@ -30,6 +31,7 @@ export default class ConsulStore implements InstanceStore {
     private client: Consul;
     private groupsPrefix = 'autoscaler/groups/';
     private valuesPrefix = 'autoscaler/values/';
+    private dataPrefix = 'autoscaler/groupData/';
     private instancesPrefix = 'autoscaler/instances/';
 
     constructor(options: ConsulOptions) {
@@ -50,6 +52,9 @@ export default class ConsulStore implements InstanceStore {
         if (options.instancesPrefix) {
             this.instancesPrefix = options.instancesPrefix;
         }
+        if (options.dataPrefix) {
+            this.dataPrefix = options.dataPrefix;
+        }
     }
 
     // shutdown related methods
@@ -65,7 +70,7 @@ export default class ConsulStore implements InstanceStore {
             p.push(
                 this.writeTTLValue(
                     ctx,
-                    `${this.groupsPrefix}${instance.group}/shutdown/${instance.instanceId}`,
+                    `${this.dataPrefix}${instance.group}/shutdown/${instance.instanceId}`,
                     status,
                     ttl,
                 ),
@@ -78,7 +83,7 @@ export default class ConsulStore implements InstanceStore {
     }
 
     async fetchShutdownStatus(ctx: Context, group: string, clean = true): Promise<TTLValueMap> {
-        return this.fetchRecursiveTTLValues(ctx, `${this.groupsPrefix}${group}/shutdown`, clean);
+        return this.fetchRecursiveTTLValues(ctx, `${this.dataPrefix}${group}/shutdown`, clean);
     }
 
     async getShutdownStatuses(ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> {
@@ -87,7 +92,7 @@ export default class ConsulStore implements InstanceStore {
     }
 
     async fetchShutdownConfirmations(ctx: Context, group: string): Promise<TTLValueMap> {
-        return this.fetchRecursiveTTLValues(ctx, `${this.groupsPrefix}${group}/confirmation`);
+        return this.fetchRecursiveTTLValues(ctx, `${this.dataPrefix}${group}/confirmation`);
     }
 
     async getShutdownConfirmations(ctx: Context, group: string, instanceIds: string[]): Promise<(string | false)[]> {
@@ -103,12 +108,12 @@ export default class ConsulStore implements InstanceStore {
     }
 
     async getShutdownStatus(ctx: Context, group: string, instanceId: string): Promise<boolean> {
-        const v = await this.fetchTTLValue(ctx, `${this.groupsPrefix}${group}/shutdown/${instanceId}`);
+        const v = await this.fetchTTLValue(ctx, `${this.dataPrefix}${group}/shutdown/${instanceId}`);
         return v !== undefined;
     }
 
     async getShutdownConfirmation(ctx: Context, group: string, instanceId: string): Promise<false | string> {
-        const v = await this.fetchTTLValue(ctx, `${this.groupsPrefix}${group}/confirmation/${instanceId}`);
+        const v = await this.fetchTTLValue(ctx, `${this.dataPrefix}${group}/confirmation/${instanceId}`);
         if (v) {
             return v.status;
         } else {
@@ -128,7 +133,7 @@ export default class ConsulStore implements InstanceStore {
             p.push(
                 this.writeTTLValue(
                     ctx,
-                    `${this.groupsPrefix}${instance.group}/confirmation/${instance.instanceId}`,
+                    `${this.dataPrefix}${instance.group}/confirmation/${instance.instanceId}`,
                     status,
                     ttl,
                 ),
@@ -147,11 +152,11 @@ export default class ConsulStore implements InstanceStore {
         protectedTTL: number,
         mode: string,
     ): Promise<boolean> {
-        return this.writeTTLValue(ctx, `${this.groupsPrefix}${group}/protected/${instanceId}`, mode, protectedTTL);
+        return this.writeTTLValue(ctx, `${this.dataPrefix}${group}/protected/${instanceId}`, mode, protectedTTL);
     }
 
     async areScaleDownProtected(ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> {
-        const res = await this.fetchRecursiveTTLValues(ctx, `${this.groupsPrefix}${group}/protected`);
+        const res = await this.fetchRecursiveTTLValues(ctx, `${this.dataPrefix}${group}/protected`);
         const scaleProtectedInstances = Object.keys(res);
 
         return instanceIds.map((instanceId) => scaleProtectedInstances.includes(instanceId));
@@ -175,13 +180,13 @@ export default class ConsulStore implements InstanceStore {
     }
 
     async unsetReconfigureDate(ctx: Context, instanceId: string, group: string): Promise<boolean> {
-        return this.delete(`${this.groupsPrefix}${group}/reconfigure/${instanceId}`);
+        return this.delete(`${this.dataPrefix}${group}/reconfigure/${instanceId}`);
     }
 
     async getReconfigureDates(ctx: Context, group: string, instanceIds: string[]): Promise<string[]> {
-        const res = await this.fetchRecursiveTTLValues(ctx, `${this.groupsPrefix}${group}/reconfigure`);
+        const res = await this.fetchRecursiveTTLValues(ctx, `${this.dataPrefix}${group}/reconfigure`);
         return instanceIds.map((instanceId) => {
-            const reconfigure = res[`${this.groupsPrefix}${group}/reconfigure/${instanceId}`];
+            const reconfigure = res[`${this.dataPrefix}${group}/reconfigure/${instanceId}`];
             if (reconfigure) {
                 return reconfigure.status;
             } else {
@@ -191,7 +196,7 @@ export default class ConsulStore implements InstanceStore {
     }
     async getReconfigureDate(ctx: Context, group: string, instanceId: string): Promise<string> {
         try {
-            const v = await this.fetch(ctx, `${this.groupsPrefix}${group}/reconfigure/${instanceId}`);
+            const v = await this.fetch(ctx, `${this.dataPrefix}${group}/reconfigure/${instanceId}`);
             if (v) {
                 const reconfigure = JSON.parse(v.Value);
                 return reconfigure.status;
@@ -223,7 +228,9 @@ export default class ConsulStore implements InstanceStore {
         if (!res) {
             return [];
         }
-        return Object.entries(res).map(([_k, v]) => v.Key.replace(this.groupsPrefix, ''));
+        return Object.entries(res)
+            .map(([_k, v]) => v.Key.replace(this.groupsPrefix, ''))
+            .filter((v) => !v.includes('/'));
     }
 
     async getAllInstanceGroups(ctx: Context): Promise<InstanceGroup[]> {
@@ -235,7 +242,9 @@ export default class ConsulStore implements InstanceStore {
             return [];
         }
         ctx.logger.debug('received consul k/v results', { key, res });
-        return Object.entries(res).map(([_k, v]) => <InstanceGroup>JSON.parse(v.Value));
+        return Object.entries(res)
+            .filter(([_k, v]) => !v.Key.replace(this.groupsPrefix, '').includes('/'))
+            .map(([_k, v]) => <InstanceGroup>JSON.parse(v.Value));
     }
 
     async upsertInstanceGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
@@ -250,7 +259,16 @@ export default class ConsulStore implements InstanceStore {
 
     async deleteInstanceGroup(ctx: Context, group: string): Promise<void> {
         try {
-            await this.delete(`${this.groupsPrefix}${group}`);
+            (
+                await Promise.allSettled([
+                    this.delete(`${this.groupsPrefix}${group}`),
+                    this.delete(`${this.dataPrefix}${group}`),
+                ])
+            ).map((r) => {
+                if (r.status === 'rejected') {
+                    ctx.logger.error(`Failed to delete group key from consul: ${r.reason}`, { reason: r.reason });
+                }
+            });
             return;
         } catch (err) {
             ctx.logger.error(`Failed to delete instance group from consul: ${err}`, { group, err });
@@ -260,8 +278,10 @@ export default class ConsulStore implements InstanceStore {
 
     async fetchInstanceStates(ctx: Context, group: string): Promise<InstanceState[]> {
         try {
-            const states = await this.client.kv.get({ key: `${this.groupsPrefix}${group}/states`, recurse: true });
-            return Object.entries(states).map(([_k, v]) => <InstanceState>JSON.parse(v.Value));
+            const states = await this.client.kv.get({ key: `${this.dataPrefix}${group}/states`, recurse: true });
+            if (states) {
+                return Object.entries(states).map(([_k, v]) => <InstanceState>JSON.parse(v.Value));
+            } else return [];
         } catch (err) {
             ctx.logger.error(`Failed to get instance states from consul: ${err}`, { err });
             throw err;
@@ -279,7 +299,7 @@ export default class ConsulStore implements InstanceStore {
 
     async saveInstanceStatus(ctx: Context, group: string, state: InstanceState): Promise<boolean> {
         try {
-            await this.write(ctx, `${this.groupsPrefix}${group}/states/${state.instanceId}`, JSON.stringify(state));
+            await this.write(ctx, `${this.dataPrefix}${group}/states/${state.instanceId}`, JSON.stringify(state));
             return true;
         } catch (err) {
             ctx.logger.error(`Failed to save instance state into consul: ${err}`, { group, state, err });
@@ -383,7 +403,7 @@ export default class ConsulStore implements InstanceStore {
     // save cloud instances
     async saveCloudInstances(ctx: Context, group: string, instances: CloudInstance[]): Promise<boolean> {
         try {
-            await this.write(ctx, `${this.groupsPrefix}${group}/instances`, JSON.stringify(instances));
+            await this.write(ctx, `${this.dataPrefix}${group}/instances`, JSON.stringify(instances));
             return true;
         } catch (err) {
             ctx.logger.error(`Failed to save cloud instances into consul: ${err}`, { group, instances, err });

@@ -540,6 +540,14 @@ app.get('/groups/:name/instance-audit', async (req, res, next) => {
     }
 });
 
+app.get('/groups/:name/group-metrics', async (req, res, next) => {
+    try {
+        await h.getGroupMetrics(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 app.get('/groups/:name/group-audit', async (req, res, next) => {
     try {
         await h.getGroupAudit(req, res);

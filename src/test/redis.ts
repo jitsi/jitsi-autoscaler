@@ -44,6 +44,10 @@ describe('RedisStore', () => {
     const mockClient = <unknown>{
         expire: mock.fn(),
         zremrangebyscore: mock.fn(() => 0),
+        zadd: mock.fn((_z, _score, _value) => {
+            _keys.push(_value);
+            _values[_value] = _score;
+        }),
         hget: mock.fn((_h, key) => {
             return _hashes[key];
         }),
@@ -139,5 +143,35 @@ describe('RedisStore', () => {
         assert.equal(res, true, 'expect set value to succeed');
         const checkRes = await redisStore.checkValue(context, key);
         assert.equal(checkRes, true, 'expect check value to succeed');
+    });
+
+    test('redisStore can write and fetch instance metrics', async () => {
+        const group = 'test-group';
+        const metric = {
+            instanceId: 'test-instance',
+            timestamp: Date.now(),
+            value: 0.75,
+        };
+
+        mockClient.zrange.mock.mockImplementationOnce(() => {
+            return [JSON.stringify(metric)];
+        });
+
+        await redisStore.writeInstanceMetric(context, group, metric);
+        const metrics = await redisStore.fetchInstanceMetrics(context, group);
+
+        assert.equal(metrics.length, 1, 'expect one metric');
+        assert.equal(metrics[0].instanceId, metric.instanceId, 'expect correct instance ID');
+        assert.equal(metrics[0].value, metric.value, 'expect correct metric value');
+    });
+
+    test('redisStore can clean instance metrics', async () => {
+        const group = 'test-group';
+
+        mockClient.zremrangebyscore.mock.mockImplementationOnce(() => 5); // 5 items cleaned up
+
+        const result = await redisStore.cleanInstanceMetrics(context, group);
+        assert.equal(result, true, 'expect successful cleanup');
+        assert.ok(mockClient.zremrangebyscore.mock.calls.length > 0, 'expect zremrangebyscore to be called');
     });
 });

@@ -506,8 +506,22 @@ export default class RedisStore implements MetricsStore, InstanceStore {
 
     async deleteInstanceGroup(ctx: Context, groupName: string): Promise<void> {
         ctx.logger.info(`Deleting group ${groupName}`);
-        await this.redisClient.hdel(this.GROUPS_HASH_NAME, groupName);
-        ctx.logger.info(`Group ${groupName} is deleted`);
+        const result = await this.redisClient
+            .pipeline()
+            .hdel(this.GROUPS_HASH_NAME, groupName)
+            .del(this.getGroupInstancesStatesKey(groupName))
+            .del(this.getGroupMetricsKey(groupName))
+            .del(`cloud-instances-list:${groupName}`)
+            .del(`service-metrics:${groupName}:untracked-count`)
+            .exec();
+
+        if (result) {
+            ctx.logger.info(`Group ${groupName} is deleted`, { result });
+        } else {
+            ctx.logger.error('Error deleting group', { groupName });
+        }
+        ctx.logger.info(`Group ${groupName} is deleted from all keys`);
+        return;
     }
 
     async checkValue(_ctx: Context, key: string): Promise<boolean> {

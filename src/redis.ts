@@ -195,7 +195,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
             } ms, for group ${group}`,
         );
 
-        return (await this.redisClient.del(this.getGroupMetricsKey(group))) == 1;
+        return itemsCleanedUp > 0;
     }
 
     private getGroupInstancesStatesKey(groupName: string): string {

@@ -393,7 +393,7 @@ export default class RedisStore implements MetricsStore, InstanceStore {
         }
     }
 
-    async getReconfigureDate(ctx: Context, instanceId: string): Promise<string> {
+    async getReconfigureDate(ctx: Context, _group: string, instanceId: string): Promise<string> {
         const key = this.reconfigureKey(instanceId);
         const res = await this.redisClient.get(key);
         ctx.logger.debug('Read reconfigure value', { key, res });

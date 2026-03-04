@@ -32,6 +32,12 @@ const launchSuppressedByCloudGuardCounter = new promClient.Counter({
     labelNames: ['group'],
 });
 
+const launcherCloudSidecarDiscrepancyGauge = new promClient.Gauge({
+    name: 'autoscaling_launcher_cloud_sidecar_discrepancy',
+    help: 'Difference between cloud running count and tracked count at launch time (positive = tracked under-reporting)',
+    labelNames: ['group'],
+});
+
 export interface InstanceLauncherOptions {
     maxThrottleThreshold?: number;
     instanceTracker: InstanceTracker;
@@ -148,6 +154,8 @@ export default class InstanceLauncher {
                     (i) =>
                         i.cloudStatus?.toUpperCase() === 'RUNNING' || i.cloudStatus?.toUpperCase() === 'PROVISIONING',
                 ).length;
+
+                launcherCloudSidecarDiscrepancyGauge.set({ group: group.name }, cloudRunningCount - count);
 
                 if (cloudRunningCount >= group.scalingOptions.desiredCount) {
                     ctx.logger.warn(

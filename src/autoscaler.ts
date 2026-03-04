@@ -14,6 +14,12 @@ const scaleUpSuppressedByCloudGuardCounter = new promClient.Counter({
     labelNames: ['group'],
 });
 
+const cloudSidecarDiscrepancyGauge = new promClient.Gauge({
+    name: 'autoscaling_cloud_sidecar_discrepancy',
+    help: 'Difference between cloud running instance count and sidecar-reported count (positive = sidecar under-reporting)',
+    labelNames: ['group'],
+});
+
 interface ScaleChoiceFunction {
     (group: InstanceGroup, count: number, value: number): boolean;
 }
@@ -84,6 +90,8 @@ export default class AutoscaleProcessor {
                     (i) =>
                         i.cloudStatus?.toUpperCase() === 'RUNNING' || i.cloudStatus?.toUpperCase() === 'PROVISIONING',
                 ).length;
+
+                cloudSidecarDiscrepancyGauge.set({ group: group.name }, cloudRunningCount - count);
 
                 if (cloudRunningCount >= group.scalingOptions.desiredCount) {
                     ctx.logger.warn(

@@ -26,6 +26,12 @@ const instanceErrorsCounter = new promClient.Counter({
     labelNames: ['group'],
 });
 
+const launchSuppressedByCloudGuardCounter = new promClient.Counter({
+    name: 'autoscaling_launch_suppressed_cloud_guard_total',
+    help: 'Counter for instance launches suppressed due to cloud instances still running',
+    labelNames: ['group'],
+});
+
 export interface InstanceLauncherOptions {
     maxThrottleThreshold?: number;
     instanceTracker: InstanceTracker;
@@ -148,6 +154,7 @@ export default class InstanceLauncher {
                         `[Launcher] Cloud has ${cloudRunningCount} instances for group ${groupName} ` +
                             `but only ${count} tracked. Skipping launch to avoid churn.`,
                     );
+                    launchSuppressedByCloudGuardCounter.inc({ group: group.name });
                     return true;
                 }
 

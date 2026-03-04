@@ -6,6 +6,13 @@ import { Context } from './context';
 import Audit from './audit';
 import { InstanceGroup } from './instance_store';
 import CloudManager, { CloudRetryStrategy } from './cloud_manager';
+import * as promClient from 'prom-client';
+
+const scaleUpSuppressedByCloudGuardCounter = new promClient.Counter({
+    name: 'autoscaling_scaleup_suppressed_cloud_guard_total',
+    help: 'Counter for autoscaler scale-up suppressions due to cloud instances still running',
+    labelNames: ['group'],
+});
 
 interface ScaleChoiceFunction {
     (group: InstanceGroup, count: number, value: number): boolean;
@@ -83,6 +90,7 @@ export default class AutoscaleProcessor {
                         `[AutoScaler] Cloud has ${cloudRunningCount} instances but only ${count} reporting ` +
                             `via sidecar for group ${group.name}. Suppressing autoscale to avoid churn.`,
                     );
+                    scaleUpSuppressedByCloudGuardCounter.inc({ group: group.name });
                     return false;
                 }
             }

@@ -5,6 +5,7 @@ import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import { Context } from './context';
 import Audit from './audit';
 import { InstanceGroup } from './instance_store';
+import CloudManager, { CloudRetryStrategy } from './cloud_manager';
 
 interface ScaleChoiceFunction {
     (group: InstanceGroup, count: number, value: number): boolean;
@@ -15,6 +16,8 @@ export interface AutoscaleProcessorOptions {
     instanceGroupManager: InstanceGroupManager;
     lockManager: AutoscalerLockManager;
     audit: Audit;
+    cloudManager: CloudManager;
+    cloudRetryStrategy: CloudRetryStrategy;
 }
 
 export default class AutoscaleProcessor {
@@ -22,6 +25,8 @@ export default class AutoscaleProcessor {
     private instanceGroupManager: InstanceGroupManager;
     private lockManager: AutoscalerLockManager;
     private audit: Audit;
+    private cloudManager: CloudManager;
+    private cloudRetryStrategy: CloudRetryStrategy;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
@@ -31,6 +36,8 @@ export default class AutoscaleProcessor {
         this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
         this.audit = options.audit;
+        this.cloudManager = options.cloudManager;
+        this.cloudRetryStrategy = options.cloudRetryStrategy;
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
@@ -63,6 +70,22 @@ export default class AutoscaleProcessor {
             ctx.logger.info(`[AutoScaler] Gathering metrics for desired count adjustments for group ${group.name}`);
             const currentInventory = await this.instanceTracker.trimCurrent(ctx, group.name);
             const count = currentInventory.length;
+
+            if (count < group.scalingOptions.desiredCount) {
+                const cloudInstances = await this.cloudManager.getInstances(ctx, group, this.cloudRetryStrategy);
+                const cloudRunningCount = cloudInstances.filter(
+                    (i) =>
+                        i.cloudStatus?.toUpperCase() === 'RUNNING' || i.cloudStatus?.toUpperCase() === 'PROVISIONING',
+                ).length;
+
+                if (cloudRunningCount >= group.scalingOptions.desiredCount) {
+                    ctx.logger.warn(
+                        `[AutoScaler] Cloud has ${cloudRunningCount} instances but only ${count} reporting ` +
+                            `via sidecar for group ${group.name}. Suppressing autoscale to avoid churn.`,
+                    );
+                    return false;
+                }
+            }
 
             if (count == 0) {
                 ctx.logger.info(

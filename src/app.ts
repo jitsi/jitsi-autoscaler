@@ -215,6 +215,12 @@ const autoscaleProcessor = new AutoscaleProcessor({
     instanceGroupManager,
     lockManager,
     audit,
+    cloudManager,
+    cloudRetryStrategy: {
+        maxTimeInSeconds: config.ReportExtCallMaxTimeInSeconds,
+        maxDelayInSeconds: config.ReportExtCallMaxDelayInSeconds,
+        retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
+    },
 });
 
 const metricsLoop = new MetricsLoop({
@@ -233,6 +239,11 @@ const instanceLauncher = new InstanceLauncher({
     shutdownManager,
     audit,
     metricsLoop,
+    cloudRetryStrategy: {
+        maxTimeInSeconds: config.ReportExtCallMaxTimeInSeconds,
+        maxDelayInSeconds: config.ReportExtCallMaxDelayInSeconds,
+        retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
+    },
 });
 
 const groupReportGenerator = new GroupReportGenerator({

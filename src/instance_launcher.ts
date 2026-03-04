@@ -1,5 +1,5 @@
 import { InstanceTracker } from './instance_tracker';
-import CloudManager from './cloud_manager';
+import CloudManager, { CloudRetryStrategy } from './cloud_manager';
 import InstanceGroupManager from './instance_group';
 import { Context } from './context';
 import * as promClient from 'prom-client';
@@ -34,6 +34,7 @@ export interface InstanceLauncherOptions {
     shutdownManager: ShutdownManager;
     audit: Audit;
     metricsLoop: MetricsLoop;
+    cloudRetryStrategy?: CloudRetryStrategy;
 }
 
 export default class InstanceLauncher {
@@ -44,6 +45,7 @@ export default class InstanceLauncher {
     private shutdownManager: ShutdownManager;
     private audit: Audit;
     private metricsLoop: MetricsLoop;
+    private cloudRetryStrategy: CloudRetryStrategy;
 
     constructor(options: InstanceLauncherOptions) {
         this.instanceTracker = options.instanceTracker;
@@ -52,6 +54,11 @@ export default class InstanceLauncher {
         this.shutdownManager = options.shutdownManager;
         this.audit = options.audit;
         this.metricsLoop = options.metricsLoop;
+        this.cloudRetryStrategy = options.cloudRetryStrategy || {
+            maxTimeInSeconds: 30,
+            maxDelayInSeconds: 10,
+            retryableStatusCodes: [429, 500, 503],
+        };
 
         if (options.maxThrottleThreshold) {
             this.maxThrottleThreshold = options.maxThrottleThreshold;
@@ -74,12 +81,28 @@ export default class InstanceLauncher {
         const currentInventory = await this.instanceTracker.trimCurrent(ctx, groupName);
         const count = currentInventory.length;
 
+        // Include untracked instances in effective count to prevent replacing
+        // instances that exist in cloud but aren't reporting via sidecar
+        const untrackedCount = await this.metricsLoop.getUnTrackedCount(group.name);
+        const effectiveCount = count + untrackedCount;
+
+        ctx.logger.info('[Launcher] Instance counts for scaling decision', {
+            groupName,
+            trackedCount: count,
+            untrackedCount,
+            effectiveCount,
+            desiredCount,
+        });
+
         try {
-            if (count < group.scalingOptions.desiredCount && count < group.scalingOptions.maxDesired) {
+            if (
+                effectiveCount < group.scalingOptions.desiredCount &&
+                effectiveCount < group.scalingOptions.maxDesired
+            ) {
                 ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });
 
                 const actualScaleUpQuantity =
-                    Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - count;
+                    Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - effectiveCount;
 
                 // if untracked throttle enabled, only scale up if there aren't too many untracked instances
                 if (group.enableUntrackedThrottle == null || group.enableUntrackedThrottle == true) {
@@ -111,6 +134,21 @@ export default class InstanceLauncher {
                     }
                 } else {
                     ctx.logger.debug(`[Launcher] Scaling throttle disabled for group ${groupName}.`);
+                }
+
+                // Final guard: fresh cloud check before actually launching
+                const cloudInstances = await this.cloudManager.getInstances(ctx, group, this.cloudRetryStrategy);
+                const cloudRunningCount = cloudInstances.filter(
+                    (i) =>
+                        i.cloudStatus?.toUpperCase() === 'RUNNING' || i.cloudStatus?.toUpperCase() === 'PROVISIONING',
+                ).length;
+
+                if (cloudRunningCount >= group.scalingOptions.desiredCount) {
+                    ctx.logger.warn(
+                        `[Launcher] Cloud has ${cloudRunningCount} instances for group ${groupName} ` +
+                            `but only ${count} tracked. Skipping launch to avoid churn.`,
+                    );
+                    return true;
                 }
 
                 const scaleDownProtected = await this.instanceGroupManager.isScaleDownProtected(ctx, group.name);

@@ -304,7 +304,9 @@ describe('ScheduledScalingProcessor', () => {
             lockGroup: mock.fn(() => ({ release: lockRelease })),
         };
 
-        const audit = {};
+        const audit = {
+            saveAutoScalerActionItem: mock.fn(),
+        };
 
         const processor = new ScheduledScalingProcessor({
             instanceGroupManager,
@@ -321,6 +323,7 @@ describe('ScheduledScalingProcessor', () => {
             instanceGroupManager.setAutoScaleGracePeriod.mock.resetCalls();
             lockManager.lockGroup.mock.resetCalls();
             lockRelease.mock.resetCalls();
+            audit.saveAutoScalerActionItem.mock.resetCalls();
         });
 
         test('skips when globally disabled', async () => {
@@ -395,6 +398,14 @@ describe('ScheduledScalingProcessor', () => {
             assert.strictEqual(updatedGroup.scalingOptions.maxDesired, 20);
             // enableScheduler should be disabled
             assert.strictEqual(updatedGroup.enableScheduler, false);
+
+            // Audit should record the transition
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 1);
+            const auditArgs = audit.saveAutoScalerActionItem.mock.calls[0].arguments;
+            assert.strictEqual(auditArgs[0], groupName);
+            assert.strictEqual(auditArgs[1].actionType, 'scheduledScalingTransition');
+            assert.strictEqual(auditArgs[1].oldDesiredCount, 2);
+            assert.strictEqual(auditArgs[1].newDesiredCount, 10);
         });
 
         test('skips update when options already match (idempotent)', async () => {
@@ -422,6 +433,42 @@ describe('ScheduledScalingProcessor', () => {
             const result = await processor.processScheduledScalingByGroup(context, groupName);
             assert.strictEqual(result, false);
             assert.strictEqual(lockRelease.mock.calls.length, 1);
+        });
+
+        test('does not call audit when no changes needed', async () => {
+            context = initContext();
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                scalingOptions: { ...baseScalingOptions },
+                scheduledScaling: {
+                    enabled: true,
+                    baseScalingOptions,
+                    periods: [],
+                },
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, false);
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
+        });
+
+        test('returns false and does not call audit on lock failure', async () => {
+            context = initContext();
+            const lockFailProcessor = new ScheduledScalingProcessor({
+                instanceGroupManager,
+                lockManager: {
+                    lockGroup: mock.fn(() => {
+                        throw new Error('lock failed');
+                    }),
+                },
+                audit,
+                defaultTimezone: 'UTC',
+                enabled: true,
+            });
+            const result = await lockFailProcessor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, false);
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
         });
     });
 });

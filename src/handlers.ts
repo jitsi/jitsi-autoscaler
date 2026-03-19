@@ -49,6 +49,7 @@ interface InstanceGroupScalingOptionsRequest {
     scaleUpPeriodsCount?: number;
     scaleDownPeriodsCount?: number;
     gracePeriodTTLSec?: number;
+    cloudGuardGraceCount?: number;
 }
 export interface FullScalingOptions {
     minDesired: number;
@@ -61,6 +62,7 @@ export interface FullScalingOptions {
     scalePeriod: number;
     scaleUpPeriodsCount: number;
     scaleDownPeriodsCount: number;
+    cloudGuardGraceCount?: number;
 }
 export interface FullScalingOptionsResponse {
     groupsToBeUpdated: number;
@@ -86,6 +88,7 @@ export interface ScalingOptionsRequest {
     scalePeriod: number;
     scaleUpPeriodsCount: number;
     scaleDownPeriodsCount: number;
+    cloudGuardGraceCount?: number;
 }
 
 interface InstanceConfigurationUpdateRequest {
@@ -571,6 +574,9 @@ class Handlers {
                 }
                 if (scalingOptionsRequest.gracePeriodTTLSec != null) {
                     instanceGroup.gracePeriodTTLSec = scalingOptionsRequest.gracePeriodTTLSec;
+                }
+                if (scalingOptionsRequest.cloudGuardGraceCount != null) {
+                    instanceGroup.scalingOptions.cloudGuardGraceCount = scalingOptionsRequest.cloudGuardGraceCount;
                 }
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 res.status(200);

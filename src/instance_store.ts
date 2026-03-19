@@ -14,6 +14,7 @@ export interface InstanceGroup {
     enableScheduler: boolean;
     enableUntrackedThrottle: boolean;
     enableReconfiguration?: boolean;
+    enableCloudGuard?: boolean;
     gracePeriodTTLSec: number;
     protectedTTLSec: number;
     scalingOptions: ScalingOptions;
@@ -32,6 +33,7 @@ export interface ScalingOptions {
     scalePeriod: number;
     scaleUpPeriodsCount: number;
     scaleDownPeriodsCount: number;
+    cloudGuardGraceCount?: number;
 }
 
 export interface InstanceGroupTags {

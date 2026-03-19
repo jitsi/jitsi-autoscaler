@@ -5,6 +5,21 @@ import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import { Context } from './context';
 import Audit from './audit';
 import { InstanceGroup } from './instance_store';
+import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
+import MetricsLoop from './metrics_loop';
+import * as promClient from 'prom-client';
+
+const scaleUpSuppressedByCloudGuardCounter = new promClient.Counter({
+    name: 'autoscaling_scaleup_suppressed_cloud_guard_total',
+    help: 'Counter for autoscaler scale-up suppressions due to cloud instances still running',
+    labelNames: ['group'],
+});
+
+const cloudSidecarDiscrepancyGauge = new promClient.Gauge({
+    name: 'autoscaling_cloud_sidecar_discrepancy',
+    help: 'Difference between cloud running instance count and sidecar-reported count (positive = sidecar under-reporting)',
+    labelNames: ['group'],
+});
 
 interface ScaleChoiceFunction {
     (group: InstanceGroup, count: number, value: number): boolean;
@@ -15,6 +30,11 @@ export interface AutoscaleProcessorOptions {
     instanceGroupManager: InstanceGroupManager;
     lockManager: AutoscalerLockManager;
     audit: Audit;
+    cloudManager: CloudManager;
+    cloudRetryStrategy: CloudRetryStrategy;
+    defaultCloudGuardGraceCount?: number;
+    cloudGuardEnabled?: boolean;
+    metricsLoop?: MetricsLoop;
 }
 
 export default class AutoscaleProcessor {
@@ -22,6 +42,11 @@ export default class AutoscaleProcessor {
     private instanceGroupManager: InstanceGroupManager;
     private lockManager: AutoscalerLockManager;
     private audit: Audit;
+    private cloudManager: CloudManager;
+    private cloudRetryStrategy: CloudRetryStrategy;
+    private defaultCloudGuardGraceCount: number;
+    private cloudGuardEnabled: boolean;
+    private metricsLoop?: MetricsLoop;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
@@ -31,6 +56,11 @@ export default class AutoscaleProcessor {
         this.instanceGroupManager = options.instanceGroupManager;
         this.lockManager = options.lockManager;
         this.audit = options.audit;
+        this.cloudManager = options.cloudManager;
+        this.cloudRetryStrategy = options.cloudRetryStrategy;
+        this.defaultCloudGuardGraceCount = options.defaultCloudGuardGraceCount ?? 0;
+        this.cloudGuardEnabled = options.cloudGuardEnabled ?? false;
+        this.metricsLoop = options.metricsLoop;
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
@@ -63,6 +93,49 @@ export default class AutoscaleProcessor {
             ctx.logger.info(`[AutoScaler] Gathering metrics for desired count adjustments for group ${group.name}`);
             const currentInventory = await this.instanceTracker.trimCurrent(ctx, group.name);
             const count = currentInventory.length;
+
+            const guardEnabled = group.enableCloudGuard ?? this.cloudGuardEnabled;
+            if (guardEnabled && count < group.scalingOptions.desiredCount) {
+                try {
+                    let cloudInstances: CloudInstance[] = [];
+                    if (this.metricsLoop) {
+                        cloudInstances = await this.metricsLoop.getCloudInstances(group.name);
+                    }
+                    if (cloudInstances.length === 0) {
+                        cloudInstances = await this.cloudManager.getInstances(ctx, group, this.cloudRetryStrategy);
+                    }
+                    const cloudRunningCount = cloudInstances.filter(
+                        (i) =>
+                            i.cloudStatus?.toUpperCase() === 'RUNNING' ||
+                            i.cloudStatus?.toUpperCase() === 'PROVISIONING',
+                    ).length;
+
+                    cloudSidecarDiscrepancyGauge.set({ group: group.name }, cloudRunningCount - count);
+
+                    const graceCount = group.scalingOptions.cloudGuardGraceCount ?? this.defaultCloudGuardGraceCount;
+                    if (cloudRunningCount >= group.scalingOptions.desiredCount) {
+                        const graceLimit = group.scalingOptions.desiredCount + graceCount;
+                        if (cloudRunningCount >= graceLimit) {
+                            ctx.logger.warn(
+                                `[AutoScaler] Cloud has ${cloudRunningCount} instances but only ${count} reporting ` +
+                                    `via sidecar for group ${group.name} (grace limit: ${graceLimit}). ` +
+                                    `Suppressing autoscale to avoid churn.`,
+                            );
+                            scaleUpSuppressedByCloudGuardCounter.inc({ group: group.name });
+                            return false;
+                        }
+                        ctx.logger.info(
+                            `[AutoScaler] Cloud guard: ${cloudRunningCount} instances in cloud within grace window ` +
+                                `for group ${group.name} (grace limit: ${graceLimit}), allowing autoscale.`,
+                        );
+                    }
+                } catch (err) {
+                    ctx.logger.warn(
+                        `[AutoScaler] Cloud guard check failed for group ${group.name}, proceeding without guard`,
+                        { err },
+                    );
+                }
+            }
 
             if (count == 0) {
                 ctx.logger.info(

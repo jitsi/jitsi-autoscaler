@@ -76,11 +76,24 @@ describe('AutoscaleProcessor', () => {
         updateLastAutoScalerRun: mock.fn(),
     };
 
+    const cloudManager = {
+        getInstances: mock.fn(() => []),
+    };
+
+    const cloudRetryStrategy = {
+        maxTimeInSeconds: 30,
+        maxDelayInSeconds: 10,
+        retryableStatusCodes: [429, 500, 503],
+    };
+
     const autoscaleProcessor = new AutoscaleProcessor({
         instanceGroupManager,
         lockManager,
         instanceTracker,
         audit,
+        cloudManager,
+        cloudRetryStrategy,
+        cloudGuardEnabled: true,
     });
 
     afterEach(() => {
@@ -97,6 +110,7 @@ describe('AutoscaleProcessor', () => {
         instanceGroupManager.upsertInstanceGroup.mock.resetCalls();
         audit.updateLastAutoScalerRun.mock.resetCalls();
         audit.saveAutoScalerActionItem.mock.resetCalls();
+        cloudManager.getInstances.mock.resetCalls();
         mock.reset();
     });
 
@@ -549,6 +563,286 @@ describe('AutoscaleProcessor', () => {
             assert.deepEqual(audit.updateLastAutoScalerRun.mock.calls[0].arguments[1], groupName);
             // assert process ended with success
             assert.strictEqual(result, true);
+        });
+    });
+
+    describe('processAutoscalingByGroup cloudGuardTests', () => {
+        test('will suppress scale-up when cloud shows enough running instances but sidecar count is low', async () => {
+            // Scenario: desired=10, sidecar reports 5, cloud shows 10 running
+            // → cloud guard should suppress autoscaling
+            const scalableGroup = {
+                ...groupDetails,
+                enableCloudGuard: true,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 10,
+                    maxDesired: 15,
+                    minDesired: 1,
+                    scaleUpThreshold: 0.8,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => scalableGroup);
+
+            // Sidecar reports 5 instances
+            const inventory = Array.from({ length: 5 }, (_, i) => ({ instance_id: `i-${i}` }));
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+
+            // Cloud shows 10 running instances
+            const cloudInstances = Array.from({ length: 10 }, (_, i) => ({
+                instanceId: `i-${i}`,
+                displayName: `instance-${i}`,
+                cloudStatus: 'RUNNING',
+            }));
+            cloudManager.getInstances.mock.mockImplementationOnce(() => cloudInstances);
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            // Cloud guard should have fired
+            assert.strictEqual(cloudManager.getInstances.mock.calls.length, 1, 'cloud API was called');
+            assert.strictEqual(result, false, 'autoscaling was suppressed');
+            // No desired count update should have occurred
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+        });
+
+        test('will allow scale-up when cloud count also shows real instance loss', async () => {
+            // Scenario: desired=10, sidecar reports 5, cloud also shows only 5
+            // → real instance loss, allow autoscaling to proceed
+            const scalableGroup = {
+                ...groupDetails,
+                enableCloudGuard: true,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 5,
+                    maxDesired: 15,
+                    minDesired: 1,
+                    scaleUpThreshold: 0.8,
+                    scaleUpPeriodsCount: 2,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => scalableGroup);
+
+            // Sidecar reports 5 instances (matches desired, so cloud guard won't fire)
+            const inventory = Array.from({ length: 5 }, (_, i) => ({ instance_id: `i-${i}` }));
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => {
+                return inventory.map(() => [{ value: 1, instanceId: 'i-0' }]);
+            });
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            // Cloud guard should NOT have been called (count == desiredCount)
+            assert.strictEqual(cloudManager.getInstances.mock.calls.length, 0, 'cloud API was not called');
+            assert.strictEqual(result, true, 'autoscaling proceeded normally');
+        });
+
+        test('will not call cloud API when sidecar count equals desired count', async () => {
+            // Normal operation: count == desiredCount → no cloud check needed
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{ instance_id: 'i-0a1b2c3d4e5f6g7h8' }]);
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.strictEqual(cloudManager.getInstances.mock.calls.length, 0, 'cloud API was not called');
+            assert.strictEqual(result, true);
+        });
+
+        test('will allow autoscaling when cloud count is also below desired', async () => {
+            // Scenario: desired=10, sidecar reports 5, cloud shows 5
+            // → genuine loss, allow autoscaling
+            const scalableGroup = {
+                ...groupDetails,
+                enableCloudGuard: true,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 10,
+                    maxDesired: 15,
+                    minDesired: 1,
+                    scaleUpThreshold: 0.8,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => scalableGroup);
+
+            const inventory = Array.from({ length: 5 }, (_, i) => ({ instance_id: `i-${i}` }));
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+
+            // Cloud also shows only 5 instances
+            const cloudInstances = Array.from({ length: 5 }, (_, i) => ({
+                instanceId: `i-${i}`,
+                displayName: `instance-${i}`,
+                cloudStatus: 'RUNNING',
+            }));
+            cloudManager.getInstances.mock.mockImplementationOnce(() => cloudInstances);
+
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => {
+                return inventory.map(() => [{ value: 1, instanceId: 'i-0' }]);
+            });
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            // Cloud guard was called but didn't suppress
+            assert.strictEqual(cloudManager.getInstances.mock.calls.length, 1, 'cloud API was called');
+            assert.strictEqual(result, true, 'autoscaling proceeded');
+        });
+        test('grace=0 still suppresses (backward compat)', async () => {
+            const scalableGroup = {
+                ...groupDetails,
+                enableCloudGuard: true,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 10,
+                    maxDesired: 15,
+                    minDesired: 1,
+                    cloudGuardGraceCount: 0,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => scalableGroup);
+
+            const inventory = Array.from({ length: 5 }, (_, i) => ({ instance_id: `i-${i}` }));
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+
+            const cloudInstances = Array.from({ length: 10 }, (_, i) => ({
+                instanceId: `i-${i}`,
+                displayName: `instance-${i}`,
+                cloudStatus: 'RUNNING',
+            }));
+            cloudManager.getInstances.mock.mockImplementationOnce(() => cloudInstances);
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+            assert.strictEqual(result, false, 'autoscaling was suppressed');
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+        });
+
+        test('grace allows processing when cloud < desired', async () => {
+            // desired=14, cloud=10, grace=2 → cloudRunning(10) < desired(14) → guard doesn't fire
+            const scalableGroup = {
+                ...groupDetails,
+                enableCloudGuard: true,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 14,
+                    maxDesired: 20,
+                    minDesired: 1,
+                    scaleUpThreshold: 0.8,
+                    cloudGuardGraceCount: 2,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => scalableGroup);
+
+            const inventory = Array.from({ length: 5 }, (_, i) => ({ instance_id: `i-${i}` }));
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+
+            const cloudInstances = Array.from({ length: 10 }, (_, i) => ({
+                instanceId: `i-${i}`,
+                displayName: `instance-${i}`,
+                cloudStatus: 'RUNNING',
+            }));
+            cloudManager.getInstances.mock.mockImplementationOnce(() => cloudInstances);
+
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => {
+                return inventory.map(() => [{ value: 1, instanceId: 'i-0' }]);
+            });
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+            assert.strictEqual(cloudManager.getInstances.mock.calls.length, 1, 'cloud API was called');
+            assert.strictEqual(result, true, 'autoscaling proceeded');
+        });
+
+        test('grace allows autoscaling when cloud is at desired but within grace window', async () => {
+            // desired=10, cloud=10, grace=2 → graceLimit=12, cloudRunning(10) < 12 → allow
+            const scalableGroup = {
+                ...groupDetails,
+                enableCloudGuard: true,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 10,
+                    maxDesired: 15,
+                    minDesired: 1,
+                    scaleUpThreshold: 0.8,
+                    cloudGuardGraceCount: 2,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => scalableGroup);
+
+            const inventory = Array.from({ length: 5 }, (_, i) => ({ instance_id: `i-${i}` }));
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+
+            const cloudInstances = Array.from({ length: 10 }, (_, i) => ({
+                instanceId: `i-${i}`,
+                displayName: `instance-${i}`,
+                cloudStatus: 'RUNNING',
+            }));
+            cloudManager.getInstances.mock.mockImplementationOnce(() => cloudInstances);
+
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => {
+                return inventory.map(() => [{ value: 1, instanceId: 'i-0' }]);
+            });
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+            assert.strictEqual(result, true, 'autoscaling proceeded (within grace window)');
+        });
+
+        test('grace suppresses when cloud exceeds grace limit', async () => {
+            // desired=10, cloud=12, grace=2 → graceLimit=12, cloudRunning(12) >= 12 → suppress
+            const scalableGroup = {
+                ...groupDetails,
+                enableCloudGuard: true,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 10,
+                    maxDesired: 15,
+                    minDesired: 1,
+                    cloudGuardGraceCount: 2,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => scalableGroup);
+
+            const inventory = Array.from({ length: 5 }, (_, i) => ({ instance_id: `i-${i}` }));
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+
+            const cloudInstances = Array.from({ length: 12 }, (_, i) => ({
+                instanceId: `i-${i}`,
+                displayName: `instance-${i}`,
+                cloudStatus: 'RUNNING',
+            }));
+            cloudManager.getInstances.mock.mockImplementationOnce(() => cloudInstances);
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+            assert.strictEqual(result, false, 'autoscaling was suppressed');
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+        });
+        test('cloud guard proceeds without guard when cloud API fails', async () => {
+            // Scenario: desired=10, sidecar reports 5, cloud API throws
+            // → circuit breaker should allow autoscaling to proceed
+            const scalableGroup = {
+                ...groupDetails,
+                enableCloudGuard: true,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 10,
+                    maxDesired: 15,
+                    minDesired: 1,
+                    scaleUpThreshold: 0.8,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => scalableGroup);
+
+            const inventory = Array.from({ length: 5 }, (_, i) => ({ instance_id: `i-${i}` }));
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory);
+
+            // Cloud API fails
+            cloudManager.getInstances.mock.mockImplementationOnce(() => {
+                throw new Error('cloud API unavailable');
+            });
+
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => {
+                return inventory.map(() => [{ value: 1, instanceId: 'i-0' }]);
+            });
+
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            // Should have proceeded despite cloud API failure
+            assert.strictEqual(cloudManager.getInstances.mock.calls.length, 1, 'cloud API was attempted');
+            assert.strictEqual(result, true, 'autoscaling proceeded (circuit breaker)');
         });
     });
 

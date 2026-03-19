@@ -7,6 +7,7 @@ import Audit from './audit';
 import { InstanceGroup } from './instance_store';
 import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
 import MetricsLoop from './metrics_loop';
+import ScheduledScalingProcessor from './scheduled_scaling_processor';
 import * as promClient from 'prom-client';
 
 const scaleUpSuppressedByCloudGuardCounter = new promClient.Counter({
@@ -35,6 +36,7 @@ export interface AutoscaleProcessorOptions {
     defaultCloudGuardGraceCount?: number;
     cloudGuardEnabled?: boolean;
     metricsLoop?: MetricsLoop;
+    defaultTimezone?: string;
 }
 
 export default class AutoscaleProcessor {
@@ -47,6 +49,7 @@ export default class AutoscaleProcessor {
     private defaultCloudGuardGraceCount: number;
     private cloudGuardEnabled: boolean;
     private metricsLoop?: MetricsLoop;
+    private defaultTimezone: string;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
@@ -61,6 +64,7 @@ export default class AutoscaleProcessor {
         this.defaultCloudGuardGraceCount = options.defaultCloudGuardGraceCount ?? 0;
         this.cloudGuardEnabled = options.cloudGuardEnabled ?? false;
         this.metricsLoop = options.metricsLoop;
+        this.defaultTimezone = options.defaultTimezone ?? 'UTC';
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
@@ -214,7 +218,10 @@ export default class AutoscaleProcessor {
 
                 await this.updateDesiredCount(ctx, desiredCount, group);
                 await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, group);
-            } else if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'down')) {
+            } else if (
+                !this.isScaleDownInhibited(group) &&
+                this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'down')
+            ) {
                 // next check if we should scale down the group
                 desiredCount = group.scalingOptions.desiredCount - group.scalingOptions.scaleDownQuantity;
                 if (desiredCount < group.scalingOptions.minDesired) {
@@ -259,6 +266,19 @@ export default class AutoscaleProcessor {
             ctx.logger.info('Updating desired count to', { groupName, desiredCount });
             await this.instanceGroupManager.upsertInstanceGroup(ctx, group);
         }
+    }
+
+    private isScaleDownInhibited(group: InstanceGroup): boolean {
+        if (!group.scheduledScaling?.enabled) {
+            return false;
+        }
+        const timezone = ScheduledScalingProcessor.resolveTimezone(
+            group.scheduledScaling,
+            group.region,
+            this.defaultTimezone,
+        );
+        const activePeriod = ScheduledScalingProcessor.findActivePeriod(group.scheduledScaling, new Date(), timezone);
+        return activePeriod?.inhibitScaleDown === true;
     }
 
     private scaleUpChoice(group: InstanceGroup, count: number, value: number): boolean {

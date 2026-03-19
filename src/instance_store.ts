@@ -20,6 +20,24 @@ export interface InstanceGroup {
     scalingOptions: ScalingOptions;
     cloud: string;
     tags: InstanceGroupTags;
+    scheduledScaling?: ScheduledScalingConfig;
+}
+
+export interface SchedulePeriod {
+    name: string;
+    dayOfWeek: number[];
+    startHour: number;
+    endHour: number;
+    priority: number;
+    scalingOptions: Partial<ScalingOptions>;
+    inhibitScaleDown?: boolean;
+}
+
+export interface ScheduledScalingConfig {
+    enabled: boolean;
+    timezone?: string;
+    baseScalingOptions: ScalingOptions;
+    periods: SchedulePeriod[];
 }
 
 export interface ScalingOptions {

@@ -26,6 +26,7 @@ import { body, param, validationResult } from 'express-validator';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
 import ScalingManager from './scaling_options_manager';
+import ScheduledScalingProcessor from './scheduled_scaling_processor';
 import RedisStore from './redis';
 import ConsulStore from './consul';
 import PrometheusClient from './prometheus';
@@ -241,6 +242,15 @@ const autoscaleProcessor = new AutoscaleProcessor({
     defaultCloudGuardGraceCount: config.CloudGuardGraceCount,
     cloudGuardEnabled: config.CloudGuardEnabled,
     metricsLoop,
+    defaultTimezone: config.ScheduledScalingDefaultTimezone,
+});
+
+const scheduledScalingProcessor = new ScheduledScalingProcessor({
+    instanceGroupManager,
+    lockManager,
+    audit,
+    defaultTimezone: config.ScheduledScalingDefaultTimezone,
+    enabled: config.ScheduledScalingEnabled,
 });
 
 const instanceLauncher = new InstanceLauncher({
@@ -295,6 +305,7 @@ const jobManager = new JobManager({
     instanceGroupManager,
     instanceLauncher,
     autoscaler: autoscaleProcessor,
+    scheduledScalingProcessor,
     sanityLoop,
     metricsLoop,
     autoscalerProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
@@ -377,6 +388,7 @@ const h = new Handlers({
     lockManager,
     audit,
     scalingManager,
+    defaultTimezone: config.ScheduledScalingDefaultTimezone,
 });
 
 const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop, shutdownManager });
@@ -536,6 +548,30 @@ app.put(
 app.put('/groups/:name/scaling-activities', async (req, res, next) => {
     try {
         await h.updateScalingActivities(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.put('/groups/:name/scheduled-scaling', async (req, res, next) => {
+    try {
+        await h.updateScheduledScaling(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/groups/:name/scheduled-scaling', async (req, res, next) => {
+    try {
+        await h.getScheduledScaling(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.delete('/groups/:name/scheduled-scaling', async (req, res, next) => {
+    try {
+        await h.deleteScheduledScaling(req, res);
     } catch (err) {
         next(err);
     }

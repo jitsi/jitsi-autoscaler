@@ -9,7 +9,8 @@ import Audit from './audit';
 import ScalingManager from './scaling_options_manager';
 import * as promClient from 'prom-client';
 import CloudManager from './cloud_manager';
-import { InstanceDetails, InstanceGroup, InstanceGroupTags } from './instance_store';
+import { InstanceDetails, InstanceGroup, InstanceGroupTags, ScheduledScalingConfig } from './instance_store';
+import ScheduledScalingProcessor from './scheduled_scaling_processor';
 
 const statsErrors = new promClient.Counter({
     name: 'autoscaler_stats_errors',
@@ -105,6 +106,7 @@ interface HandlersOptions {
     groupReportGenerator: GroupReportGenerator;
     lockManager: AutoscalerLockManager;
     scalingManager: ScalingManager;
+    defaultTimezone: string;
 }
 
 class Handlers {
@@ -117,6 +119,7 @@ class Handlers {
     private lockManager: AutoscalerLockManager;
     private audit: Audit;
     private scalingManager: ScalingManager;
+    private defaultTimezone: string;
 
     constructor(options: HandlersOptions) {
         this.sidecarPoll = this.sidecarPoll.bind(this);
@@ -130,6 +133,7 @@ class Handlers {
         this.groupReportGenerator = options.groupReportGenerator;
         this.audit = options.audit;
         this.scalingManager = options.scalingManager;
+        this.defaultTimezone = options.defaultTimezone;
     }
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
@@ -602,6 +606,106 @@ class Handlers {
             groupsToBeUpdated: response.groupsToBeUpdated,
             groupsUpdated: response.groupsUpdated,
         });
+    }
+
+    async updateScheduledScaling(req: Request, res: Response): Promise<void> {
+        const scheduledScalingConfig: ScheduledScalingConfig = req.body;
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+            if (!instanceGroup) {
+                res.sendStatus(404);
+                return;
+            }
+
+            // Validate timezone if provided
+            if (scheduledScalingConfig.timezone) {
+                try {
+                    Intl.DateTimeFormat(undefined, { timeZone: scheduledScalingConfig.timezone });
+                } catch {
+                    res.status(400);
+                    res.send({ errors: [`Invalid timezone: ${scheduledScalingConfig.timezone}`] });
+                    return;
+                }
+            }
+
+            instanceGroup.scheduledScaling = scheduledScalingConfig;
+
+            // If enabling scheduled scaling, disable external scheduler
+            if (scheduledScalingConfig.enabled) {
+                instanceGroup.enableScheduler = false;
+
+                // Immediately resolve and apply active scaling options
+                const timezone = ScheduledScalingProcessor.resolveTimezone(
+                    scheduledScalingConfig,
+                    instanceGroup.region,
+                    this.defaultTimezone,
+                );
+                const targetOptions = ScheduledScalingProcessor.resolveActiveScalingOptions(
+                    scheduledScalingConfig,
+                    new Date(),
+                    timezone,
+                );
+                instanceGroup.scalingOptions = targetOptions;
+            }
+
+            await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
+            await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, instanceGroup);
+            res.status(200);
+            res.send({ save: 'OK' });
+        } finally {
+            await lock.release(req.context);
+        }
+    }
+
+    async getScheduledScaling(req: Request, res: Response): Promise<void> {
+        const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+        if (!instanceGroup) {
+            res.sendStatus(404);
+            return;
+        }
+
+        if (!instanceGroup.scheduledScaling) {
+            res.status(200);
+            res.send({ scheduledScaling: null, activePeriod: null });
+            return;
+        }
+
+        const timezone = ScheduledScalingProcessor.resolveTimezone(
+            instanceGroup.scheduledScaling,
+            instanceGroup.region,
+            this.defaultTimezone,
+        );
+        const activePeriod = ScheduledScalingProcessor.findActivePeriod(
+            instanceGroup.scheduledScaling,
+            new Date(),
+            timezone,
+        );
+
+        res.status(200);
+        res.send({
+            scheduledScaling: instanceGroup.scheduledScaling,
+            activePeriod,
+            resolvedTimezone: timezone,
+        });
+    }
+
+    async deleteScheduledScaling(req: Request, res: Response): Promise<void> {
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+            if (!instanceGroup) {
+                res.sendStatus(404);
+                return;
+            }
+
+            delete instanceGroup.scheduledScaling;
+            await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
+            res.status(200);
+            res.send({ save: 'OK' });
+        } finally {
+            await lock.release(req.context);
+        }
     }
 }
 

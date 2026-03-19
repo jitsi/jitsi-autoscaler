@@ -14,6 +14,7 @@ export interface InstanceGroup {
     enableScheduler: boolean;
     enableUntrackedThrottle: boolean;
     enableReconfiguration?: boolean;
+    enableCloudGuard?: boolean;
     gracePeriodTTLSec: number;
     protectedTTLSec: number;
     scalingOptions: ScalingOptions;

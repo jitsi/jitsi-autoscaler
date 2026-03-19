@@ -210,6 +210,14 @@ instanceGroupManager.init(initCtx).catch((err) => {
     logger.info('Failed initializing list of groups', { err });
 });
 
+const metricsLoop = new MetricsLoop({
+    redisClient: redisClient,
+    metricsTTL: config.ServiceLevelMetricsTTL,
+    instanceGroupManager: instanceGroupManager,
+    instanceTracker: instanceTracker,
+    ctx: initCtx,
+});
+
 const autoscaleProcessor = new AutoscaleProcessor({
     instanceTracker,
     instanceGroupManager,
@@ -222,14 +230,8 @@ const autoscaleProcessor = new AutoscaleProcessor({
         retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
     },
     defaultCloudGuardGraceCount: config.CloudGuardGraceCount,
-});
-
-const metricsLoop = new MetricsLoop({
-    redisClient: redisClient,
-    metricsTTL: config.ServiceLevelMetricsTTL,
-    instanceGroupManager: instanceGroupManager,
-    instanceTracker: instanceTracker,
-    ctx: initCtx,
+    cloudGuardEnabled: config.CloudGuardEnabled,
+    metricsLoop,
 });
 
 const instanceLauncher = new InstanceLauncher({
@@ -246,6 +248,7 @@ const instanceLauncher = new InstanceLauncher({
         retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
     },
     defaultCloudGuardGraceCount: config.CloudGuardGraceCount,
+    cloudGuardEnabled: config.CloudGuardEnabled,
 });
 
 const groupReportGenerator = new GroupReportGenerator({

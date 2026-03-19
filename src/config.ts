@@ -66,6 +66,7 @@ const env = cleanEnv(process.env, {
     REPORT_EXT_CALL_MAX_TIME_IN_SECONDS: num({ default: 60 }),
     REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS: num({ default: 30 }),
     REPORT_EXT_CALL_RETRYABLE_STATUS_CODES: str({ default: '429 409' }), // Retry on Too Many Requests, Conflict
+    CLOUD_GUARD_ENABLED: bool({ default: false }),
     CLOUD_GUARD_GRACE_COUNT: num({ default: 0 }),
     CLOUD_PROVIDER: str({ default: 'oracle' }),
     CLOUD_PROVIDERS: str({ default: '' }),
@@ -181,5 +182,6 @@ export default {
         },
     ),
     PrometheusURL: env.PROMETHEUS_URL,
+    CloudGuardEnabled: env.CLOUD_GUARD_ENABLED,
     CloudGuardGraceCount: env.CLOUD_GUARD_GRACE_COUNT,
 };

@@ -79,6 +79,9 @@ const env = cleanEnv(process.env, {
 
     CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_TIMEOUT_MS: num({ default: 60000 }),
     CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_FILE_PATH: str({ default: './scripts/custom-launch.sh' }),
+
+    SCHEDULED_SCALING_ENABLED: bool({ default: true }),
+    SCHEDULED_SCALING_DEFAULT_TIMEZONE: str({ default: 'UTC' }),
 });
 
 const cloudProviders = env.CLOUD_PROVIDERS ? (env.CLOUD_PROVIDERS as string).split(',') : [env.CLOUD_PROVIDER];
@@ -184,4 +187,6 @@ export default {
     PrometheusURL: env.PROMETHEUS_URL,
     CloudGuardEnabled: env.CLOUD_GUARD_ENABLED,
     CloudGuardGraceCount: env.CLOUD_GUARD_GRACE_COUNT,
+    ScheduledScalingEnabled: env.SCHEDULED_SCALING_ENABLED,
+    ScheduledScalingDefaultTimezone: env.SCHEDULED_SCALING_DEFAULT_TIMEZONE,
 };

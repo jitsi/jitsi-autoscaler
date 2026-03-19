@@ -32,6 +32,7 @@ export interface ScalingOptions {
     scalePeriod: number;
     scaleUpPeriodsCount: number;
     scaleDownPeriodsCount: number;
+    cloudGuardGraceCount?: number;
 }
 
 export interface InstanceGroupTags {

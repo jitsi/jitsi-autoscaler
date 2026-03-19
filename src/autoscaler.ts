@@ -31,6 +31,7 @@ export interface AutoscaleProcessorOptions {
     audit: Audit;
     cloudManager: CloudManager;
     cloudRetryStrategy: CloudRetryStrategy;
+    defaultCloudGuardGraceCount?: number;
 }
 
 export default class AutoscaleProcessor {
@@ -40,6 +41,7 @@ export default class AutoscaleProcessor {
     private audit: Audit;
     private cloudManager: CloudManager;
     private cloudRetryStrategy: CloudRetryStrategy;
+    private defaultCloudGuardGraceCount: number;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
@@ -51,6 +53,7 @@ export default class AutoscaleProcessor {
         this.audit = options.audit;
         this.cloudManager = options.cloudManager;
         this.cloudRetryStrategy = options.cloudRetryStrategy;
+        this.defaultCloudGuardGraceCount = options.defaultCloudGuardGraceCount ?? 0;
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
@@ -93,10 +96,12 @@ export default class AutoscaleProcessor {
 
                 cloudSidecarDiscrepancyGauge.set({ group: group.name }, cloudRunningCount - count);
 
-                if (cloudRunningCount >= group.scalingOptions.desiredCount) {
+                const graceCount = group.scalingOptions.cloudGuardGraceCount ?? this.defaultCloudGuardGraceCount;
+                if (cloudRunningCount + graceCount >= group.scalingOptions.desiredCount) {
                     ctx.logger.warn(
                         `[AutoScaler] Cloud has ${cloudRunningCount} instances but only ${count} reporting ` +
-                            `via sidecar for group ${group.name}. Suppressing autoscale to avoid churn.`,
+                            `via sidecar for group ${group.name} (grace: ${graceCount}). ` +
+                            `Suppressing autoscale to avoid churn.`,
                     );
                     scaleUpSuppressedByCloudGuardCounter.inc({ group: group.name });
                     return false;

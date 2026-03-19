@@ -47,6 +47,7 @@ export interface InstanceLauncherOptions {
     audit: Audit;
     metricsLoop: MetricsLoop;
     cloudRetryStrategy?: CloudRetryStrategy;
+    defaultCloudGuardGraceCount?: number;
 }
 
 export default class InstanceLauncher {
@@ -58,6 +59,7 @@ export default class InstanceLauncher {
     private audit: Audit;
     private metricsLoop: MetricsLoop;
     private cloudRetryStrategy: CloudRetryStrategy;
+    private defaultCloudGuardGraceCount: number;
 
     constructor(options: InstanceLauncherOptions) {
         this.instanceTracker = options.instanceTracker;
@@ -71,6 +73,8 @@ export default class InstanceLauncher {
             maxDelayInSeconds: 10,
             retryableStatusCodes: [429, 500, 503],
         };
+
+        this.defaultCloudGuardGraceCount = options.defaultCloudGuardGraceCount ?? 0;
 
         if (options.maxThrottleThreshold) {
             this.maxThrottleThreshold = options.maxThrottleThreshold;
@@ -113,7 +117,7 @@ export default class InstanceLauncher {
             ) {
                 ctx.logger.info('[Launcher] Will scale up to the desired count', { groupName, desiredCount, count });
 
-                const actualScaleUpQuantity =
+                let actualScaleUpQuantity =
                     Math.min(group.scalingOptions.maxDesired, group.scalingOptions.desiredCount) - effectiveCount;
 
                 // if untracked throttle enabled, only scale up if there aren't too many untracked instances
@@ -157,13 +161,23 @@ export default class InstanceLauncher {
 
                 launcherCloudSidecarDiscrepancyGauge.set({ group: group.name }, cloudRunningCount - count);
 
+                const graceCount = group.scalingOptions.cloudGuardGraceCount ?? this.defaultCloudGuardGraceCount;
                 if (cloudRunningCount >= group.scalingOptions.desiredCount) {
-                    ctx.logger.warn(
-                        `[Launcher] Cloud has ${cloudRunningCount} instances for group ${groupName} ` +
-                            `but only ${count} tracked. Skipping launch to avoid churn.`,
+                    const graceLimit = group.scalingOptions.desiredCount + graceCount;
+                    if (cloudRunningCount >= graceLimit) {
+                        ctx.logger.warn(
+                            `[Launcher] Cloud has ${cloudRunningCount} instances for group ${groupName} ` +
+                                `but only ${count} tracked (grace limit: ${graceLimit}). Skipping launch.`,
+                        );
+                        launchSuppressedByCloudGuardCounter.inc({ group: group.name });
+                        return true;
+                    }
+                    const graceRemaining = graceLimit - cloudRunningCount;
+                    actualScaleUpQuantity = Math.min(actualScaleUpQuantity, graceRemaining);
+                    ctx.logger.info(
+                        `[Launcher] Cloud guard allowing grace scale-up of ${actualScaleUpQuantity} ` +
+                            `for group ${groupName} (cloudRunning=${cloudRunningCount}, graceLimit=${graceLimit}).`,
                     );
-                    launchSuppressedByCloudGuardCounter.inc({ group: group.name });
-                    return true;
                 }
 
                 const scaleDownProtected = await this.instanceGroupManager.isScaleDownProtected(ctx, group.name);

@@ -221,6 +221,7 @@ const autoscaleProcessor = new AutoscaleProcessor({
         maxDelayInSeconds: config.ReportExtCallMaxDelayInSeconds,
         retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
     },
+    defaultCloudGuardGraceCount: config.CloudGuardGraceCount,
 });
 
 const metricsLoop = new MetricsLoop({
@@ -244,6 +245,7 @@ const instanceLauncher = new InstanceLauncher({
         maxDelayInSeconds: config.ReportExtCallMaxDelayInSeconds,
         retryableStatusCodes: config.ReportExtCallRetryableStatusCodes,
     },
+    defaultCloudGuardGraceCount: config.CloudGuardGraceCount,
 });
 
 const groupReportGenerator = new GroupReportGenerator({

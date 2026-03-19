@@ -312,6 +312,144 @@ describe('InstanceLauncher', () => {
             // The quantity should be desiredCount - effectiveCount = 5 - 3 = 2
             assert.equal(cloudManager.scaleUp.mock.calls[0].arguments[3], 2, 'correct scale-up quantity');
         });
+        test('cloud guard grace=0 full suppress (backward compat)', async () => {
+            const groupDetailsDesired2 = {
+                ...groupDetails,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 2,
+                    maxDesired: 2,
+                    cloudGuardGraceCount: 0,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetailsDesired2);
+            metricsLoop.getUnTrackedCount.mock.mockImplementationOnce(() => 0);
+            cloudManager.getInstances.mock.mockImplementationOnce(() => [
+                { instanceId: 'i-1', displayName: 'inst-1', cloudStatus: 'RUNNING' },
+                { instanceId: 'i-2', displayName: 'inst-2', cloudStatus: 'RUNNING' },
+            ]);
+
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.equal(result, true, 'returned true (suppressed)');
+            assert.equal(cloudManager.scaleUp.mock.calls.length, 0, 'scaleUp NOT called');
+        });
+
+        test('cloud guard grace allows limited launch', async () => {
+            // tracked=1, untracked=0, desired=2, maxDesired=5, cloud=2, grace=2
+            // cloudRunning(2) >= desired(2) → guard fires
+            // graceLimit = 2 + 2 = 4, cloudRunning(2) < 4 → grace allows
+            // graceRemaining = 4 - 2 = 2, actualScaleUpQuantity = min(1, 2) = 1
+            const groupDetailsGrace = {
+                ...groupDetails,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 2,
+                    maxDesired: 5,
+                    cloudGuardGraceCount: 2,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetailsGrace);
+            metricsLoop.getUnTrackedCount.mock.mockImplementationOnce(() => 0);
+            cloudManager.getInstances.mock.mockImplementationOnce(() => [
+                { instanceId: 'i-1', displayName: 'inst-1', cloudStatus: 'RUNNING' },
+                { instanceId: 'i-2', displayName: 'inst-2', cloudStatus: 'RUNNING' },
+            ]);
+            cloudManager.scaleUp.mock.mockImplementationOnce(() => 1);
+
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.equal(result, true, 'launch succeeded');
+            assert.equal(cloudManager.scaleUp.mock.calls.length, 1, 'scaleUp called');
+            assert.equal(cloudManager.scaleUp.mock.calls[0].arguments[3], 1, 'scale-up quantity capped');
+        });
+
+        test('cloud guard grace fully consumed suppresses launch', async () => {
+            // tracked=1, untracked=0, desired=2, maxDesired=5, cloud=4, grace=2
+            // cloudRunning(4) >= desired(2) → guard fires
+            // graceLimit = 2 + 2 = 4, cloudRunning(4) >= 4 → full suppress
+            const groupDetailsGrace = {
+                ...groupDetails,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 2,
+                    maxDesired: 5,
+                    cloudGuardGraceCount: 2,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetailsGrace);
+            metricsLoop.getUnTrackedCount.mock.mockImplementationOnce(() => 0);
+            cloudManager.getInstances.mock.mockImplementationOnce(() =>
+                Array.from({ length: 4 }, (_, i) => ({
+                    instanceId: `i-${i}`,
+                    displayName: `inst-${i}`,
+                    cloudStatus: 'RUNNING',
+                })),
+            );
+
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.equal(result, true, 'returned true (suppressed)');
+            assert.equal(cloudManager.scaleUp.mock.calls.length, 0, 'scaleUp NOT called');
+        });
+
+        test('cloud guard grace partially consumed caps launch quantity', async () => {
+            // tracked=1, untracked=0, desired=3, maxDesired=6, cloud=4, grace=3
+            // actualScaleUpQuantity = min(6, 3) - 1 = 2
+            // cloudRunning(4) >= desired(3) → guard fires
+            // graceLimit = 3 + 3 = 6, cloudRunning(4) < 6 → grace allows
+            // graceRemaining = 6 - 4 = 2, actualScaleUpQuantity = min(2, 2) = 2
+            const groupDetailsGrace = {
+                ...groupDetails,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 3,
+                    maxDesired: 6,
+                    cloudGuardGraceCount: 3,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetailsGrace);
+            metricsLoop.getUnTrackedCount.mock.mockImplementationOnce(() => 0);
+            cloudManager.getInstances.mock.mockImplementationOnce(() =>
+                Array.from({ length: 4 }, (_, i) => ({
+                    instanceId: `i-${i}`,
+                    displayName: `inst-${i}`,
+                    cloudStatus: 'RUNNING',
+                })),
+            );
+            cloudManager.scaleUp.mock.mockImplementationOnce(() => 2);
+
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.equal(result, true, 'launch succeeded');
+            assert.equal(cloudManager.scaleUp.mock.calls.length, 1, 'scaleUp called');
+            assert.equal(cloudManager.scaleUp.mock.calls[0].arguments[3], 2, 'scale-up quantity correct');
+        });
+
+        test('no grace needed when cloud < desired', async () => {
+            // tracked=1, untracked=0, desired=5, maxDesired=5, cloud=3, grace=2
+            // cloudRunning(3) < desired(5) → guard doesn't fire, normal launch
+            const groupDetailsGrace = {
+                ...groupDetails,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    desiredCount: 5,
+                    maxDesired: 5,
+                    cloudGuardGraceCount: 2,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetailsGrace);
+            metricsLoop.getUnTrackedCount.mock.mockImplementationOnce(() => 0);
+            cloudManager.getInstances.mock.mockImplementationOnce(() =>
+                Array.from({ length: 3 }, (_, i) => ({
+                    instanceId: `i-${i}`,
+                    displayName: `inst-${i}`,
+                    cloudStatus: 'RUNNING',
+                })),
+            );
+            cloudManager.scaleUp.mock.mockImplementationOnce(() => 4);
+
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.equal(result, true, 'launch succeeded');
+            assert.equal(cloudManager.scaleUp.mock.calls.length, 1, 'scaleUp called');
+            assert.equal(cloudManager.scaleUp.mock.calls[0].arguments[3], 4, 'full scale-up quantity');
+        });
     });
 
     describe('instanceLauncher scaleDown selection tests', () => {

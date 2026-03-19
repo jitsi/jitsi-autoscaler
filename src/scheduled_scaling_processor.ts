@@ -3,6 +3,25 @@ import InstanceGroupManager from './instance_group';
 import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import Audit from './audit';
 import { ScalingOptions, ScheduledScalingConfig, SchedulePeriod } from './instance_store';
+import * as promClient from 'prom-client';
+
+const scheduledScalingTransitionsCounter = new promClient.Counter({
+    name: 'scheduled_scaling_transitions_total',
+    help: 'Counter for scheduled scaling option transitions',
+    labelNames: ['group'],
+});
+
+const scheduledScalingErrorsCounter = new promClient.Counter({
+    name: 'scheduled_scaling_errors_total',
+    help: 'Counter for scheduled scaling processing errors',
+    labelNames: ['group'],
+});
+
+const scheduledScalingActivePeriodGauge = new promClient.Gauge({
+    name: 'scheduled_scaling_active_period',
+    help: 'Indicates the currently active scheduled scaling period (1=active, 0=inactive)',
+    labelNames: ['group', 'period'],
+});
 
 const REGION_TIMEZONE_MAP: Record<string, string> = {
     'ap-mumbai-1': 'Asia/Kolkata',
@@ -52,6 +71,7 @@ export default class ScheduledScalingProcessor {
             lock = await this.lockManager.lockGroup(ctx, groupName);
         } catch (err) {
             ctx.logger.warn(`[ScheduledScaling] Error obtaining lock for processing`, { err });
+            scheduledScalingErrorsCounter.inc({ group: groupName });
             return false;
         }
 
@@ -71,11 +91,22 @@ export default class ScheduledScalingProcessor {
                 group.region,
                 this.defaultTimezone,
             );
+            const now = new Date();
+            const activePeriod = ScheduledScalingProcessor.findActivePeriod(group.scheduledScaling, now, timezone);
             const targetOptions = ScheduledScalingProcessor.resolveActiveScalingOptions(
                 group.scheduledScaling,
-                new Date(),
+                now,
                 timezone,
             );
+
+            // Update active period gauge
+            for (const period of group.scheduledScaling.periods) {
+                scheduledScalingActivePeriodGauge.set({ group: groupName, period: period.name }, 0);
+            }
+            scheduledScalingActivePeriodGauge.set({ group: groupName, period: activePeriod?.name ?? 'base' }, 1);
+            if (activePeriod) {
+                scheduledScalingActivePeriodGauge.set({ group: groupName, period: 'base' }, 0);
+            }
 
             if (ScheduledScalingProcessor.scalingOptionsEqual(group.scalingOptions, targetOptions)) {
                 ctx.logger.debug(`[ScheduledScaling] No changes needed for group ${groupName}`);
@@ -85,6 +116,17 @@ export default class ScheduledScalingProcessor {
             ctx.logger.info(`[ScheduledScaling] Updating scaling options for group ${groupName}`, {
                 oldOptions: group.scalingOptions,
                 newOptions: targetOptions,
+                activePeriod: activePeriod?.name ?? 'base',
+            });
+
+            scheduledScalingTransitionsCounter.inc({ group: groupName });
+            await this.audit.saveAutoScalerActionItem(groupName, {
+                timestamp: Date.now(),
+                actionType: 'scheduledScalingTransition',
+                count: 0,
+                oldDesiredCount: group.scalingOptions.desiredCount,
+                newDesiredCount: targetOptions.desiredCount,
+                scaleMetrics: [],
             });
 
             group.scalingOptions = targetOptions;

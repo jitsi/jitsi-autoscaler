@@ -21,7 +21,7 @@ function initContext() {
     };
 }
 
-const baseScalingOptions = {
+const currentScalingOptions = {
     minDesired: 1,
     maxDesired: 5,
     desiredCount: 2,
@@ -119,7 +119,6 @@ describe('ScheduledScalingProcessor', () => {
     describe('findActivePeriod', () => {
         const config = {
             enabled: true,
-            baseScalingOptions,
             periods: [peakPeriod, weekendPeriod],
         };
 
@@ -152,17 +151,15 @@ describe('ScheduledScalingProcessor', () => {
         });
 
         test('returns null with empty periods array', () => {
-            const emptyConfig = { enabled: true, baseScalingOptions, periods: [] };
+            const emptyConfig = { enabled: true, periods: [] };
             const now = new Date('2026-03-18T18:00:00Z');
             const result = ScheduledScalingProcessor.findActivePeriod(emptyConfig, now, 'America/New_York');
             assert.strictEqual(result, null);
         });
 
         test('higher priority wins when periods overlap', () => {
-            // Create a config where both periods match on Saturday peak hours
             const overlappingConfig = {
                 enabled: true,
-                baseScalingOptions,
                 periods: [
                     { ...peakPeriod, dayOfWeek: [0, 1, 2, 3, 4, 5, 6], priority: 10 },
                     { ...weekendPeriod, startHour: 8, endHour: 20, priority: 20 },
@@ -178,32 +175,44 @@ describe('ScheduledScalingProcessor', () => {
     describe('resolveActiveScalingOptions', () => {
         const config = {
             enabled: true,
-            baseScalingOptions,
             periods: [peakPeriod, weekendPeriod],
         };
 
         test('returns peak options during weekday peak hours', () => {
             const now = new Date('2026-03-18T18:00:00Z'); // Wednesday 14:00 ET
-            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(config, now, 'America/New_York');
+            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(
+                config,
+                currentScalingOptions,
+                now,
+                'America/New_York',
+            );
             assert.strictEqual(result.minDesired, 10);
             assert.strictEqual(result.maxDesired, 20);
             assert.strictEqual(result.desiredCount, 10);
-            // Non-overridden values should come from base
+            // Non-overridden values should come from current options
             assert.strictEqual(result.scaleUpQuantity, 1);
             assert.strictEqual(result.scalePeriod, 60);
         });
 
-        test('returns base options during weekday off-peak', () => {
+        test('returns null during weekday off-peak (no active period)', () => {
             const now = new Date('2026-03-19T03:00:00Z'); // Wednesday 22:00 ET
-            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(config, now, 'America/New_York');
-            assert.strictEqual(result.minDesired, 1);
-            assert.strictEqual(result.maxDesired, 5);
-            assert.strictEqual(result.desiredCount, 2);
+            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(
+                config,
+                currentScalingOptions,
+                now,
+                'America/New_York',
+            );
+            assert.strictEqual(result, null);
         });
 
         test('returns weekend options on Saturday', () => {
             const now = new Date('2026-03-21T16:00:00Z'); // Saturday 12:00 ET
-            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(config, now, 'America/New_York');
+            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(
+                config,
+                currentScalingOptions,
+                now,
+                'America/New_York',
+            );
             assert.strictEqual(result.minDesired, 0);
             assert.strictEqual(result.maxDesired, 2);
             assert.strictEqual(result.desiredCount, 1);
@@ -212,7 +221,6 @@ describe('ScheduledScalingProcessor', () => {
         test('enforces minDesired <= desiredCount', () => {
             const badConfig = {
                 enabled: true,
-                baseScalingOptions: { ...baseScalingOptions },
                 periods: [
                     {
                         name: 'bad',
@@ -225,14 +233,18 @@ describe('ScheduledScalingProcessor', () => {
                 ],
             };
             const now = new Date('2026-03-18T18:00:00Z');
-            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(badConfig, now, 'America/New_York');
+            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(
+                badConfig,
+                currentScalingOptions,
+                now,
+                'America/New_York',
+            );
             assert.ok(result.desiredCount >= result.minDesired);
         });
 
         test('enforces maxDesired >= desiredCount', () => {
             const badConfig = {
                 enabled: true,
-                baseScalingOptions: { ...baseScalingOptions },
                 periods: [
                     {
                         name: 'bad',
@@ -245,26 +257,31 @@ describe('ScheduledScalingProcessor', () => {
                 ],
             };
             const now = new Date('2026-03-18T18:00:00Z');
-            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(badConfig, now, 'America/New_York');
+            const result = ScheduledScalingProcessor.resolveActiveScalingOptions(
+                badConfig,
+                currentScalingOptions,
+                now,
+                'America/New_York',
+            );
             assert.ok(result.maxDesired >= result.desiredCount);
         });
     });
 
     describe('resolveTimezone', () => {
         test('uses explicit timezone when provided', () => {
-            const config = { enabled: true, timezone: 'Asia/Tokyo', baseScalingOptions, periods: [] };
+            const config = { enabled: true, timezone: 'Asia/Tokyo', periods: [] };
             const result = ScheduledScalingProcessor.resolveTimezone(config, 'us-ashburn-1', 'UTC');
             assert.strictEqual(result, 'Asia/Tokyo');
         });
 
         test('falls back to region mapping', () => {
-            const config = { enabled: true, baseScalingOptions, periods: [] };
+            const config = { enabled: true, periods: [] };
             const result = ScheduledScalingProcessor.resolveTimezone(config, 'us-ashburn-1', 'UTC');
             assert.strictEqual(result, 'America/New_York');
         });
 
         test('falls back to default timezone for unknown region', () => {
-            const config = { enabled: true, baseScalingOptions, periods: [] };
+            const config = { enabled: true, periods: [] };
             const result = ScheduledScalingProcessor.resolveTimezone(config, 'unknown-region-1', 'UTC');
             assert.strictEqual(result, 'UTC');
         });
@@ -273,15 +290,15 @@ describe('ScheduledScalingProcessor', () => {
     describe('scalingOptionsEqual', () => {
         test('returns true for identical options', () => {
             assert.strictEqual(
-                ScheduledScalingProcessor.scalingOptionsEqual(baseScalingOptions, { ...baseScalingOptions }),
+                ScheduledScalingProcessor.scalingOptionsEqual(currentScalingOptions, { ...currentScalingOptions }),
                 true,
             );
         });
 
         test('returns false when a field differs', () => {
             assert.strictEqual(
-                ScheduledScalingProcessor.scalingOptionsEqual(baseScalingOptions, {
-                    ...baseScalingOptions,
+                ScheduledScalingProcessor.scalingOptionsEqual(currentScalingOptions, {
+                    ...currentScalingOptions,
                     desiredCount: 99,
                 }),
                 false,
@@ -345,7 +362,7 @@ describe('ScheduledScalingProcessor', () => {
             instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
                 name: groupName,
                 region: 'us-ashburn-1',
-                scalingOptions: { ...baseScalingOptions },
+                scalingOptions: { ...currentScalingOptions },
             }));
             const result = await processor.processScheduledScalingByGroup(context, groupName);
             assert.strictEqual(result, false);
@@ -357,8 +374,8 @@ describe('ScheduledScalingProcessor', () => {
             instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
                 name: groupName,
                 region: 'us-ashburn-1',
-                scalingOptions: { ...baseScalingOptions },
-                scheduledScaling: { enabled: false, baseScalingOptions, periods: [] },
+                scalingOptions: { ...currentScalingOptions },
+                scheduledScaling: { enabled: false, periods: [] },
             }));
             const result = await processor.processScheduledScalingByGroup(context, groupName);
             assert.strictEqual(result, false);
@@ -370,10 +387,9 @@ describe('ScheduledScalingProcessor', () => {
                 name: groupName,
                 region: 'us-ashburn-1',
                 enableScheduler: true,
-                scalingOptions: { ...baseScalingOptions },
+                scalingOptions: { ...currentScalingOptions },
                 scheduledScaling: {
                     enabled: true,
-                    baseScalingOptions,
                     periods: [
                         {
                             name: 'always-peak',
@@ -408,17 +424,15 @@ describe('ScheduledScalingProcessor', () => {
             assert.strictEqual(auditArgs[1].newDesiredCount, 10);
         });
 
-        test('skips update when options already match (idempotent)', async () => {
+        test('skips update when no active period (leaves group as-is)', async () => {
             context = initContext();
-            // Group already has the target options
             instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
                 name: groupName,
                 region: 'us-ashburn-1',
-                scalingOptions: { ...baseScalingOptions },
+                scalingOptions: { ...currentScalingOptions },
                 scheduledScaling: {
                     enabled: true,
-                    baseScalingOptions,
-                    periods: [], // No active period, so target = base = current
+                    periods: [], // No periods, so no active period
                 },
             }));
 
@@ -435,15 +449,14 @@ describe('ScheduledScalingProcessor', () => {
             assert.strictEqual(lockRelease.mock.calls.length, 1);
         });
 
-        test('does not call audit when no changes needed', async () => {
+        test('does not call audit when no active period', async () => {
             context = initContext();
             instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
                 name: groupName,
                 region: 'us-ashburn-1',
-                scalingOptions: { ...baseScalingOptions },
+                scalingOptions: { ...currentScalingOptions },
                 scheduledScaling: {
                     enabled: true,
-                    baseScalingOptions,
                     periods: [],
                 },
             }));

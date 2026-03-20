@@ -629,18 +629,13 @@ class Handlers {
                 }
             }
 
-            // If baseScalingOptions not provided, inherit from group's current scalingOptions
-            if (!scheduledScalingConfig.baseScalingOptions) {
-                scheduledScalingConfig.baseScalingOptions = { ...instanceGroup.scalingOptions };
-            }
-
             instanceGroup.scheduledScaling = scheduledScalingConfig;
 
             // If enabling scheduled scaling, disable external scheduler
             if (scheduledScalingConfig.enabled) {
                 instanceGroup.enableScheduler = false;
 
-                // Immediately resolve and apply active scaling options
+                // Immediately resolve and apply active period overrides
                 const timezone = ScheduledScalingProcessor.resolveTimezone(
                     scheduledScalingConfig,
                     instanceGroup.region,
@@ -648,6 +643,7 @@ class Handlers {
                 );
                 const targetOptions = ScheduledScalingProcessor.resolveActiveScalingOptions(
                     scheduledScalingConfig,
+                    instanceGroup.scalingOptions,
                     new Date(),
                     timezone,
                 );

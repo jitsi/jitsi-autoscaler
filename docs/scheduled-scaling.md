@@ -8,11 +8,10 @@ Scheduled scaling allows instance groups to automatically adjust their scaling p
 
 Each group can have a `scheduledScaling` configuration containing:
 
-1. **Base scaling options** — the default scaling parameters used during off-peak/unscheduled times.
-2. **Periods** — named time windows (e.g., "weekday-peak", "weekend") that override specific base parameters when active.
-3. **Timezone** — either explicitly set or auto-derived from the group's cloud region.
+1. **Periods** — named time windows (e.g., "weekday-peak", "weekend") that override specific scaling parameters when active.
+2. **Timezone** — either explicitly set or auto-derived from the group's cloud region.
 
-Every ~30 seconds, the scheduler evaluates which period is active for each group and applies the corresponding scaling options. The autoscaler then operates within whatever envelope the scheduler has set.
+Every ~30 seconds, the scheduler evaluates which period is active for each group. When a period is active, its `scalingOptions` are merged onto the group's current `scalingOptions`. When no period is active, the group's scaling options are left unchanged — whatever was set by external jobs, the autoscaler, or previous periods remains in effect.
 
 ### Timezone Resolution
 
@@ -71,7 +70,6 @@ Stored on `InstanceGroup.scheduledScaling` (optional).
 interface ScheduledScalingConfig {
     enabled: boolean;
     timezone?: string;              // optional IANA timezone override
-    baseScalingOptions?: ScalingOptions; // omit to inherit group's current scalingOptions
     periods: SchedulePeriod[];
 }
 ```
@@ -92,7 +90,7 @@ interface SchedulePeriod {
 
 ### ScalingOptions
 
-The full set of fields that `baseScalingOptions` must provide and that period overrides can partially replace:
+The group's existing `scalingOptions` serve as the base. Period overrides can partially replace these fields:
 
 ```typescript
 interface ScalingOptions {
@@ -124,18 +122,6 @@ Returns the current scheduled scaling configuration and the currently active per
     "scheduledScaling": {
         "enabled": true,
         "timezone": "America/New_York",
-        "baseScalingOptions": {
-            "minDesired": 1,
-            "maxDesired": 5,
-            "desiredCount": 2,
-            "scaleUpQuantity": 1,
-            "scaleDownQuantity": 1,
-            "scaleUpThreshold": 0.8,
-            "scaleDownThreshold": 0.3,
-            "scalePeriod": 60,
-            "scaleUpPeriodsCount": 2,
-            "scaleDownPeriodsCount": 4
-        },
         "periods": [
             {
                 "name": "weekday-peak",
@@ -196,23 +182,11 @@ When no scheduled scaling is configured:
 
 Creates or replaces the entire scheduled scaling configuration for a group. Takes effect immediately — the active period's scaling options are applied on save.
 
-**Request body:** A `ScheduledScalingConfig` object. `baseScalingOptions` is optional — when omitted, the group's current `scalingOptions` are used as the base.
+**Request body:** A `ScheduledScalingConfig` object. Period `scalingOptions` are merged onto the group's existing `scalingOptions` — only override the fields you want to change.
 
 ```json
 {
     "enabled": true,
-    "baseScalingOptions": {
-        "minDesired": 1,
-        "maxDesired": 5,
-        "desiredCount": 2,
-        "scaleUpQuantity": 1,
-        "scaleDownQuantity": 1,
-        "scaleUpThreshold": 0.8,
-        "scaleDownThreshold": 0.3,
-        "scalePeriod": 60,
-        "scaleUpPeriodsCount": 2,
-        "scaleDownPeriodsCount": 4
-    },
     "periods": [
         {
             "name": "weekday-peak",
@@ -265,7 +239,7 @@ To populate the UI for a group's scheduled scaling:
 
 **Timezone Display**: Show the `resolvedTimezone` from the GET response. If the user hasn't set an explicit timezone, show the auto-resolved one (derived from region) with a label like "Auto-detected from region". Allow override via the optional `timezone` field.
 
-**Base Scaling Options Form**: The full `ScalingOptions` that apply during unscheduled times. All 10 fields are required. This is what the group falls back to when no period matches.
+**Group Scaling Options**: The group's existing `scalingOptions` (set via `PUT /groups/:name/desired` or `PUT /groups/:name/scaling-options`) serve as the base. When no period matches, these values remain unchanged. Periods only override the specific fields they define.
 
 **Periods List/Table**: Each period needs:
 - `name` — free-text label
@@ -275,18 +249,16 @@ To populate the UI for a group's scheduled scaling:
 - `inhibitScaleDown` — checkbox, labeled something like "Prevent scale-down during this period".
 - `scalingOptions` — partial override form. Only show fields the user wants to override; omitted fields inherit from base. The most commonly overridden fields are `minDesired`, `maxDesired`, and `desiredCount`.
 
-**Active Period Indicator**: Highlight which period (if any) is currently active. The `activePeriod` field from the GET response tells you this. If `null`, the base options are in effect.
+**Active Period Indicator**: Highlight which period (if any) is currently active. The `activePeriod` field from the GET response tells you this. If `null`, no period overrides are in effect and the group's current `scalingOptions` are unchanged.
 
 **Weekly Timeline Visualization** (optional but recommended): A 7-day × 24-hour grid showing which period is active at each hour, color-coded by period name. This makes it easy to see coverage gaps and overlaps at a glance.
 
 ### Saving Changes
 
-Always `PUT` the entire `ScheduledScalingConfig` as a single request. The API does not support partial updates — you must send the full config including all periods and base options.
+Always `PUT` the entire `ScheduledScalingConfig` as a single request. The API does not support partial updates — you must send the full config including all periods.
 
 ### Validation Rules to Enforce Client-Side
 
-- `baseScalingOptions` must have all 10 `ScalingOptions` fields, all non-negative.
-- `baseScalingOptions.minDesired <= baseScalingOptions.desiredCount <= baseScalingOptions.maxDesired`.
 - Each period must have a non-empty `name`, at least one day in `dayOfWeek`, `startHour` and `endHour` in range 0-23, and a numeric `priority`.
 - Period `scalingOptions` fields are all optional, but any provided values must be non-negative.
 - If `timezone` is provided, it must be a valid IANA timezone string (the API validates this server-side and returns 400 if invalid).
@@ -297,7 +269,7 @@ Always `PUT` the entire `ScheduledScalingConfig` as a single request. The API do
 When the user is editing periods, you can compute locally what the resolved scaling options would be at any given time by:
 
 1. Finding which period matches a given day+hour (filter by `dayOfWeek` and hour range, pick highest priority).
-2. Merging: `{ ...baseScalingOptions, ...matchingPeriod.scalingOptions }`.
+2. Merging: `{ ...group.scalingOptions, ...matchingPeriod.scalingOptions }`.
 3. Clamping: `minDesired <= desiredCount <= maxDesired`.
 
 This allows a "preview" feature showing the effective values for each hour of the week without calling the API.

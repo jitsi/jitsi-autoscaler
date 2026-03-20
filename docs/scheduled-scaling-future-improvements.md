@@ -21,7 +21,7 @@ Known risks and recommended mitigations identified during architecture review, p
 
 **Risk**: `DELETE /groups/:name/scheduled-scaling` removes the `scheduledScaling` config but leaves `scalingOptions` at whatever the last active period set. If the group was in a low-capacity weekend period, deleting scheduled scaling on Monday morning leaves the group stuck at weekend capacity with no automatic recovery.
 
-**Recommendation**: On DELETE, restore `group.scalingOptions` to `scheduledScaling.baseScalingOptions` before removing the config. This gives the operator a predictable "return to baseline" behavior. Document this clearly either way.
+**Recommendation**: Document that deleting scheduled scaling leaves the group's current `scalingOptions` in place. The operator should manually update desired/min/max via `PUT /groups/:name/desired` after deleting if needed.
 
 ## P2: Region Timezone Map Incomplete
 

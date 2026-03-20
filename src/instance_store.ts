@@ -36,7 +36,6 @@ export interface SchedulePeriod {
 export interface ScheduledScalingConfig {
     enabled: boolean;
     timezone?: string;
-    baseScalingOptions?: ScalingOptions;
     periods: SchedulePeriod[];
 }
 

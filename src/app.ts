@@ -544,23 +544,25 @@ app.put(
     '/groups/:name/scheduled-scaling',
     body('enabled').isBoolean().withMessage('enabled must be a boolean'),
     body('timezone').optional().isString().withMessage('timezone must be a string'),
-    body('baseScalingOptions').isObject().withMessage('baseScalingOptions must be an object'),
-    body('baseScalingOptions.minDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.maxDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.scaleUpQuantity').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.scaleDownQuantity').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.scaleUpThreshold').isFloat({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.scaleDownThreshold').isFloat({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.scalePeriod').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.scaleUpPeriodsCount').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions.scaleDownPeriodsCount').isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('baseScalingOptions').custom((value) => {
-        if (!validator.groupHasValidDesiredValues(value.minDesired, value.maxDesired, value.desiredCount)) {
-            throw new Error('Desired count must be between min and max; min cannot be greater than max');
-        }
-        return true;
-    }),
+    body('baseScalingOptions').optional().isObject().withMessage('baseScalingOptions must be an object'),
+    body('baseScalingOptions.minDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.desiredCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.scaleUpQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.scaleDownQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.scaleUpThreshold').optional().isFloat({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.scaleDownThreshold').optional().isFloat({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.scalePeriod').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.scaleUpPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions.scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('baseScalingOptions')
+        .optional()
+        .custom((value) => {
+            if (!validator.groupHasValidDesiredValues(value.minDesired, value.maxDesired, value.desiredCount)) {
+                throw new Error('Desired count must be between min and max; min cannot be greater than max');
+            }
+            return true;
+        }),
     body('periods').isArray().withMessage('periods must be an array'),
     body('periods.*.name').isString().notEmpty().withMessage('Period name must be a non-empty string'),
     body('periods.*.dayOfWeek').isArray({ min: 1 }).withMessage('dayOfWeek must be a non-empty array'),

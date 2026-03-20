@@ -61,6 +61,7 @@ describe('ScheduledScalingProcessor', () => {
             const result = ScheduledScalingProcessor.getLocalTime(now, 'America/New_York');
             assert.strictEqual(result.dayOfWeek, 3); // Wednesday
             assert.strictEqual(result.hour, 14);
+            assert.strictEqual(result.minute, 0);
         });
 
         test('converts UTC time to Tokyo timezone', () => {
@@ -69,6 +70,7 @@ describe('ScheduledScalingProcessor', () => {
             const result = ScheduledScalingProcessor.getLocalTime(now, 'Asia/Tokyo');
             assert.strictEqual(result.dayOfWeek, 4); // Thursday
             assert.strictEqual(result.hour, 3);
+            assert.strictEqual(result.minute, 0);
         });
 
         test('handles day boundary crossing for Sydney', () => {
@@ -77,42 +79,79 @@ describe('ScheduledScalingProcessor', () => {
             const result = ScheduledScalingProcessor.getLocalTime(now, 'Australia/Sydney');
             assert.strictEqual(result.dayOfWeek, 6); // Saturday
             assert.strictEqual(result.hour, 2);
+            assert.strictEqual(result.minute, 0);
+        });
+
+        test('returns correct minutes', () => {
+            // 2026-03-18 18:45 UTC = 14:45 ET
+            const now = new Date('2026-03-18T18:45:00Z');
+            const result = ScheduledScalingProcessor.getLocalTime(now, 'America/New_York');
+            assert.strictEqual(result.hour, 14);
+            assert.strictEqual(result.minute, 45);
         });
     });
 
-    describe('isHourInRange', () => {
-        test('normal range (8-20): hour inside', () => {
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(12, 8, 20), true);
+    describe('isTimeInRange', () => {
+        test('normal range (8:00-20:00): inside', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(12, 0, 8, 0, 20, 0), true);
         });
 
-        test('normal range (8-20): hour at start', () => {
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(8, 8, 20), true);
+        test('normal range (8:00-20:00): at start', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(8, 0, 8, 0, 20, 0), true);
         });
 
-        test('normal range (8-20): hour at end (exclusive)', () => {
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(20, 8, 20), false);
+        test('normal range (8:00-20:00): at end (exclusive)', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(20, 0, 8, 0, 20, 0), false);
         });
 
-        test('normal range (8-20): hour outside', () => {
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(6, 8, 20), false);
+        test('normal range (8:00-20:00): outside', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(6, 0, 8, 0, 20, 0), false);
         });
 
-        test('midnight wrap (22-6): hour before midnight', () => {
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(23, 22, 6), true);
+        test('midnight wrap (22:00-6:00): before midnight', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(23, 0, 22, 0, 6, 0), true);
         });
 
-        test('midnight wrap (22-6): hour after midnight', () => {
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(3, 22, 6), true);
+        test('midnight wrap (22:00-6:00): after midnight', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(3, 0, 22, 0, 6, 0), true);
         });
 
-        test('midnight wrap (22-6): hour outside', () => {
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(12, 22, 6), false);
+        test('midnight wrap (22:00-6:00): outside', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(12, 0, 22, 0, 6, 0), false);
         });
 
-        test('all-day (0-0): matches any hour', () => {
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(0, 0, 0), true);
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(12, 0, 0), true);
-            assert.strictEqual(ScheduledScalingProcessor.isHourInRange(23, 0, 0), true);
+        test('all-day (0:00-0:00): matches any time', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(0, 0, 0, 0, 0, 0), true);
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(12, 30, 0, 0, 0, 0), true);
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(23, 59, 0, 0, 0, 0), true);
+        });
+
+        test('minute-level range (7:45-8:00): inside at 7:45', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(7, 45, 7, 45, 8, 0), true);
+        });
+
+        test('minute-level range (7:45-8:00): inside at 7:50', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(7, 50, 7, 45, 8, 0), true);
+        });
+
+        test('minute-level range (7:45-8:00): outside at 8:00 (exclusive)', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(8, 0, 7, 45, 8, 0), false);
+        });
+
+        test('minute-level range (7:45-8:00): outside at 7:44', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(7, 44, 7, 45, 8, 0), false);
+        });
+
+        test('midnight wrap with minutes (23:30-0:15): before midnight', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(23, 45, 23, 30, 0, 15), true);
+        });
+
+        test('midnight wrap with minutes (23:30-0:15): after midnight', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(0, 10, 23, 30, 0, 15), true);
+        });
+
+        test('midnight wrap with minutes (23:30-0:15): outside', () => {
+            assert.strictEqual(ScheduledScalingProcessor.isTimeInRange(0, 15, 23, 30, 0, 15), false);
         });
     });
 

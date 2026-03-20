@@ -27,7 +27,9 @@ export interface SchedulePeriod {
     name: string;
     dayOfWeek: number[];
     startHour: number;
+    startMinute?: number;
     endHour: number;
+    endMinute?: number;
     priority: number;
     scalingOptions: Partial<ScalingOptions>;
     inhibitScaleDown?: boolean;

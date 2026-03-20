@@ -629,6 +629,11 @@ class Handlers {
                 }
             }
 
+            // If baseScalingOptions not provided, inherit from group's current scalingOptions
+            if (!scheduledScalingConfig.baseScalingOptions) {
+                scheduledScalingConfig.baseScalingOptions = { ...instanceGroup.scalingOptions };
+            }
+
             instanceGroup.scheduledScaling = scheduledScalingConfig;
 
             // If enabling scheduled scaling, disable external scheduler
@@ -646,7 +651,9 @@ class Handlers {
                     new Date(),
                     timezone,
                 );
-                instanceGroup.scalingOptions = targetOptions;
+                if (targetOptions) {
+                    instanceGroup.scalingOptions = targetOptions;
+                }
             }
 
             await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);

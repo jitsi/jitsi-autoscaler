@@ -99,6 +99,12 @@ export default class ScheduledScalingProcessor {
                 timezone,
             );
 
+            if (!targetOptions) {
+                ctx.logger.warn(`[ScheduledScaling] Missing baseScalingOptions for group ${groupName}`);
+                scheduledScalingErrorsCounter.inc({ group: groupName });
+                return false;
+            }
+
             // Update active period gauge
             for (const period of group.scheduledScaling.periods) {
                 scheduledScalingActivePeriodGauge.set({ group: groupName, period: period.name }, 0);
@@ -203,7 +209,15 @@ export default class ScheduledScalingProcessor {
         return matchingPeriods[0];
     }
 
-    static resolveActiveScalingOptions(config: ScheduledScalingConfig, now: Date, timezone: string): ScalingOptions {
+    static resolveActiveScalingOptions(
+        config: ScheduledScalingConfig,
+        now: Date,
+        timezone: string,
+    ): ScalingOptions | null {
+        if (!config.baseScalingOptions) {
+            return null;
+        }
+
         const activePeriod = ScheduledScalingProcessor.findActivePeriod(config, now, timezone);
 
         let resolved: ScalingOptions;

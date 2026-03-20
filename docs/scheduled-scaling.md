@@ -71,7 +71,7 @@ Stored on `InstanceGroup.scheduledScaling` (optional).
 interface ScheduledScalingConfig {
     enabled: boolean;
     timezone?: string;              // optional IANA timezone override
-    baseScalingOptions: ScalingOptions;
+    baseScalingOptions?: ScalingOptions; // omit to inherit group's current scalingOptions
     periods: SchedulePeriod[];
 }
 ```
@@ -196,7 +196,7 @@ When no scheduled scaling is configured:
 
 Creates or replaces the entire scheduled scaling configuration for a group. Takes effect immediately — the active period's scaling options are applied on save.
 
-**Request body:** A full `ScheduledScalingConfig` object.
+**Request body:** A `ScheduledScalingConfig` object. `baseScalingOptions` is optional — when omitted, the group's current `scalingOptions` are used as the base.
 
 ```json
 {

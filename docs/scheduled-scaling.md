@@ -40,15 +40,18 @@ Region-to-timezone mapping:
 
 A period is active when:
 - The current local day-of-week (0=Sunday through 6=Saturday) is in the period's `dayOfWeek` array, AND
-- The current local hour (0-23) falls within the `[startHour, endHour)` range.
+- The current local time falls within the `[startHour:startMinute, endHour:endMinute)` range.
 
 When multiple periods match simultaneously, the one with the highest `priority` value wins.
 
-### Hour Ranges
+### Time Ranges
 
-- **Normal range**: `startHour < endHour` — e.g., `startHour: 8, endHour: 20` means 8:00 AM to 7:59 PM.
-- **Midnight wrap**: `startHour > endHour` — e.g., `startHour: 22, endHour: 6` means 10:00 PM to 5:59 AM (crosses midnight).
-- **All day**: `startHour === endHour` (typically `0, 0`) — matches all 24 hours.
+Time ranges are specified with `startHour`/`startMinute` and `endHour`/`endMinute`. The minute fields are optional and default to 0.
+
+- **Normal range**: e.g., `startHour: 8, endHour: 20` means 8:00 to 19:59.
+- **Minute-level range**: e.g., `startHour: 7, startMinute: 45, endHour: 8, endMinute: 0` means 7:45 to 7:59. Use this to pre-warm capacity before peak hours.
+- **Midnight wrap**: e.g., `startHour: 22, endHour: 6` means 22:00 to 5:59 (crosses midnight).
+- **All day**: `startHour === endHour` and `startMinute === endMinute` (typically `0:00, 0:00`) — matches all 24 hours.
 
 ### Scale-Down Inhibiting
 
@@ -81,7 +84,9 @@ interface SchedulePeriod {
     name: string;                   // human-readable label, e.g., "weekday-peak"
     dayOfWeek: number[];            // 0=Sunday, 1=Monday, ..., 6=Saturday
     startHour: number;              // 0-23, inclusive
+    startMinute?: number;           // 0-59, defaults to 0
     endHour: number;                // 0-23, exclusive (wraps midnight if <= startHour)
+    endMinute?: number;             // 0-59, defaults to 0
     priority: number;               // higher number wins when periods overlap
     scalingOptions: Partial<ScalingOptions>;  // only overridden fields needed
     inhibitScaleDown?: boolean;     // if true, prevents autoscaler scale-down during this period
@@ -244,7 +249,7 @@ To populate the UI for a group's scheduled scaling:
 **Periods List/Table**: Each period needs:
 - `name` — free-text label
 - `dayOfWeek` — multi-select of days (Sunday through Saturday). Display as checkboxes or a weekly calendar strip.
-- `startHour` / `endHour` — hour pickers (0-23). When `startHour === endHour`, display as "All day". When `startHour > endHour`, indicate the range wraps midnight.
+- `startHour` / `startMinute` / `endHour` / `endMinute` — time pickers. Hours 0-23, minutes 0-59 (minutes default to 0 if omitted). When start equals end, display as "All day". When start > end, indicate the range wraps midnight.
 - `priority` — integer. Higher wins. Consider defaulting to 10 for the first period and auto-incrementing, or let the user drag-to-reorder and derive priority from order.
 - `inhibitScaleDown` — checkbox, labeled something like "Prevent scale-down during this period".
 - `scalingOptions` — partial override form. Only show fields the user wants to override; omitted fields inherit from base. The most commonly overridden fields are `minDesired`, `maxDesired`, and `desiredCount`.
@@ -259,7 +264,7 @@ Always `PUT` the entire `ScheduledScalingConfig` as a single request. The API do
 
 ### Validation Rules to Enforce Client-Side
 
-- Each period must have a non-empty `name`, at least one day in `dayOfWeek`, `startHour` and `endHour` in range 0-23, and a numeric `priority`.
+- Each period must have a non-empty `name`, at least one day in `dayOfWeek`, `startHour` and `endHour` in range 0-23, optional `startMinute` and `endMinute` in range 0-59, and a numeric `priority`.
 - Period `scalingOptions` fields are all optional, but any provided values must be non-negative.
 - If `timezone` is provided, it must be a valid IANA timezone string (the API validates this server-side and returns 400 if invalid).
 - Period names should be unique within the config (not enforced server-side, but helps UX).
@@ -268,7 +273,7 @@ Always `PUT` the entire `ScheduledScalingConfig` as a single request. The API do
 
 When the user is editing periods, you can compute locally what the resolved scaling options would be at any given time by:
 
-1. Finding which period matches a given day+hour (filter by `dayOfWeek` and hour range, pick highest priority).
+1. Finding which period matches a given day+time (filter by `dayOfWeek` and time range, pick highest priority).
 2. Merging: `{ ...group.scalingOptions, ...matchingPeriod.scalingOptions }`.
 3. Clamping: `minDesired <= desiredCount <= maxDesired`.
 

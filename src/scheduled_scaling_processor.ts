@@ -152,16 +152,18 @@ export default class ScheduledScalingProcessor {
         return config.timezone ?? REGION_TIMEZONE_MAP[region] ?? defaultTimezone;
     }
 
-    static getLocalTime(now: Date, timezone: string): { dayOfWeek: number; hour: number } {
+    static getLocalTime(now: Date, timezone: string): { dayOfWeek: number; hour: number; minute: number } {
         const parts = new Intl.DateTimeFormat('en-US', {
             timeZone: timezone,
             weekday: 'short',
             hour: 'numeric',
+            minute: 'numeric',
             hourCycle: 'h23',
         }).formatToParts(now);
 
         const weekdayStr = parts.find((p) => p.type === 'weekday')?.value;
         const hourStr = parts.find((p) => p.type === 'hour')?.value;
+        const minuteStr = parts.find((p) => p.type === 'minute')?.value;
 
         const dayMap: Record<string, number> = {
             Sun: 0,
@@ -176,29 +178,47 @@ export default class ScheduledScalingProcessor {
         return {
             dayOfWeek: dayMap[weekdayStr] ?? 0,
             hour: parseInt(hourStr, 10),
+            minute: parseInt(minuteStr, 10),
         };
     }
 
-    static isHourInRange(hour: number, startHour: number, endHour: number): boolean {
-        if (startHour === endHour) {
-            // startHour=0, endHour=0 means all 24 hours
+    static isTimeInRange(
+        hour: number,
+        minute: number,
+        startHour: number,
+        startMinute: number,
+        endHour: number,
+        endMinute: number,
+    ): boolean {
+        const current = hour * 60 + minute;
+        const start = startHour * 60 + startMinute;
+        const end = endHour * 60 + endMinute;
+        if (start === end) {
+            // e.g., 0:00-0:00 means all 24 hours
             return true;
         }
-        if (endHour > startHour) {
-            // Normal range, e.g., 8-20
-            return hour >= startHour && hour < endHour;
+        if (end > start) {
+            // Normal range, e.g., 8:00-20:00
+            return current >= start && current < end;
         }
-        // Wraps midnight, e.g., 22-6 means 22,23,0,1,2,3,4,5
-        return hour >= startHour || hour < endHour;
+        // Wraps midnight, e.g., 22:00-6:00
+        return current >= start || current < end;
     }
 
     static findActivePeriod(config: ScheduledScalingConfig, now: Date, timezone: string): SchedulePeriod | null {
-        const { dayOfWeek, hour } = ScheduledScalingProcessor.getLocalTime(now, timezone);
+        const { dayOfWeek, hour, minute } = ScheduledScalingProcessor.getLocalTime(now, timezone);
 
         const matchingPeriods = config.periods.filter(
             (period) =>
                 period.dayOfWeek.includes(dayOfWeek) &&
-                ScheduledScalingProcessor.isHourInRange(hour, period.startHour, period.endHour),
+                ScheduledScalingProcessor.isTimeInRange(
+                    hour,
+                    minute,
+                    period.startHour,
+                    period.startMinute ?? 0,
+                    period.endHour,
+                    period.endMinute ?? 0,
+                ),
         );
 
         if (matchingPeriods.length === 0) {

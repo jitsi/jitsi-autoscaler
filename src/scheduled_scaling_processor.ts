@@ -95,23 +95,24 @@ export default class ScheduledScalingProcessor {
             const activePeriod = ScheduledScalingProcessor.findActivePeriod(group.scheduledScaling, now, timezone);
             const targetOptions = ScheduledScalingProcessor.resolveActiveScalingOptions(
                 group.scheduledScaling,
+                group.scalingOptions,
                 now,
                 timezone,
             );
-
-            if (!targetOptions) {
-                ctx.logger.warn(`[ScheduledScaling] Missing baseScalingOptions for group ${groupName}`);
-                scheduledScalingErrorsCounter.inc({ group: groupName });
-                return false;
-            }
 
             // Update active period gauge
             for (const period of group.scheduledScaling.periods) {
                 scheduledScalingActivePeriodGauge.set({ group: groupName, period: period.name }, 0);
             }
-            scheduledScalingActivePeriodGauge.set({ group: groupName, period: activePeriod?.name ?? 'base' }, 1);
+            scheduledScalingActivePeriodGauge.set({ group: groupName, period: activePeriod?.name ?? 'none' }, 1);
             if (activePeriod) {
-                scheduledScalingActivePeriodGauge.set({ group: groupName, period: 'base' }, 0);
+                scheduledScalingActivePeriodGauge.set({ group: groupName, period: 'none' }, 0);
+            }
+
+            // No active period — leave group's scalingOptions as-is
+            if (!targetOptions) {
+                ctx.logger.debug(`[ScheduledScaling] No active period for group ${groupName}`);
+                return false;
             }
 
             if (ScheduledScalingProcessor.scalingOptionsEqual(group.scalingOptions, targetOptions)) {
@@ -122,7 +123,7 @@ export default class ScheduledScalingProcessor {
             ctx.logger.info(`[ScheduledScaling] Updating scaling options for group ${groupName}`, {
                 oldOptions: group.scalingOptions,
                 newOptions: targetOptions,
-                activePeriod: activePeriod?.name ?? 'base',
+                activePeriod: activePeriod?.name,
             });
 
             scheduledScalingTransitionsCounter.inc({ group: groupName });
@@ -211,21 +212,17 @@ export default class ScheduledScalingProcessor {
 
     static resolveActiveScalingOptions(
         config: ScheduledScalingConfig,
+        currentOptions: ScalingOptions,
         now: Date,
         timezone: string,
     ): ScalingOptions | null {
-        if (!config.baseScalingOptions) {
+        const activePeriod = ScheduledScalingProcessor.findActivePeriod(config, now, timezone);
+
+        if (!activePeriod) {
             return null;
         }
 
-        const activePeriod = ScheduledScalingProcessor.findActivePeriod(config, now, timezone);
-
-        let resolved: ScalingOptions;
-        if (activePeriod) {
-            resolved = { ...config.baseScalingOptions, ...activePeriod.scalingOptions };
-        } else {
-            resolved = { ...config.baseScalingOptions };
-        }
+        const resolved: ScalingOptions = { ...currentOptions, ...activePeriod.scalingOptions };
 
         // Enforce safety invariants
         if (resolved.minDesired > resolved.desiredCount) {

@@ -323,6 +323,12 @@ export default class JobManager {
             }
 
             const instanceGroupNames = await this.instanceGroupManager.getAllInstanceGroupNames(ctx);
+
+            // populate queue health metrics BEFORE creating new jobs,
+            // so we measure residual from the previous cycle
+            const healthCheckResult = await this.jobQueue.checkHealth();
+            await this.metricsLoop.saveMetricQueueWaiting(healthCheckResult.waiting);
+
             await this.createJobs(
                 ctx,
                 instanceGroupNames,
@@ -345,9 +351,6 @@ export default class JobManager {
                 this.launcherProcessingTimeoutMs,
             );
 
-            // populate some queue health metrics
-            const healthCheckResult = await this.jobQueue.checkHealth();
-            await this.metricsLoop.saveMetricQueueWaiting(healthCheckResult.waiting);
             await this.instanceGroupManager.setGroupJobsCreationGracePeriod(ctx);
         } catch (err) {
             ctx.logger.error(`[JobManager] Error while creating jobs for group ${err}`);
@@ -364,29 +367,27 @@ export default class JobManager {
         jobType: JobType,
         processingTimeoutMillis: number,
     ): Promise<void> {
-        instanceGroupNames.forEach((instanceGroupName) => {
-            ctx.logger.info(`[JobManager] Creating ${jobType} job for group ${instanceGroupName}`);
+        await Promise.all(
+            instanceGroupNames.map(async (instanceGroupName) => {
+                ctx.logger.info(`[JobManager] Creating ${jobType} job for group ${instanceGroupName}`);
 
-            const jobData: JobData = {
-                groupName: instanceGroupName,
-                type: jobType,
-            };
+                const jobData: JobData = {
+                    groupName: instanceGroupName,
+                    type: jobType,
+                };
 
-            jobCreateTotalCounter.inc({ type: jobData.type });
-            const newJob = jobQueue.createJob(jobData);
-            newJob
-                .timeout(processingTimeoutMillis)
-                .retries(0)
-                .save()
-                .then((job) => {
+                jobCreateTotalCounter.inc({ type: jobData.type });
+                const newJob = jobQueue.createJob(jobData);
+                try {
+                    const job = await newJob.timeout(processingTimeoutMillis).retries(0).save();
                     ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
-                })
-                .catch((error) => {
+                } catch (error) {
                     ctx.logger.info(
                         `[JobManager] Error while creating ${jobType} job for group ${instanceGroupName}: ${error}`,
                     );
                     jobCreateFailureCounter.inc({ type: jobData.type });
-                });
-        });
+                }
+            }),
+        );
     }
 }

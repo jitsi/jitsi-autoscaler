@@ -93,12 +93,6 @@ export default class ScheduledScalingProcessor {
             );
             const now = new Date();
             const activePeriod = ScheduledScalingProcessor.findActivePeriod(group.scheduledScaling, now, timezone);
-            const targetOptions = ScheduledScalingProcessor.resolveActiveScalingOptions(
-                group.scheduledScaling,
-                group.scalingOptions,
-                now,
-                timezone,
-            );
 
             // Update active period gauge
             for (const period of group.scheduledScaling.periods) {
@@ -109,21 +103,52 @@ export default class ScheduledScalingProcessor {
                 scheduledScalingActivePeriodGauge.set({ group: groupName, period: 'none' }, 0);
             }
 
-            // No active period — leave group's scalingOptions as-is
-            if (!targetOptions) {
-                ctx.logger.debug(`[ScheduledScaling] No active period for group ${groupName}`);
+            const currentPeriodName = group.scheduledScalingActivePeriod;
+            const newPeriodName = activePeriod?.name;
+
+            // No boundary crossed — same period (or still no period)
+            if (currentPeriodName === newPeriodName) {
+                ctx.logger.debug(`[ScheduledScaling] No boundary crossed for group ${groupName}`, {
+                    activePeriod: newPeriodName ?? 'none',
+                });
                 return false;
             }
 
-            if (ScheduledScalingProcessor.scalingOptionsEqual(group.scalingOptions, targetOptions)) {
-                ctx.logger.debug(`[ScheduledScaling] No changes needed for group ${groupName}`);
-                return false;
+            const oldOptions = group.scalingOptions;
+            let newOptions: ScalingOptions;
+
+            if (activePeriod) {
+                // Entering a period or switching periods
+                if (!group.scheduledScalingBaseOptions) {
+                    // First period entry — snapshot current options as baseline
+                    group.scheduledScalingBaseOptions = { ...group.scalingOptions };
+                }
+                // Always merge period overrides onto the baseline
+                newOptions = ScheduledScalingProcessor.applyInvariants({
+                    ...group.scheduledScalingBaseOptions,
+                    ...activePeriod.scalingOptions,
+                });
+                group.scheduledScalingActivePeriod = activePeriod.name;
+            } else {
+                // Exiting all periods — restore baseline
+                if (group.scheduledScalingBaseOptions) {
+                    newOptions = { ...group.scheduledScalingBaseOptions };
+                } else {
+                    // No baseline to restore (shouldn't happen, but be safe)
+                    ctx.logger.warn(
+                        `[ScheduledScaling] Period ended for group ${groupName} but no baseOptions to restore`,
+                    );
+                    return false;
+                }
+                delete group.scheduledScalingActivePeriod;
+                delete group.scheduledScalingBaseOptions;
             }
 
-            ctx.logger.info(`[ScheduledScaling] Updating scaling options for group ${groupName}`, {
-                oldOptions: group.scalingOptions,
-                newOptions: targetOptions,
-                activePeriod: activePeriod?.name,
+            ctx.logger.info(`[ScheduledScaling] Boundary crossed for group ${groupName}`, {
+                from: currentPeriodName ?? 'none',
+                to: newPeriodName ?? 'none',
+                oldOptions,
+                newOptions,
             });
 
             scheduledScalingTransitionsCounter.inc({ group: groupName });
@@ -131,19 +156,18 @@ export default class ScheduledScalingProcessor {
                 timestamp: Date.now(),
                 actionType: 'scheduledScalingTransition',
                 count: 0,
-                oldDesiredCount: group.scalingOptions.desiredCount,
-                newDesiredCount: targetOptions.desiredCount,
+                oldDesiredCount: oldOptions.desiredCount,
+                newDesiredCount: newOptions.desiredCount,
                 scaleMetrics: [],
                 detail: {
-                    periodName: activePeriod?.name,
-                    oldOptions: group.scalingOptions,
-                    newOptions: targetOptions,
+                    fromPeriod: currentPeriodName ?? 'none',
+                    toPeriod: newPeriodName ?? 'none',
+                    oldOptions,
+                    newOptions,
                 },
             });
 
-            group.scalingOptions = targetOptions;
-            // Disable external scheduler when internal scheduling is active
-            group.enableScheduler = false;
+            group.scalingOptions = newOptions;
             await this.instanceGroupManager.upsertInstanceGroup(ctx, group);
             await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, group);
         } finally {
@@ -235,21 +259,8 @@ export default class ScheduledScalingProcessor {
         return matchingPeriods[0];
     }
 
-    static resolveActiveScalingOptions(
-        config: ScheduledScalingConfig,
-        currentOptions: ScalingOptions,
-        now: Date,
-        timezone: string,
-    ): ScalingOptions | null {
-        const activePeriod = ScheduledScalingProcessor.findActivePeriod(config, now, timezone);
-
-        if (!activePeriod) {
-            return null;
-        }
-
-        const resolved: ScalingOptions = { ...currentOptions, ...activePeriod.scalingOptions };
-
-        // Enforce safety invariants
+    static applyInvariants(options: ScalingOptions): ScalingOptions {
+        const resolved = { ...options };
         if (resolved.minDesired > resolved.desiredCount) {
             resolved.desiredCount = resolved.minDesired;
         }
@@ -259,8 +270,22 @@ export default class ScheduledScalingProcessor {
         if (resolved.minDesired > resolved.maxDesired) {
             resolved.minDesired = resolved.maxDesired;
         }
-
         return resolved;
+    }
+
+    static resolveActiveScalingOptions(
+        config: ScheduledScalingConfig,
+        baseOptions: ScalingOptions,
+        now: Date,
+        timezone: string,
+    ): ScalingOptions | null {
+        const activePeriod = ScheduledScalingProcessor.findActivePeriod(config, now, timezone);
+
+        if (!activePeriod) {
+            return null;
+        }
+
+        return ScheduledScalingProcessor.applyInvariants({ ...baseOptions, ...activePeriod.scalingOptions });
     }
 
     static scalingOptionsEqual(a: ScalingOptions, b: ScalingOptions): boolean {

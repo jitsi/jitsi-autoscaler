@@ -21,6 +21,8 @@ export interface InstanceGroup {
     cloud: string;
     tags: InstanceGroupTags;
     scheduledScaling?: ScheduledScalingConfig;
+    scheduledScalingActivePeriod?: string;
+    scheduledScalingBaseOptions?: ScalingOptions;
 }
 
 export interface SchedulePeriod {

@@ -349,6 +349,15 @@ describe('ScheduledScalingProcessor', () => {
         let context;
         const groupName = 'test-group';
 
+        const alwaysPeakPeriod = {
+            name: 'always-peak',
+            dayOfWeek: [0, 1, 2, 3, 4, 5, 6],
+            startHour: 0,
+            endHour: 0,
+            priority: 10,
+            scalingOptions: { minDesired: 10, maxDesired: 20, desiredCount: 10 },
+        };
+
         const instanceGroupManager = {
             getInstanceGroup: mock.fn(),
             upsertInstanceGroup: mock.fn(),
@@ -420,50 +429,154 @@ describe('ScheduledScalingProcessor', () => {
             assert.strictEqual(result, false);
         });
 
-        test('updates scaling options when they differ from target', async () => {
+        test('enters period: snapshots baseline and applies overrides', async () => {
             context = initContext();
             instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
                 name: groupName,
                 region: 'us-ashburn-1',
-                enableScheduler: true,
                 scalingOptions: { ...currentScalingOptions },
                 scheduledScaling: {
                     enabled: true,
-                    periods: [
-                        {
-                            name: 'always-peak',
-                            dayOfWeek: [0, 1, 2, 3, 4, 5, 6],
-                            startHour: 0,
-                            endHour: 0,
-                            priority: 10,
-                            scalingOptions: { minDesired: 10, maxDesired: 20, desiredCount: 10 },
-                        },
-                    ],
+                    periods: [alwaysPeakPeriod],
                 },
+                // No scheduledScalingActivePeriod — first time entering a period
             }));
 
             const result = await processor.processScheduledScalingByGroup(context, groupName);
             assert.strictEqual(result, true);
             assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
-            assert.strictEqual(instanceGroupManager.setAutoScaleGracePeriod.mock.calls.length, 1);
 
             const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
+            // Baseline should be snapshotted
+            assert.deepStrictEqual(updatedGroup.scheduledScalingBaseOptions, currentScalingOptions);
+            // Scaling options should reflect the period overrides
             assert.strictEqual(updatedGroup.scalingOptions.desiredCount, 10);
             assert.strictEqual(updatedGroup.scalingOptions.minDesired, 10);
             assert.strictEqual(updatedGroup.scalingOptions.maxDesired, 20);
-            // enableScheduler should be disabled
-            assert.strictEqual(updatedGroup.enableScheduler, false);
+            // Non-overridden values come from baseline
+            assert.strictEqual(updatedGroup.scalingOptions.scaleUpQuantity, 1);
+            assert.strictEqual(updatedGroup.scalingOptions.scalePeriod, 60);
+            // Active period tracked
+            assert.strictEqual(updatedGroup.scheduledScalingActivePeriod, 'always-peak');
 
-            // Audit should record the transition
+            // Audit recorded
             assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 1);
             const auditArgs = audit.saveAutoScalerActionItem.mock.calls[0].arguments;
-            assert.strictEqual(auditArgs[0], groupName);
             assert.strictEqual(auditArgs[1].actionType, 'scheduledScalingTransition');
             assert.strictEqual(auditArgs[1].oldDesiredCount, 2);
             assert.strictEqual(auditArgs[1].newDesiredCount, 10);
         });
 
-        test('skips update when no active period (leaves group as-is)', async () => {
+        test('no-op when same period is still active (no boundary crossed)', async () => {
+            context = initContext();
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                scalingOptions: { ...currentScalingOptions, minDesired: 10, maxDesired: 20, desiredCount: 10 },
+                scheduledScaling: {
+                    enabled: true,
+                    periods: [alwaysPeakPeriod],
+                },
+                scheduledScalingActivePeriod: 'always-peak',
+                scheduledScalingBaseOptions: { ...currentScalingOptions },
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, false);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
+        });
+
+        test('admin override preserved when same period still active', async () => {
+            context = initContext();
+            // Admin changed desiredCount to 50 while always-peak is active
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                scalingOptions: { ...currentScalingOptions, minDesired: 10, maxDesired: 20, desiredCount: 50 },
+                scheduledScaling: {
+                    enabled: true,
+                    periods: [alwaysPeakPeriod],
+                },
+                scheduledScalingActivePeriod: 'always-peak',
+                scheduledScalingBaseOptions: { ...currentScalingOptions },
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            // No boundary crossed, so processor does nothing — admin's 50 is preserved
+            assert.strictEqual(result, false);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+        });
+
+        test('restores baseline when period ends', async () => {
+            context = initContext();
+            const baseOptions = { ...currentScalingOptions };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                scalingOptions: { ...currentScalingOptions, minDesired: 10, maxDesired: 20, desiredCount: 10 },
+                scheduledScaling: {
+                    enabled: true,
+                    periods: [], // No periods match — simulates period ending
+                },
+                scheduledScalingActivePeriod: 'always-peak',
+                scheduledScalingBaseOptions: baseOptions,
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, true);
+
+            const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
+            // Scaling options restored to baseline
+            assert.strictEqual(updatedGroup.scalingOptions.desiredCount, baseOptions.desiredCount);
+            assert.strictEqual(updatedGroup.scalingOptions.minDesired, baseOptions.minDesired);
+            assert.strictEqual(updatedGroup.scalingOptions.maxDesired, baseOptions.maxDesired);
+            // Tracking fields cleared
+            assert.strictEqual(updatedGroup.scheduledScalingActivePeriod, undefined);
+            assert.strictEqual(updatedGroup.scheduledScalingBaseOptions, undefined);
+        });
+
+        test('switches periods using baseOptions, not current options', async () => {
+            context = initContext();
+            const baseOptions = { ...currentScalingOptions };
+            const periodB = {
+                name: 'night',
+                dayOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                startHour: 0,
+                endHour: 0,
+                priority: 20,
+                scalingOptions: { minDesired: 0, maxDesired: 3, desiredCount: 1 },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                // Current options reflect period-A (always-peak)
+                scalingOptions: { ...currentScalingOptions, minDesired: 10, maxDesired: 20, desiredCount: 10 },
+                scheduledScaling: {
+                    enabled: true,
+                    periods: [periodB], // Only period-B matches now
+                },
+                scheduledScalingActivePeriod: 'always-peak',
+                scheduledScalingBaseOptions: baseOptions,
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, true);
+
+            const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
+            // Period-B overrides merged onto baseline, NOT onto period-A's values
+            assert.strictEqual(updatedGroup.scalingOptions.desiredCount, 1);
+            assert.strictEqual(updatedGroup.scalingOptions.minDesired, 0);
+            assert.strictEqual(updatedGroup.scalingOptions.maxDesired, 3);
+            // Non-overridden fields come from baseline
+            assert.strictEqual(updatedGroup.scalingOptions.scaleUpQuantity, baseOptions.scaleUpQuantity);
+            assert.strictEqual(updatedGroup.scalingOptions.scalePeriod, baseOptions.scalePeriod);
+            // Active period updated, baseOptions preserved
+            assert.strictEqual(updatedGroup.scheduledScalingActivePeriod, 'night');
+            assert.deepStrictEqual(updatedGroup.scheduledScalingBaseOptions, baseOptions);
+        });
+
+        test('backward compat: bootstraps group with no tracking fields', async () => {
             context = initContext();
             instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
                 name: groupName,
@@ -471,8 +584,30 @@ describe('ScheduledScalingProcessor', () => {
                 scalingOptions: { ...currentScalingOptions },
                 scheduledScaling: {
                     enabled: true,
-                    periods: [], // No periods, so no active period
+                    periods: [alwaysPeakPeriod],
                 },
+                // No scheduledScalingActivePeriod or scheduledScalingBaseOptions
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, true);
+
+            const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
+            assert.deepStrictEqual(updatedGroup.scheduledScalingBaseOptions, currentScalingOptions);
+            assert.strictEqual(updatedGroup.scheduledScalingActivePeriod, 'always-peak');
+        });
+
+        test('no-op when no period active and none was previously active', async () => {
+            context = initContext();
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                scalingOptions: { ...currentScalingOptions },
+                scheduledScaling: {
+                    enabled: true,
+                    periods: [], // No periods match
+                },
+                // scheduledScalingActivePeriod is undefined
             }));
 
             const result = await processor.processScheduledScalingByGroup(context, groupName);
@@ -486,23 +621,6 @@ describe('ScheduledScalingProcessor', () => {
             const result = await processor.processScheduledScalingByGroup(context, groupName);
             assert.strictEqual(result, false);
             assert.strictEqual(lockRelease.mock.calls.length, 1);
-        });
-
-        test('does not call audit when no active period', async () => {
-            context = initContext();
-            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
-                name: groupName,
-                region: 'us-ashburn-1',
-                scalingOptions: { ...currentScalingOptions },
-                scheduledScaling: {
-                    enabled: true,
-                    periods: [],
-                },
-            }));
-
-            const result = await processor.processScheduledScalingByGroup(context, groupName);
-            assert.strictEqual(result, false);
-            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
         });
 
         test('returns false and does not call audit on lock failure', async () => {

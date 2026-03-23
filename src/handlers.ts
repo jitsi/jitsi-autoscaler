@@ -631,25 +631,42 @@ class Handlers {
 
             instanceGroup.scheduledScaling = scheduledScalingConfig;
 
-            // If enabling scheduled scaling, disable external scheduler
             if (scheduledScalingConfig.enabled) {
                 instanceGroup.enableScheduler = false;
 
-                // Immediately resolve and apply active period overrides
                 const timezone = ScheduledScalingProcessor.resolveTimezone(
                     scheduledScalingConfig,
                     instanceGroup.region,
                     this.defaultTimezone,
                 );
-                const targetOptions = ScheduledScalingProcessor.resolveActiveScalingOptions(
+                const activePeriod = ScheduledScalingProcessor.findActivePeriod(
                     scheduledScalingConfig,
-                    instanceGroup.scalingOptions,
                     new Date(),
                     timezone,
                 );
-                if (targetOptions) {
-                    instanceGroup.scalingOptions = targetOptions;
+
+                if (activePeriod) {
+                    // Only snapshot baseline if we don't already have one
+                    if (!instanceGroup.scheduledScalingBaseOptions) {
+                        instanceGroup.scheduledScalingBaseOptions = { ...instanceGroup.scalingOptions };
+                    }
+                    instanceGroup.scalingOptions = ScheduledScalingProcessor.applyInvariants({
+                        ...instanceGroup.scheduledScalingBaseOptions,
+                        ...activePeriod.scalingOptions,
+                    });
+                    instanceGroup.scheduledScalingActivePeriod = activePeriod.name;
+                } else {
+                    // No active period right now; clear tracking, processor handles transitions
+                    delete instanceGroup.scheduledScalingActivePeriod;
+                    delete instanceGroup.scheduledScalingBaseOptions;
                 }
+            } else {
+                // Disabling scheduled scaling — restore baseline if present
+                if (instanceGroup.scheduledScalingBaseOptions) {
+                    instanceGroup.scalingOptions = { ...instanceGroup.scheduledScalingBaseOptions };
+                }
+                delete instanceGroup.scheduledScalingActivePeriod;
+                delete instanceGroup.scheduledScalingBaseOptions;
             }
 
             await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
@@ -690,6 +707,8 @@ class Handlers {
             scheduledScaling: instanceGroup.scheduledScaling,
             activePeriod,
             resolvedTimezone: timezone,
+            scheduledScalingActivePeriod: instanceGroup.scheduledScalingActivePeriod ?? null,
+            scheduledScalingBaseOptions: instanceGroup.scheduledScalingBaseOptions ?? null,
         });
     }
 
@@ -702,7 +721,14 @@ class Handlers {
                 return;
             }
 
+            // Restore baseline if we have one
+            if (instanceGroup.scheduledScalingBaseOptions) {
+                instanceGroup.scalingOptions = { ...instanceGroup.scheduledScalingBaseOptions };
+            }
             delete instanceGroup.scheduledScaling;
+            delete instanceGroup.scheduledScalingActivePeriod;
+            delete instanceGroup.scheduledScalingBaseOptions;
+            instanceGroup.enableScheduler = true;
             await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
             res.status(200);
             res.send({ save: 'OK' });

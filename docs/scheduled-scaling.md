@@ -11,7 +11,12 @@ Each group can have a `scheduledScaling` configuration containing:
 1. **Periods** — named time windows (e.g., "weekday-peak", "weekend") that override specific scaling parameters when active.
 2. **Timezone** — either explicitly set or auto-derived from the group's cloud region.
 
-Every ~30 seconds, the scheduler evaluates which period is active for each group. When a period is active, its `scalingOptions` are merged onto the group's current `scalingOptions`. When no period is active, the group's scaling options are left unchanged — whatever was set by external jobs, the autoscaler, or previous periods remains in effect.
+Every ~30 seconds, the scheduler checks whether a **period boundary has been crossed** for each group. It only modifies scaling options when a period starts, ends, or switches — not on every cycle. This means:
+
+- **When a period starts**: The group's current `scalingOptions` are snapshotted as a baseline (`scheduledScalingBaseOptions`), and the period's overrides are merged onto that baseline.
+- **When switching periods**: The new period's overrides are merged onto the original baseline (not the previous period's values).
+- **When all periods end**: The baseline is restored, returning the group to its pre-scheduled-scaling state.
+- **While the same period is active**: The processor does nothing. Admin changes via `PUT /groups/:name/desired` or the autoscaler are preserved until the next boundary crossing.
 
 ### Timezone Resolution
 

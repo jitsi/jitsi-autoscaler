@@ -302,6 +302,7 @@ const jobManager = new JobManager({
     autoscalerProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     launcherProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,
+    jobsConcurrency: config.JobsConcurrency,
 });
 
 const scalingManager = new ScalingManager({

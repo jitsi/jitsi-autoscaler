@@ -60,7 +60,7 @@
     "typescript": "^5.2.2"
   },
   "scripts": {
-    "test": "glob -c \"node --test --require ts-node/register\" \"src/test/**/*.ts\"",
+    "test": "glob -c \"node --test --require ./src/test/setup.js --require ts-node/register\" \"src/test/**/*.ts\"",
     "watch": "concurrently -k -p \"[{name}]\" \"npm run watch-ts\" \"npm run watch-node\"",
     "watch-ts": "tsc -w",
     "watch-node": "nodemon dist/app.js",

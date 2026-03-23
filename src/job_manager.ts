@@ -26,6 +26,7 @@ export interface JobManagerOptions {
     autoscalerProcessingTimeoutMs: number;
     launcherProcessingTimeoutMs: number;
     sanityLoopProcessingTimeoutMs: number;
+    jobsConcurrency: number;
 }
 
 export enum JobType {
@@ -104,6 +105,7 @@ export default class JobManager {
     private autoscalerProcessingTimeoutMs: number;
     private launcherProcessingTimeoutMs: number;
     private sanityLoopProcessingTimeoutMs: number;
+    private jobsConcurrency: number;
     private logger: Logger;
 
     constructor(options: JobManagerOptions) {
@@ -118,6 +120,7 @@ export default class JobManager {
         this.autoscalerProcessingTimeoutMs = options.autoscalerProcessingTimeoutMs;
         this.launcherProcessingTimeoutMs = options.launcherProcessingTimeoutMs;
         this.sanityLoopProcessingTimeoutMs = options.sanityLoopProcessingTimeoutMs;
+        this.jobsConcurrency = options.jobsConcurrency;
 
         this.jobQueue = this.createQueue(JobManager.jobQueueName, options.queueRedisOptions);
     }
@@ -152,7 +155,7 @@ export default class JobManager {
             this.logger.info(`Job ${jobId} failed with error ${err.message} but is being retried!`);
         });
 
-        newQueue.process((job: Job<JobData>, done: DoneCallback<boolean>) => {
+        newQueue.process(this.jobsConcurrency, (job: Job<JobData>, done: DoneCallback<boolean>) => {
             let ctx;
             const start = process.hrtime();
 

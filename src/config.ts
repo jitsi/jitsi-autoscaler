@@ -57,6 +57,7 @@ const env = cleanEnv(process.env, {
     GROUP_JOBS_CREATION_GRACE_PERIOD_SEC: num({ default: 30 }), // jobs for group processing should be created once every JOB_CREATION_GRACE_PERIOD_SEC
     SANITY_JOBS_CREATION_GRACE_PERIOD_SEC: num({ default: 240 }), // jobs for sanity check should be created once every SANITY_JOBS_CREATION_GRACE_PERIOD_SEC
     JOBS_CREATION_LOCK_TTL_MS: num({ default: 30000 }), // job creation lock ensures only one instance at a time can produce jobs
+    JOBS_CONCURRENCY: num({ default: 5 }), // number of jobs to process concurrently from the queue
     SANITY_LOOP_PROCESSING_TIMEOUT_MS: num({ default: 180000 }), // max time allowed for a sanity job to finish processing until it times out - in ms
     INSTANCE_STORE_PROVIDER: str({ default: 'redis' }),
     METRICS_STORE_PROVIDER: str({ default: 'redis' }),
@@ -154,6 +155,7 @@ export default {
     GroupJobsCreationGracePeriodSec: env.GROUP_JOBS_CREATION_GRACE_PERIOD_SEC,
     SanityJobsCreationGracePeriodSec: env.SANITY_JOBS_CREATION_GRACE_PERIOD_SEC,
     JobsCreationLockTTLMs: env.JOBS_CREATION_LOCK_TTL_MS,
+    JobsConcurrency: env.JOBS_CONCURRENCY,
     // queue jobs consumers
     GroupProcessingTimeoutMs: env.GROUP_LOCK_TTL_MS, // timeout for processing a group is equal to the timeout for locking a group for processing
     SanityProcessingTimoutMs: env.SANITY_LOOP_PROCESSING_TIMEOUT_MS,

@@ -24,6 +24,7 @@ export interface AutoScalerActionItem {
     oldDesiredCount: number;
     newDesiredCount: number;
     scaleMetrics: number[];
+    detail?: Record<string, unknown>;
 }
 
 export interface LauncherActionItem {

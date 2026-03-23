@@ -134,6 +134,11 @@ export default class ScheduledScalingProcessor {
                 oldDesiredCount: group.scalingOptions.desiredCount,
                 newDesiredCount: targetOptions.desiredCount,
                 scaleMetrics: [],
+                detail: {
+                    periodName: activePeriod?.name,
+                    oldOptions: group.scalingOptions,
+                    newOptions: targetOptions,
+                },
             });
 
             group.scalingOptions = targetOptions;

@@ -74,6 +74,15 @@ if (config.RedisDb) {
 }
 
 const redisClient = new Redis(redisOptions);
+redisClient.on('error', (err) => {
+    logger.error('[Redis] Connection error', { err });
+});
+redisClient.on('connect', () => {
+    logger.info('[Redis] Connected');
+});
+redisClient.on('ready', () => {
+    logger.info('[Redis] Ready');
+});
 
 let metricsStore: MetricsStore;
 
@@ -350,7 +359,11 @@ const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapP
 pollForMetrics(metricsLoop);
 
 async function pollForMetrics(metricsLoop: MetricsLoop) {
-    await metricsLoop.updateMetrics();
+    try {
+        await metricsLoop.updateMetrics();
+    } catch (err) {
+        logger.error('[MetricsLoop] Error in metrics poll', { err });
+    }
     setTimeout(pollForMetrics.bind(null, metricsLoop), config.MetricsLoopIntervalMs);
 }
 

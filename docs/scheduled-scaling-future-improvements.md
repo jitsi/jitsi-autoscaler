@@ -37,17 +37,17 @@ Items marked **[RESOLVED]** have been addressed in the boundary-crossing refacto
 - Alternatively, when a transition reduces `desiredCount` by more than `scaleDownQuantity`, apply the reduction gradually over multiple processor cycles.
 - At minimum, log a warning when a transition reduces `desiredCount` by more than `scaleDownQuantity` so operators can detect abrupt drops.
 
-## P1: desiredCount: 0 Allowed Without Safeguard
+## [RESOLVED] P1: desiredCount: 0 Allowed Without Safeguard
 
 **Risk**: The API validation allows `desiredCount: 0` via `isInt({ min: 0 })`. Combined with `minDesired: 0, maxDesired: 0`, a misconfigured period could scale a production group to zero instances.
 
-**Recommendation**: Either require `desiredCount >= 1` in validation, or add a per-group `allowScaleToZero: boolean` flag that must be explicitly set. At minimum, log a warning when a period sets `desiredCount: 0`.
+**Resolution**: A warning is now logged when a scheduled scaling period resolves to `desiredCount: 0`, both at config enable time (handler) and at period boundary crossings (processor). Operators can detect misconfigurations via log monitoring or alerting.
 
-## P1: Midnight-Wrapping Periods + dayOfWeek Interaction
+## [RESOLVED] P1: Midnight-Wrapping Periods + dayOfWeek Interaction
 
 **Risk**: A period with `startHour: 22, endHour: 6, dayOfWeek: [1]` (Monday) is ambiguous. The `isTimeInRange` check and `dayOfWeek` check are independent: on Tuesday at 03:00, `dayOfWeek` is Tuesday (2), which is NOT in `[1]`, so the period is not active even though it logically started Monday at 22:00.
 
-**Recommendation**: Document this clearly and/or add the "next day" to `dayOfWeek` automatically for midnight-wrapping ranges, or require operators to add both days explicitly.
+**Resolution**: `findActivePeriod` now checks both today's and yesterday's periods for midnight-wrapping ranges. The post-midnight portion of a wrapping period matches when yesterday's day-of-week is in the period's `dayOfWeek` array. The all-day sentinel (`start === end`) is excluded from wrap detection to avoid false matches.
 
 ## P2: Region Timezone Map Incomplete
 

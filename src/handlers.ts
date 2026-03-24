@@ -654,6 +654,12 @@ class Handlers {
                         ...instanceGroup.scheduledScalingBaseOptions,
                         ...activePeriod.scalingOptions,
                     });
+                    if (instanceGroup.scalingOptions.desiredCount === 0) {
+                        req.context.logger.warn(
+                            `[ScheduledScaling] Period "${activePeriod.name}" resolves to desiredCount=0 for group ${req.params.name}`,
+                            { scalingOptions: instanceGroup.scalingOptions },
+                        );
+                    }
                     instanceGroup.scheduledScalingActivePeriod = activePeriod.name;
                 } else {
                     // No active period right now; clear tracking, processor handles transitions

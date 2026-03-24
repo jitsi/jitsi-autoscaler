@@ -209,6 +209,174 @@ describe('ScheduledScalingProcessor', () => {
             const result = ScheduledScalingProcessor.findActivePeriod(overlappingConfig, now, 'America/New_York');
             assert.strictEqual(result.name, 'weekend');
         });
+
+        test('midnight-wrapping period matches on next day (post-midnight)', () => {
+            const nightConfig = {
+                enabled: true,
+                periods: [
+                    {
+                        name: 'night-shift',
+                        dayOfWeek: [1], // Monday
+                        startHour: 22,
+                        endHour: 6,
+                        priority: 10,
+                        scalingOptions: { minDesired: 5 },
+                    },
+                ],
+            };
+            // Tuesday 03:00 UTC — period started Monday 22:00, should still be active
+            const now = new Date('2026-03-17T03:00:00Z'); // Tuesday
+            const result = ScheduledScalingProcessor.findActivePeriod(nightConfig, now, 'UTC');
+            assert.strictEqual(result.name, 'night-shift');
+        });
+
+        test('midnight-wrapping period matches on start day (pre-midnight)', () => {
+            const nightConfig = {
+                enabled: true,
+                periods: [
+                    {
+                        name: 'night-shift',
+                        dayOfWeek: [1], // Monday
+                        startHour: 22,
+                        endHour: 6,
+                        priority: 10,
+                        scalingOptions: { minDesired: 5 },
+                    },
+                ],
+            };
+            // Monday 23:00 UTC
+            const now = new Date('2026-03-16T23:00:00Z'); // Monday
+            const result = ScheduledScalingProcessor.findActivePeriod(nightConfig, now, 'UTC');
+            assert.strictEqual(result.name, 'night-shift');
+        });
+
+        test('midnight-wrapping period does not match on start day post-midnight (wrong previous day)', () => {
+            const nightConfig = {
+                enabled: true,
+                periods: [
+                    {
+                        name: 'night-shift',
+                        dayOfWeek: [1], // Monday
+                        startHour: 22,
+                        endHour: 6,
+                        priority: 10,
+                        scalingOptions: { minDesired: 5 },
+                    },
+                ],
+            };
+            // Monday 03:00 UTC — Sunday is not in dayOfWeek, so no match
+            const now = new Date('2026-03-16T03:00:00Z'); // Monday
+            const result = ScheduledScalingProcessor.findActivePeriod(nightConfig, now, 'UTC');
+            assert.strictEqual(result, null);
+        });
+
+        test('Saturday-to-Sunday midnight wrap matches on Sunday', () => {
+            const satNightConfig = {
+                enabled: true,
+                periods: [
+                    {
+                        name: 'sat-night',
+                        dayOfWeek: [6], // Saturday
+                        startHour: 23,
+                        endHour: 2,
+                        priority: 10,
+                        scalingOptions: { minDesired: 3 },
+                    },
+                ],
+            };
+            // Sunday 01:00 UTC
+            const now = new Date('2026-03-22T01:00:00Z'); // Sunday
+            const result = ScheduledScalingProcessor.findActivePeriod(satNightConfig, now, 'UTC');
+            assert.strictEqual(result.name, 'sat-night');
+        });
+
+        test('all-day sentinel does not false-match via yesterday logic', () => {
+            const allDayConfig = {
+                enabled: true,
+                periods: [
+                    {
+                        name: 'wed-all-day',
+                        dayOfWeek: [3], // Wednesday
+                        startHour: 0,
+                        endHour: 0,
+                        priority: 10,
+                        scalingOptions: { minDesired: 5 },
+                    },
+                ],
+            };
+            // Thursday 10:00 UTC — should NOT match (all-day sentinel is not a wrap)
+            const now = new Date('2026-03-19T10:00:00Z'); // Thursday
+            const result = ScheduledScalingProcessor.findActivePeriod(allDayConfig, now, 'UTC');
+            assert.strictEqual(result, null);
+        });
+
+        test('weekday midnight-wrapping period matches Saturday morning (Friday in list)', () => {
+            const weekdayNightConfig = {
+                enabled: true,
+                periods: [
+                    {
+                        name: 'weekday-night',
+                        dayOfWeek: [1, 2, 3, 4, 5], // Mon-Fri
+                        startHour: 22,
+                        endHour: 6,
+                        priority: 10,
+                        scalingOptions: { minDesired: 5 },
+                    },
+                ],
+            };
+            // Saturday 03:00 UTC — Friday is in dayOfWeek, should match
+            const now = new Date('2026-03-21T03:00:00Z'); // Saturday
+            const result = ScheduledScalingProcessor.findActivePeriod(weekdayNightConfig, now, 'UTC');
+            assert.strictEqual(result.name, 'weekday-night');
+        });
+
+        test('weekday midnight-wrapping period does not match Sunday morning (Saturday not in list)', () => {
+            const weekdayNightConfig = {
+                enabled: true,
+                periods: [
+                    {
+                        name: 'weekday-night',
+                        dayOfWeek: [1, 2, 3, 4, 5], // Mon-Fri
+                        startHour: 22,
+                        endHour: 6,
+                        priority: 10,
+                        scalingOptions: { minDesired: 5 },
+                    },
+                ],
+            };
+            // Sunday 03:00 UTC — Saturday (6) is NOT in dayOfWeek
+            const now = new Date('2026-03-22T03:00:00Z'); // Sunday
+            const result = ScheduledScalingProcessor.findActivePeriod(weekdayNightConfig, now, 'UTC');
+            assert.strictEqual(result, null);
+        });
+
+        test('priority resolution across day boundaries', () => {
+            const crossDayConfig = {
+                enabled: true,
+                periods: [
+                    {
+                        name: 'yesterday-wrap',
+                        dayOfWeek: [1], // Monday
+                        startHour: 22,
+                        endHour: 10,
+                        priority: 10,
+                        scalingOptions: { minDesired: 5 },
+                    },
+                    {
+                        name: 'today-morning',
+                        dayOfWeek: [2], // Tuesday
+                        startHour: 6,
+                        endHour: 12,
+                        priority: 20,
+                        scalingOptions: { minDesired: 15 },
+                    },
+                ],
+            };
+            // Tuesday 08:00 UTC — both match, today-morning (pri 20) should win
+            const now = new Date('2026-03-17T08:00:00Z'); // Tuesday
+            const result = ScheduledScalingProcessor.findActivePeriod(crossDayConfig, now, 'UTC');
+            assert.strictEqual(result.name, 'today-morning');
+        });
     });
 
     describe('resolveActiveScalingOptions', () => {
@@ -621,6 +789,36 @@ describe('ScheduledScalingProcessor', () => {
             const result = await processor.processScheduledScalingByGroup(context, groupName);
             assert.strictEqual(result, false);
             assert.strictEqual(lockRelease.mock.calls.length, 1);
+        });
+
+        test('logs warning when period resolves to desiredCount=0', async () => {
+            context = initContext();
+            const zeroScalePeriod = {
+                name: 'scale-to-zero',
+                dayOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                startHour: 0,
+                endHour: 0,
+                priority: 10,
+                scalingOptions: { minDesired: 0, maxDesired: 0, desiredCount: 0 },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                scalingOptions: { ...currentScalingOptions },
+                scheduledScaling: {
+                    enabled: true,
+                    periods: [zeroScalePeriod],
+                },
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, true);
+
+            const warnCalls = context.logger.warn.mock.calls;
+            const zeroWarning = warnCalls.find((call) =>
+                call.arguments[0].includes('desiredCount=0'),
+            );
+            assert.ok(zeroWarning, 'Expected a warning log about desiredCount=0');
         });
 
         test('returns false and does not call audit on lock failure', async () => {

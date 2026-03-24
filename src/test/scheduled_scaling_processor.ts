@@ -815,9 +815,7 @@ describe('ScheduledScalingProcessor', () => {
             assert.strictEqual(result, true);
 
             const warnCalls = context.logger.warn.mock.calls;
-            const zeroWarning = warnCalls.find((call) =>
-                call.arguments[0].includes('desiredCount=0'),
-            );
+            const zeroWarning = warnCalls.find((call) => call.arguments[0].includes('desiredCount=0'));
             assert.ok(zeroWarning, 'Expected a warning log about desiredCount=0');
         });
 

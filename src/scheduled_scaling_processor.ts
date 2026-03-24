@@ -128,6 +128,12 @@ export default class ScheduledScalingProcessor {
                     ...group.scheduledScalingBaseOptions,
                     ...activePeriod.scalingOptions,
                 });
+                if (newOptions.desiredCount === 0) {
+                    ctx.logger.warn(
+                        `[ScheduledScaling] Period "${activePeriod.name}" resolves to desiredCount=0 for group ${groupName}`,
+                        { newOptions },
+                    );
+                }
                 group.scheduledScalingActivePeriod = activePeriod.name;
             } else {
                 // Exiting all periods — restore baseline
@@ -236,19 +242,41 @@ export default class ScheduledScalingProcessor {
 
     static findActivePeriod(config: ScheduledScalingConfig, now: Date, timezone: string): SchedulePeriod | null {
         const { dayOfWeek, hour, minute } = ScheduledScalingProcessor.getLocalTime(now, timezone);
+        const yesterdayDayOfWeek = (dayOfWeek + 6) % 7;
+        const currentMin = hour * 60 + minute;
 
-        const matchingPeriods = config.periods.filter(
-            (period) =>
-                period.dayOfWeek.includes(dayOfWeek) &&
-                ScheduledScalingProcessor.isTimeInRange(
-                    hour,
-                    minute,
-                    period.startHour,
-                    period.startMinute ?? 0,
-                    period.endHour,
-                    period.endMinute ?? 0,
-                ),
-        );
+        const matchingPeriods = config.periods.filter((period) => {
+            const startMin = period.startHour * 60 + (period.startMinute ?? 0);
+            const endMin = period.endHour * 60 + (period.endMinute ?? 0);
+            const wraps = startMin !== endMin && endMin < startMin;
+
+            // Same-day match: period's dayOfWeek includes today and time is in range.
+            // For wrapping periods, only match the pre-midnight side here.
+            if (period.dayOfWeek.includes(dayOfWeek)) {
+                if (
+                    ScheduledScalingProcessor.isTimeInRange(
+                        hour,
+                        minute,
+                        period.startHour,
+                        period.startMinute ?? 0,
+                        period.endHour,
+                        period.endMinute ?? 0,
+                    )
+                ) {
+                    if (!wraps || currentMin >= startMin) {
+                        return true;
+                    }
+                }
+            }
+
+            // Yesterday match: period wraps midnight, started yesterday, and we're
+            // in the post-midnight portion (currentMin < endMin).
+            if (wraps && period.dayOfWeek.includes(yesterdayDayOfWeek) && currentMin < endMin) {
+                return true;
+            }
+
+            return false;
+        });
 
         if (matchingPeriods.length === 0) {
             return null;

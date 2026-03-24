@@ -42,6 +42,10 @@ import { AutoscalerLockManager } from './lock';
 const asLogger = new AutoscalerLogger({ logLevel: config.LogLevel });
 const logger = asLogger.createLogger(config.LogLevel);
 
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('[Process] Unhandled promise rejection', { reason, promise });
+});
+
 // metrics listener
 const mapp = express();
 
@@ -60,6 +64,12 @@ const consulClient = new Consul({
 const redisOptions = <RedisOptions>{
     host: config.RedisHost,
     port: config.RedisPort,
+    retryStrategy(times: number) {
+        const delay = Math.min(times * 1000, 30000);
+        logger.info(`[Redis] Reconnecting in ${delay}ms (attempt ${times})`);
+        return delay;
+    },
+    maxRetriesPerRequest: null,
 };
 
 if (config.RedisPassword) {

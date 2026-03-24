@@ -81,8 +81,8 @@ Items marked **[RESOLVED]** have been addressed in the boundary-crossing refacto
 
 **Recommendation**: Remove `@ts-nocheck` and properly type the mock objects, or use partial type assertions (`as unknown as Type`) for specific mocks.
 
-## Minor: deleteScheduledScaling Audit Trail
+## [RESOLVED] Minor: deleteScheduledScaling Audit Trail
 
 **Risk**: Unlike `updateScheduledScaling`, deleting the config produces no audit trail.
 
-**Recommendation**: Add an audit entry when scheduled scaling is deleted, recording the previous config state.
+**Resolution**: `deleteScheduledScaling` now records a `scheduledScalingDeleted` audit entry capturing the previous config, active period, and desiredCount change.

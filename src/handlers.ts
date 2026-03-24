@@ -727,6 +727,10 @@ class Handlers {
                 return;
             }
 
+            const previousConfig = instanceGroup.scheduledScaling;
+            const previousPeriod = instanceGroup.scheduledScalingActivePeriod;
+            const oldDesiredCount = instanceGroup.scalingOptions.desiredCount;
+
             // Restore baseline if we have one
             if (instanceGroup.scheduledScalingBaseOptions) {
                 instanceGroup.scalingOptions = { ...instanceGroup.scheduledScalingBaseOptions };
@@ -736,6 +740,20 @@ class Handlers {
             delete instanceGroup.scheduledScalingBaseOptions;
             instanceGroup.enableScheduler = true;
             await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
+
+            await this.audit.saveAutoScalerActionItem(req.params.name, {
+                timestamp: Date.now(),
+                actionType: 'scheduledScalingDeleted',
+                count: 0,
+                oldDesiredCount,
+                newDesiredCount: instanceGroup.scalingOptions.desiredCount,
+                scaleMetrics: [],
+                detail: {
+                    previousConfig,
+                    previousActivePeriod: previousPeriod ?? 'none',
+                },
+            });
+
             res.status(200);
             res.send({ save: 'OK' });
         } finally {

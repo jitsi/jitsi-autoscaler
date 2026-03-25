@@ -42,9 +42,8 @@ SIGTERM/SIGINT handlers added in `src/app.ts`. Shutdown sequence: stops job sche
 ### 1.3 ~~Health Check is Incomplete~~ [MITIGATED]
 Deep health check (`GET /health?deep`) now verifies both instance store and job queue (Bee-Queue `checkHealth()`). Returns structured JSON on failure indicating which subsystem is unhealthy. Returns 503 during graceful shutdown to drain load balancer traffic.
 
-### 1.4 Startup Without Verification
-- `startProcessingGroups()` (`src/app.ts:337-338`) called async without awaiting success
-- If initial job creation fails, app still serves traffic but never autoscales
+### 1.4 ~~Startup Without Verification~~ [MITIGATED]
+A `jobsStarted` flag tracks whether job creation has ever succeeded. The deep health check (`GET /health?deep`) now includes `jobsStarted` in its response and returns unhealthy until the first successful job creation cycle completes. This allows load balancers and monitoring to detect a stuck startup.
 
 ### 1.5 Redlock with Single Redis Client
 - `src/lock_manager.ts:149`: TODO comment acknowledges single client defeats Redlock's distributed guarantee

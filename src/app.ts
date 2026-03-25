@@ -47,6 +47,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 let shuttingDown = false;
+let jobsStarted = false;
 let groupJobsTimeout: NodeJS.Timeout;
 let sanityJobsTimeout: NodeJS.Timeout;
 let metricsTimeout: NodeJS.Timeout;
@@ -156,10 +157,11 @@ mapp.get('/health', async (req: express.Request, res: express.Response) => {
         const storeHealthy = await instanceStore.ping(req.context);
         const queueHealthy = await jobManager.isHealthy();
 
-        if (!storeHealthy || !queueHealthy) {
+        if (!storeHealthy || !queueHealthy || !jobsStarted) {
             const details = {
                 instanceStore: !!storeHealthy,
                 jobQueue: queueHealthy,
+                jobsStarted,
             };
             logger.warn('Deep health check failed', details);
             res.status(500).json({ status: 'unhealthy', ...details });
@@ -366,6 +368,10 @@ async function createGroupProcessingJobs() {
     const ctx = new context.Context(pollLogger, start, pollId);
     try {
         await jobManager.createGroupProcessingJobs(ctx);
+        if (!jobsStarted) {
+            jobsStarted = true;
+            logger.info('[Process] Job creation loop started successfully');
+        }
     } catch (err) {
         ctx.logger.error(`Error while creating group processing jobs`, { err });
         // should increment some group processing error counter here

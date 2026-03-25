@@ -187,4 +187,8 @@ export class RedisLockManager implements AutoscalerLockManager {
         ctx.logger.debug(`Lock obtained for ${RedisLockManager.groupJobsCreationLockKey}`);
         return new RedLocker(lock);
     }
+
+    async shutdown(): Promise<void> {
+        await this.groupProcessingLockManager.quit();
+    }
 }

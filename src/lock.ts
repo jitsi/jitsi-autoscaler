@@ -7,6 +7,7 @@ export interface AutoscalerLock {
 export interface AutoscalerLockManager {
     lockGroup(ctx: Context, group: string): Promise<AutoscalerLock>;
     lockJobCreation(ctx: Context): Promise<AutoscalerLock>;
+    shutdown?(): Promise<void>;
 }
 
 export default AutoscalerLock;

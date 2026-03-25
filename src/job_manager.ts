@@ -390,4 +390,17 @@ export default class JobManager {
             }),
         );
     }
+
+    async close(timeoutMs = 10000): Promise<void> {
+        await this.jobQueue.close(timeoutMs);
+    }
+
+    async isHealthy(): Promise<boolean> {
+        try {
+            await this.jobQueue.checkHealth();
+            return true;
+        } catch {
+            return false;
+        }
+    }
 }

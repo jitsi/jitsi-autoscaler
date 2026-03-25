@@ -46,6 +46,11 @@ process.on('unhandledRejection', (reason, promise) => {
     logger.error('[Process] Unhandled promise rejection', { reason, promise });
 });
 
+let shuttingDown = false;
+let groupJobsTimeout: NodeJS.Timeout;
+let sanityJobsTimeout: NodeJS.Timeout;
+let metricsTimeout: NodeJS.Timeout;
+
 // metrics listener
 const mapp = express();
 
@@ -143,12 +148,22 @@ switch (config.InstanceStoreProvider) {
 
 mapp.get('/health', async (req: express.Request, res: express.Response) => {
     logger.debug('Health check');
+    if (shuttingDown) {
+        res.status(503).send('shutting down');
+        return;
+    }
     if (req.query['deep']) {
-        const reply = await instanceStore.ping(req.context);
-        if (!reply) {
-            res.status(500).send('unhealthy');
+        const storeHealthy = await instanceStore.ping(req.context);
+        const queueHealthy = await jobManager.isHealthy();
+
+        if (!storeHealthy || !queueHealthy) {
+            const details = {
+                instanceStore: !!storeHealthy,
+                jobQueue: queueHealthy,
+            };
+            logger.warn('Deep health check failed', details);
+            res.status(500).json({ status: 'unhealthy', ...details });
         } else {
-            logger.debug('instance store ping reply', { reply });
             res.send('deeply healthy');
         }
     } else {
@@ -335,7 +350,7 @@ async function startProcessingGroups() {
     await createGroupProcessingJobs();
 }
 logger.info(`Waiting ${config.InitialWaitForPooling}ms before starting to loop for group processing`);
-setTimeout(startProcessingGroups, config.InitialWaitForPooling);
+groupJobsTimeout = setTimeout(startProcessingGroups, config.InitialWaitForPooling);
 
 const groupProcessingErrorCounter = new promClient.Counter({
     name: 'autoscaler_group_processing_errors',
@@ -356,10 +371,12 @@ async function createGroupProcessingJobs() {
         // should increment some group processing error counter here
         groupProcessingErrorCounter.inc();
     }
-    setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
+    if (!shuttingDown) {
+        groupJobsTimeout = setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
+    }
 }
 
-createSanityProcessingJobs();
+sanityJobsTimeout = setTimeout(createSanityProcessingJobs, 0);
 
 async function createSanityProcessingJobs() {
     const start = Date.now();
@@ -373,12 +390,14 @@ async function createSanityProcessingJobs() {
     } catch (err) {
         ctx.logger.error(`Error while creating sanity processing jobs`, { err });
     }
-    setTimeout(createSanityProcessingJobs, config.SanityJobsCreationIntervalSec * 1000);
+    if (!shuttingDown) {
+        sanityJobsTimeout = setTimeout(createSanityProcessingJobs, config.SanityJobsCreationIntervalSec * 1000);
+    }
 }
 
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
-pollForMetrics(metricsLoop);
+metricsTimeout = setTimeout(() => pollForMetrics(metricsLoop), 0);
 
 async function pollForMetrics(metricsLoop: MetricsLoop) {
     try {
@@ -386,7 +405,9 @@ async function pollForMetrics(metricsLoop: MetricsLoop) {
     } catch (err) {
         logger.error('[MetricsLoop] Error in metrics poll', { err });
     }
-    setTimeout(pollForMetrics.bind(null, metricsLoop), config.MetricsLoopIntervalMs);
+    if (!shuttingDown) {
+        metricsTimeout = setTimeout(pollForMetrics.bind(null, metricsLoop), config.MetricsLoopIntervalMs);
+    }
 }
 
 const h = new Handlers({
@@ -786,10 +807,65 @@ app.post('/groups/:name/actions/reconfigure-instances', async (req, res, next) =
     }
 });
 
-mapp.listen(config.MetricsServerPort, () => {
+const metricsServer = mapp.listen(config.MetricsServerPort, () => {
     logger.info(`...listening on :${config.MetricsServerPort}`);
 });
 
-app.listen(config.HTTPServerPort, () => {
+const appServer = app.listen(config.HTTPServerPort, () => {
     logger.info(`...listening on :${config.HTTPServerPort}`);
 });
+
+async function gracefulShutdown(signal: string) {
+    logger.info(`[Process] Received ${signal}, starting graceful shutdown`);
+    shuttingDown = true;
+
+    // Force exit after 45 seconds if graceful shutdown hangs
+    setTimeout(() => {
+        logger.error('[Process] Graceful shutdown timed out, forcing exit');
+        process.exit(1);
+    }, 45000).unref();
+
+    // 1. Stop scheduling new jobs
+    clearTimeout(groupJobsTimeout);
+    clearTimeout(sanityJobsTimeout);
+    clearTimeout(metricsTimeout);
+
+    // 2. Stop accepting new requests
+    await Promise.all([
+        new Promise<void>((resolve) => appServer.close(() => resolve())),
+        new Promise<void>((resolve) => metricsServer.close(() => resolve())),
+    ]);
+    logger.info('[Process] HTTP servers closed');
+
+    // 3. Drain job queue (wait up to 30s for in-flight jobs)
+    try {
+        await jobManager.close(30000);
+        logger.info('[Process] Job queue drained');
+    } catch (err) {
+        logger.error('[Process] Error draining job queue', { err });
+    }
+
+    // 4. Shut down lock manager
+    try {
+        if (lockManager.shutdown) {
+            await lockManager.shutdown();
+        }
+        logger.info('[Process] Lock manager shut down');
+    } catch (err) {
+        logger.error('[Process] Error shutting down lock manager', { err });
+    }
+
+    // 5. Disconnect Redis
+    try {
+        await redisClient.quit();
+        logger.info('[Process] Redis disconnected');
+    } catch (err) {
+        logger.error('[Process] Error disconnecting Redis', { err });
+    }
+
+    logger.info('[Process] Graceful shutdown complete');
+    process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

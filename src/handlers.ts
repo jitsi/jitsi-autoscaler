@@ -11,6 +11,8 @@ import * as promClient from 'prom-client';
 import CloudManager from './cloud_manager';
 import { InstanceDetails, InstanceGroup, InstanceGroupTags, ScheduledScalingConfig } from './instance_store';
 import ScheduledScalingProcessor from './scheduled_scaling_processor';
+import ReservationManager from './reservation_manager';
+import { CreateReservationRequest, ExtendReservationRequest, ReservationStatus } from './reservation';
 
 const statsErrors = new promClient.Counter({
     name: 'autoscaler_stats_errors',
@@ -108,6 +110,7 @@ interface HandlersOptions {
     lockManager: AutoscalerLockManager;
     scalingManager: ScalingManager;
     defaultTimezone: string;
+    reservationManager?: ReservationManager;
 }
 
 class Handlers {
@@ -121,6 +124,7 @@ class Handlers {
     private audit: Audit;
     private scalingManager: ScalingManager;
     private defaultTimezone: string;
+    private reservationManager?: ReservationManager;
 
     constructor(options: HandlersOptions) {
         this.sidecarPoll = this.sidecarPoll.bind(this);
@@ -135,6 +139,7 @@ class Handlers {
         this.audit = options.audit;
         this.scalingManager = options.scalingManager;
         this.defaultTimezone = options.defaultTimezone;
+        this.reservationManager = options.reservationManager;
     }
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
@@ -758,6 +763,161 @@ class Handlers {
 
             res.status(200);
             res.send({ save: 'OK' });
+        } finally {
+            await lock.release(req.context);
+        }
+    }
+
+    // Reservation handlers
+
+    private async getSeleniumGridGroup(req: Request, res: Response): Promise<InstanceGroup | null> {
+        const group = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+        if (!group) {
+            res.sendStatus(404);
+            return null;
+        }
+        if (group.type !== 'selenium-grid') {
+            res.status(400);
+            res.send({ error: 'Reservations are only supported for selenium-grid groups' });
+            return null;
+        }
+        if (!this.reservationManager) {
+            res.status(500);
+            res.send({ error: 'Reservation manager not configured' });
+            return null;
+        }
+        return group;
+    }
+
+    async createReservation(req: Request, res: Response): Promise<void> {
+        const group = await this.getSeleniumGridGroup(req, res);
+        if (!group) return;
+
+        const request: CreateReservationRequest = req.body;
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            // Re-fetch group inside lock to get latest desiredCount
+            const lockedGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+            const reservation = await this.reservationManager.createReservation(
+                req.context,
+                lockedGroup.name,
+                request.nodeCount,
+                lockedGroup.scalingOptions.maxDesired,
+                lockedGroup.scalingOptions.minDesired,
+                request.ttlSeconds,
+            );
+
+            // If active, bump desiredCount
+            if (reservation.status === ReservationStatus.Active) {
+                const reservedCount = await this.reservationManager.getActiveReservedNodeCount(
+                    req.context,
+                    lockedGroup.name,
+                );
+                const newDesired = Math.min(
+                    Math.max(
+                        lockedGroup.scalingOptions.desiredCount,
+                        lockedGroup.scalingOptions.minDesired + reservedCount,
+                    ),
+                    lockedGroup.scalingOptions.maxDesired,
+                );
+                if (newDesired !== lockedGroup.scalingOptions.desiredCount) {
+                    lockedGroup.scalingOptions.desiredCount = newDesired;
+                    await this.instanceGroupManager.upsertInstanceGroup(req.context, lockedGroup);
+                    await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, lockedGroup);
+                }
+            }
+
+            res.status(201);
+            res.send({ reservation });
+        } finally {
+            await lock.release(req.context);
+        }
+    }
+
+    async getReservation(req: Request, res: Response): Promise<void> {
+        const group = await this.getSeleniumGridGroup(req, res);
+        if (!group) return;
+
+        const reservation = await this.reservationManager.getReservation(req.context, req.params.id);
+        if (!reservation || reservation.groupName !== group.name) {
+            res.sendStatus(404);
+            return;
+        }
+        res.status(200);
+        res.send({ reservation });
+    }
+
+    async listReservations(req: Request, res: Response): Promise<void> {
+        const group = await this.getSeleniumGridGroup(req, res);
+        if (!group) return;
+
+        let statusFilter: ReservationStatus[] | undefined;
+        if (req.query.status) {
+            statusFilter = (req.query.status as string).split(',') as ReservationStatus[];
+        }
+
+        const reservations = await this.reservationManager.listReservations(req.context, group.name, statusFilter);
+        res.status(200);
+        res.send({ reservations });
+    }
+
+    async extendReservation(req: Request, res: Response): Promise<void> {
+        const group = await this.getSeleniumGridGroup(req, res);
+        if (!group) return;
+
+        const request: ExtendReservationRequest = req.body;
+        const reservation = await this.reservationManager.extendReservation(
+            req.context,
+            req.params.id,
+            request.ttlSeconds,
+        );
+        if (!reservation || reservation.groupName !== group.name) {
+            res.status(409);
+            res.send({ error: 'Reservation not found or already expired/cancelled' });
+            return;
+        }
+        res.status(200);
+        res.send({ reservation });
+    }
+
+    async deleteReservation(req: Request, res: Response): Promise<void> {
+        const group = await this.getSeleniumGridGroup(req, res);
+        if (!group) return;
+
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            const reservation = await this.reservationManager.cancelReservation(req.context, req.params.id);
+            if (!reservation || reservation.groupName !== group.name) {
+                res.sendStatus(404);
+                return;
+            }
+
+            // Recalculate desired count
+            const lockedGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+
+            // Promote any pending reservations now that capacity may be free
+            await this.reservationManager.promotePendingReservations(
+                req.context,
+                lockedGroup.name,
+                lockedGroup.scalingOptions.maxDesired,
+                lockedGroup.scalingOptions.minDesired,
+            );
+
+            const updatedReservedCount = await this.reservationManager.getActiveReservedNodeCount(
+                req.context,
+                lockedGroup.name,
+            );
+            const newDesired = Math.max(
+                lockedGroup.scalingOptions.minDesired,
+                lockedGroup.scalingOptions.minDesired + updatedReservedCount,
+            );
+            if (newDesired !== lockedGroup.scalingOptions.desiredCount) {
+                lockedGroup.scalingOptions.desiredCount = newDesired;
+                await this.instanceGroupManager.upsertInstanceGroup(req.context, lockedGroup);
+            }
+
+            res.status(200);
+            res.send({ reservation });
         } finally {
             await lock.release(req.context);
         }

@@ -23,6 +23,7 @@ export interface InstanceGroup {
     scheduledScaling?: ScheduledScalingConfig;
     scheduledScalingActivePeriod?: string;
     scheduledScalingBaseOptions?: ScalingOptions;
+    seleniumGridUrl?: string;
 }
 
 export interface SchedulePeriod {

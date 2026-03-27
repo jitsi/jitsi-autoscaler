@@ -8,6 +8,8 @@ import { InstanceGroup } from './instance_store';
 import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
 import MetricsLoop from './metrics_loop';
 import ScheduledScalingProcessor from './scheduled_scaling_processor';
+import ReservationManager from './reservation_manager';
+import SeleniumGridClient from './selenium_grid_client';
 import * as promClient from 'prom-client';
 
 const scaleUpSuppressedByCloudGuardCounter = new promClient.Counter({
@@ -37,6 +39,8 @@ export interface AutoscaleProcessorOptions {
     cloudGuardEnabled?: boolean;
     metricsLoop?: MetricsLoop;
     defaultTimezone?: string;
+    reservationManager?: ReservationManager;
+    seleniumGridClient?: SeleniumGridClient;
 }
 
 export default class AutoscaleProcessor {
@@ -50,6 +54,8 @@ export default class AutoscaleProcessor {
     private cloudGuardEnabled: boolean;
     private metricsLoop?: MetricsLoop;
     private defaultTimezone: string;
+    private reservationManager?: ReservationManager;
+    private seleniumGridClient?: SeleniumGridClient;
 
     // autoscalerProcessingLockKey is the name of the key used for redis-based distributed lock.
     static readonly autoscalerProcessingLockKey = 'autoscalerLockKey';
@@ -65,6 +71,8 @@ export default class AutoscaleProcessor {
         this.cloudGuardEnabled = options.cloudGuardEnabled ?? false;
         this.metricsLoop = options.metricsLoop;
         this.defaultTimezone = options.defaultTimezone ?? 'UTC';
+        this.reservationManager = options.reservationManager;
+        this.seleniumGridClient = options.seleniumGridClient;
 
         this.processAutoscalingByGroup = this.processAutoscalingByGroup.bind(this);
     }
@@ -139,6 +147,12 @@ export default class AutoscaleProcessor {
                         { err },
                     );
                 }
+            }
+
+            // Selenium Grid groups use reservation-based scaling
+            if (group.type === 'selenium-grid') {
+                await this.processSeleniumGridAutoscaling(ctx, group, count);
+                return true;
             }
 
             if (count == 0) {
@@ -296,6 +310,7 @@ export default class AutoscaleProcessor {
             case 'JVB':
             case 'whisper':
             case 'stress':
+            case 'selenium-grid':
                 // in the case of stress scale up only if value (average stress level) is above or equal to threshhold
                 return (
                     (count < group.scalingOptions.maxDesired && value >= group.scalingOptions.scaleUpThreshold) ||
@@ -317,11 +332,110 @@ export default class AutoscaleProcessor {
             case 'whisper':
             case 'JVB':
             case 'stress':
+            case 'selenium-grid':
                 // in the case of stress scale down only if value (average stress level) is below threshhold
                 return count > group.scalingOptions.minDesired && value < group.scalingOptions.scaleDownThreshold;
         }
 
         return false;
+    }
+
+    private async processSeleniumGridAutoscaling(ctx: Context, group: InstanceGroup, count: number): Promise<void> {
+        if (!this.reservationManager || !this.seleniumGridClient) {
+            ctx.logger.warn(
+                `[AutoScaler] ReservationManager or SeleniumGridClient not configured for selenium-grid group ${group.name}`,
+            );
+            return;
+        }
+
+        // Step 1: Expire stale reservations
+        await this.reservationManager.expireStaleReservations(ctx, group.name);
+
+        // Step 2: Promote pending reservations (with expiry lookahead)
+        await this.reservationManager.promotePendingReservations(
+            ctx,
+            group.name,
+            group.scalingOptions.maxDesired,
+            group.scalingOptions.minDesired,
+        );
+
+        // Step 3: Compute reservation floor
+        const reservedNodeCount = await this.reservationManager.getActiveReservedNodeCount(ctx, group.name);
+        const reservationFloor = group.scalingOptions.minDesired + reservedNodeCount;
+
+        // Step 4: Fetch grid queue size for organic scaling signal
+        let queueSize = 0;
+        if (group.seleniumGridUrl) {
+            try {
+                const gridStatus = await this.seleniumGridClient.getGridStatus(ctx, group.seleniumGridUrl);
+                queueSize = gridStatus.sessionQueueSize;
+                ctx.logger.info(`[AutoScaler] Selenium Grid status for ${group.name}`, {
+                    queueSize: gridStatus.sessionQueueSize,
+                    activeSessions: gridStatus.activeSessions,
+                    maxSessions: gridStatus.maxSessions,
+                    nodeCount: gridStatus.nodeCount,
+                });
+            } catch (err) {
+                ctx.logger.warn(
+                    `[AutoScaler] Failed to fetch Selenium Grid status for ${group.name}, using reservation floor only`,
+                    { err },
+                );
+            }
+        }
+
+        // Step 5: Compute organic desired (queue-based, secondary to reservations)
+        let organicDesired = group.scalingOptions.desiredCount;
+        if (group.scalingOptions.desiredCount === count) {
+            // Only adjust if launcher has caught up
+            if (queueSize > group.scalingOptions.scaleUpThreshold && count < group.scalingOptions.maxDesired) {
+                organicDesired = Math.min(
+                    count + group.scalingOptions.scaleUpQuantity,
+                    group.scalingOptions.maxDesired,
+                );
+            } else if (queueSize < group.scalingOptions.scaleDownThreshold && count > group.scalingOptions.minDesired) {
+                // Check scale-down grace from recent reservation endings
+                const graceActive = await this.reservationManager.isScaleDownGraceActive(ctx, group.name);
+                if (!graceActive) {
+                    organicDesired = Math.max(
+                        count - group.scalingOptions.scaleDownQuantity,
+                        group.scalingOptions.minDesired,
+                    );
+                } else {
+                    ctx.logger.info(`[AutoScaler] Scale-down grace active for ${group.name}, inhibiting scale-down`);
+                }
+            }
+        }
+
+        // Step 6: Effective desired = max(organic, reservationFloor), clamped to [minDesired, maxDesired]
+        const effectiveDesired = Math.min(Math.max(organicDesired, reservationFloor), group.scalingOptions.maxDesired);
+
+        if (effectiveDesired !== group.scalingOptions.desiredCount) {
+            const oldDesired = group.scalingOptions.desiredCount;
+            group.scalingOptions.desiredCount = effectiveDesired;
+            await this.instanceGroupManager.upsertInstanceGroup(ctx, group);
+            await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, group);
+
+            ctx.logger.info(
+                `[AutoScaler] Selenium Grid group ${group.name}: desired ${oldDesired} -> ${effectiveDesired} (floor=${reservationFloor}, organic=${organicDesired}, queue=${queueSize})`,
+            );
+
+            await this.audit.saveAutoScalerActionItem(group.name, {
+                timestamp: Date.now(),
+                actionType: effectiveDesired > oldDesired ? 'increaseDesiredCount' : 'decreaseDesiredCount',
+                count,
+                oldDesiredCount: oldDesired,
+                newDesiredCount: effectiveDesired,
+                scaleMetrics: [queueSize],
+            });
+        }
+
+        // Step 7: Check fulfillment of active reservations
+        await this.reservationManager.checkAndFulfillReservations(
+            ctx,
+            group.name,
+            count,
+            group.scalingOptions.minDesired,
+        );
     }
 
     private evalScaleConditionForAllPeriods(

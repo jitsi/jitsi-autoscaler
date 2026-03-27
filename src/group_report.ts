@@ -164,6 +164,7 @@ export default class GroupReportGenerator {
                 case 'whisper':
                 case 'JVB':
                 case 'stress':
+                case 'selenium-grid':
                     // @TODO: implement JVB instance counting
                     break;
             }
@@ -226,6 +227,7 @@ export default class GroupReportGenerator {
                     case 'JVB':
                     case 'whisper':
                     case 'stress':
+                    case 'selenium-grid':
                         stats = <StressStatus>(
                             (instanceState.status.stats
                                 ? instanceState.status.stats

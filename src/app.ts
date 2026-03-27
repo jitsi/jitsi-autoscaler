@@ -33,6 +33,9 @@ import PrometheusClient from './prometheus';
 import MetricsStore from './metrics_store';
 import InstanceStore from './instance_store';
 import { AutoscalerLockManager } from './lock';
+import ReservationManager from './reservation_manager';
+import SeleniumGridClient from './selenium_grid_client';
+import { ReservationStore } from './reservation_store';
 
 //import { RequestTracker, RecorderRequestMeta } from './request_tracker';
 //import * as meet from './meet_processor';
@@ -229,6 +232,20 @@ if (config.LockProvider === 'consul') {
     });
 }
 
+// Reservation store uses the same backend as the instance store
+const reservationStore: ReservationStore = instanceStore as unknown as ReservationStore;
+
+const reservationManager = new ReservationManager({
+    reservationStore,
+    defaultTTLSec: config.ReservationDefaultTTLSec,
+    scaleDownGraceSec: config.ReservationScaleDownGraceSec,
+    expiryLookaheadSec: config.ReservationExpiryLookaheadSec,
+});
+
+const seleniumGridClient = new SeleniumGridClient({
+    fetchTimeoutMs: config.SeleniumGridFetchTimeoutMs,
+});
+
 const instanceGroupManager = new InstanceGroupManager({
     instanceStore,
     initialGroupList: config.GroupList,
@@ -270,6 +287,8 @@ const autoscaleProcessor = new AutoscaleProcessor({
     cloudGuardEnabled: config.CloudGuardEnabled,
     metricsLoop,
     defaultTimezone: config.ScheduledScalingDefaultTimezone,
+    reservationManager,
+    seleniumGridClient,
 });
 
 const scheduledScalingProcessor = new ScheduledScalingProcessor({
@@ -427,6 +446,7 @@ const h = new Handlers({
     audit,
     scalingManager,
     defaultTimezone: config.ScheduledScalingDefaultTimezone,
+    reservationManager,
 });
 
 const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop, shutdownManager });
@@ -689,6 +709,62 @@ app.get('/groups/:name/instance-audit', async (req, res, next) => {
 app.get('/groups/:name/group-audit', async (req, res, next) => {
     try {
         await h.getGroupAudit(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// Reservation endpoints for selenium-grid groups
+app.post(
+    '/groups/:name/reservations',
+    body('nodeCount').isInt({ min: 1 }),
+    body('ttlSeconds').optional().isInt({ min: 1 }),
+    async (req, res, next) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            res.status(422).json({ errors: errors.array() });
+            return;
+        }
+        try {
+            await h.createReservation(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+app.get('/groups/:name/reservations', async (req, res, next) => {
+    try {
+        await h.listReservations(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.get('/groups/:name/reservations/:id', async (req, res, next) => {
+    try {
+        await h.getReservation(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.put('/groups/:name/reservations/:id', body('ttlSeconds').isInt({ min: 1 }), async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        res.status(422).json({ errors: errors.array() });
+        return;
+    }
+    try {
+        await h.extendReservation(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.delete('/groups/:name/reservations/:id', async (req, res, next) => {
+    try {
+        await h.deleteReservation(req, res);
     } catch (err) {
         next(err);
     }

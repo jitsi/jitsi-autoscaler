@@ -3,6 +3,8 @@ import { Context } from './context';
 import { GetItem } from 'consul/lib/kv';
 import InstanceStore, { InstanceDetails, InstanceGroup, InstanceState } from './instance_store';
 import { CloudInstance } from './cloud_manager';
+import { Reservation } from './reservation';
+import { ReservationStore } from './reservation_store';
 
 // implments the InstanceStore interface using consul K/V API calls
 // uses the got library to make HTTP requests
@@ -26,11 +28,12 @@ interface TTLValueMap {
     [key: string]: TTLValue;
 }
 
-export default class ConsulStore implements InstanceStore {
+export default class ConsulStore implements InstanceStore, ReservationStore {
     private client: Consul;
     private groupsPrefix = 'autoscaler/groups/';
     private valuesPrefix = 'autoscaler/values/';
     private instancesPrefix = 'autoscaler/instances/';
+    private reservationsPrefix = 'autoscaler/reservations/';
 
     constructor(options: ConsulOptions) {
         if (!options.client && (!options.host || !options.port)) {
@@ -409,5 +412,58 @@ export default class ConsulStore implements InstanceStore {
             ctx.logger.error(`Failed to ping consul: ${err}`, { err });
             return err;
         }
+    }
+
+    // Reservation store methods
+
+    private reservationKey(groupName: string, id: string): string {
+        return `${this.reservationsPrefix}${groupName}/${id}`;
+    }
+
+    async saveReservation(ctx: Context, reservation: Reservation): Promise<void> {
+        const ttl = Math.max(Math.ceil((reservation.expiresAt - Date.now()) / 1000) + 3600, 3600);
+        await this.writeTTLValue(
+            ctx,
+            this.reservationKey(reservation.groupName, reservation.id),
+            JSON.stringify(reservation),
+            ttl,
+        );
+    }
+
+    async getReservation(ctx: Context, id: string): Promise<Reservation | null> {
+        // Since we don't know the group name, search all reservations
+        const items = await this.fetchRecursive(ctx, this.reservationsPrefix);
+        for (const item of items) {
+            if (item.Key.endsWith(`/${id}`)) {
+                const ttlValue = JSON.parse(item.Value) as TTLValue;
+                if (ttlValue.expires > Date.now()) {
+                    return JSON.parse(ttlValue.status);
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    async listReservations(ctx: Context, groupName: string): Promise<Reservation[]> {
+        const key = `${this.reservationsPrefix}${groupName}`;
+        const ttlValues = await this.fetchRecursiveTTLValues(ctx, key, true);
+        return Object.values(ttlValues).map((v) => JSON.parse(v.status) as Reservation);
+    }
+
+    async deleteReservation(ctx: Context, id: string, groupName: string): Promise<void> {
+        try {
+            await this.delete(this.reservationKey(groupName, id));
+        } catch (err) {
+            ctx.logger.error(`Failed to delete reservation from consul`, { id, groupName, err });
+        }
+    }
+
+    async setScaleDownGrace(ctx: Context, groupName: string, ttlSec: number): Promise<void> {
+        await this.setValue(ctx, `reservation-scaledown-grace:${groupName}`, 'active', ttlSec);
+    }
+
+    async isScaleDownGraceActive(ctx: Context, groupName: string): Promise<boolean> {
+        return this.checkValue(ctx, `reservation-scaledown-grace:${groupName}`);
     }
 }

@@ -394,6 +394,7 @@ export default class InstanceLauncher {
             case 'JVB':
             case 'whisper':
             case 'stress':
+            case 'selenium-grid':
                 listOfInstancesForScaleDown = this.getInstancesForScaleDownByStress(
                     ctx,
                     group,

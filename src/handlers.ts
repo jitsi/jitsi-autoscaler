@@ -68,6 +68,7 @@ export interface FullScalingOptions {
 export interface FullScalingOptionsResponse {
     groupsToBeUpdated: number;
     groupsUpdated: number;
+    skippedGroups?: Array<{ name: string; reason: string }>;
 }
 
 export interface FullScalingOptionsRequest {
@@ -605,6 +606,7 @@ class Handlers {
         res.send({
             groupsToBeUpdated: response.groupsToBeUpdated,
             groupsUpdated: response.groupsUpdated,
+            ...(response.skippedGroups?.length && { skippedGroups: response.skippedGroups }),
         });
     }
 

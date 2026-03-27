@@ -37,6 +37,9 @@ export default class ScalingManager {
         const instanceGroups = instanceGroupsByRegion.filter(
             (group) => group.enableScheduler == null || group.enableScheduler == true,
         );
+        const skippedGroups = instanceGroupsByRegion
+            .filter((group) => group.enableScheduler === false && group.scheduledScaling?.enabled === true)
+            .map((group) => ({ name: group.name, reason: 'Group uses scheduled scaling' }));
         if (instanceGroups.length == 0) {
             ctx.logger.info(
                 `No groups of type ${request.instanceType} were found to update in environment ${request.environment} region ${request.region}.
@@ -45,6 +48,7 @@ export default class ScalingManager {
             return {
                 groupsToBeUpdated: 0,
                 groupsUpdated: 0,
+                ...(skippedGroups.length && { skippedGroups }),
             };
         } else {
             let updateFails = 0;
@@ -67,11 +71,13 @@ export default class ScalingManager {
                 return {
                     groupsToBeUpdated: instanceGroups.length,
                     groupsUpdated: instanceGroups.length - updateFails,
+                    ...(skippedGroups.length && { skippedGroups }),
                 };
             } else {
                 return {
                     groupsToBeUpdated: instanceGroups.length,
                     groupsUpdated: instanceGroups.length,
+                    ...(skippedGroups.length && { skippedGroups }),
                 };
             }
         }

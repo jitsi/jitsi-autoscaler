@@ -1,4 +1,4 @@
-FROM --platform=$TARGETPLATFORM node:22
+FROM --platform=$TARGETPLATFORM node:24
 ARG TARGETPLATFORM
 
 # install dependencies

@@ -60,16 +60,16 @@
     "typescript": "^5.2.2"
   },
   "scripts": {
-    "test": "glob -c \"node --test --require ts-node/register\" \"src/test/**/*.ts\"",
+    "test": "glob -c \"node --test --require ./src/test/setup.js --require ts-node/register\" \"src/test/**/*.ts\"",
     "watch": "concurrently -k -p \"[{name}]\" \"npm run watch-ts\" \"npm run watch-node\"",
     "watch-ts": "tsc -w",
-    "watch-node": "nodemon dist/app.js",
+    "watch-node": "nodemon -r ./src/polyfills.js dist/app.js",
     "watch-test": "glob -c \"node --test --watch --require ts-node/register\" \"src/test/**/*.ts\"",
     "lint": "npx eslint . --ext .ts,.tsx --fix",
     "build": "npm run lint && tsc",
-    "start-debug": "node --inspect=0.0.0.0:9229 dist/app.js",
-    "start-profile": "node --prof dist/app.js",
-    "start": "node dist/app.js"
+    "start-debug": "node --inspect=0.0.0.0:9229 -r ./src/polyfills.js dist/app.js",
+    "start-profile": "node --prof -r ./src/polyfills.js dist/app.js",
+    "start": "node -r ./src/polyfills.js dist/app.js"
   },
   "author": "Jitsi",
   "license": "Apache-2.0"

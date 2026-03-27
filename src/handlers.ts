@@ -9,7 +9,8 @@ import Audit from './audit';
 import ScalingManager from './scaling_options_manager';
 import * as promClient from 'prom-client';
 import CloudManager from './cloud_manager';
-import { InstanceDetails, InstanceGroup, InstanceGroupTags } from './instance_store';
+import { InstanceDetails, InstanceGroup, InstanceGroupTags, ScheduledScalingConfig } from './instance_store';
+import ScheduledScalingProcessor from './scheduled_scaling_processor';
 
 const statsErrors = new promClient.Counter({
     name: 'autoscaler_stats_errors',
@@ -67,6 +68,7 @@ export interface FullScalingOptions {
 export interface FullScalingOptionsResponse {
     groupsToBeUpdated: number;
     groupsUpdated: number;
+    skippedGroups?: Array<{ name: string; reason: string }>;
 }
 
 export interface FullScalingOptionsRequest {
@@ -105,6 +107,7 @@ interface HandlersOptions {
     groupReportGenerator: GroupReportGenerator;
     lockManager: AutoscalerLockManager;
     scalingManager: ScalingManager;
+    defaultTimezone: string;
 }
 
 class Handlers {
@@ -117,6 +120,7 @@ class Handlers {
     private lockManager: AutoscalerLockManager;
     private audit: Audit;
     private scalingManager: ScalingManager;
+    private defaultTimezone: string;
 
     constructor(options: HandlersOptions) {
         this.sidecarPoll = this.sidecarPoll.bind(this);
@@ -130,6 +134,7 @@ class Handlers {
         this.groupReportGenerator = options.groupReportGenerator;
         this.audit = options.audit;
         this.scalingManager = options.scalingManager;
+        this.defaultTimezone = options.defaultTimezone;
     }
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
@@ -601,7 +606,161 @@ class Handlers {
         res.send({
             groupsToBeUpdated: response.groupsToBeUpdated,
             groupsUpdated: response.groupsUpdated,
+            ...(response.skippedGroups?.length && { skippedGroups: response.skippedGroups }),
         });
+    }
+
+    async updateScheduledScaling(req: Request, res: Response): Promise<void> {
+        const scheduledScalingConfig: ScheduledScalingConfig = req.body;
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+            if (!instanceGroup) {
+                res.sendStatus(404);
+                return;
+            }
+
+            // Validate timezone if provided
+            if (scheduledScalingConfig.timezone) {
+                try {
+                    Intl.DateTimeFormat(undefined, { timeZone: scheduledScalingConfig.timezone });
+                } catch {
+                    res.status(400);
+                    res.send({ errors: [`Invalid timezone: ${scheduledScalingConfig.timezone}`] });
+                    return;
+                }
+            }
+
+            instanceGroup.scheduledScaling = scheduledScalingConfig;
+
+            if (scheduledScalingConfig.enabled) {
+                instanceGroup.enableScheduler = false;
+
+                const timezone = ScheduledScalingProcessor.resolveTimezone(
+                    scheduledScalingConfig,
+                    instanceGroup.region,
+                    this.defaultTimezone,
+                );
+                const activePeriod = ScheduledScalingProcessor.findActivePeriod(
+                    scheduledScalingConfig,
+                    new Date(),
+                    timezone,
+                );
+
+                if (activePeriod) {
+                    // Only snapshot baseline if we don't already have one
+                    if (!instanceGroup.scheduledScalingBaseOptions) {
+                        instanceGroup.scheduledScalingBaseOptions = { ...instanceGroup.scalingOptions };
+                    }
+                    instanceGroup.scalingOptions = ScheduledScalingProcessor.applyInvariants({
+                        ...instanceGroup.scheduledScalingBaseOptions,
+                        ...activePeriod.scalingOptions,
+                    });
+                    if (instanceGroup.scalingOptions.desiredCount === 0) {
+                        req.context.logger.warn(
+                            `[ScheduledScaling] Period "${activePeriod.name}" resolves to desiredCount=0 for group ${req.params.name}`,
+                            { scalingOptions: instanceGroup.scalingOptions },
+                        );
+                    }
+                    instanceGroup.scheduledScalingActivePeriod = activePeriod.name;
+                } else {
+                    // No active period right now; clear tracking, processor handles transitions
+                    delete instanceGroup.scheduledScalingActivePeriod;
+                    delete instanceGroup.scheduledScalingBaseOptions;
+                }
+            } else {
+                // Disabling scheduled scaling — restore baseline if present
+                if (instanceGroup.scheduledScalingBaseOptions) {
+                    instanceGroup.scalingOptions = { ...instanceGroup.scheduledScalingBaseOptions };
+                }
+                delete instanceGroup.scheduledScalingActivePeriod;
+                delete instanceGroup.scheduledScalingBaseOptions;
+            }
+
+            await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
+            await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, instanceGroup);
+            res.status(200);
+            res.send({ save: 'OK' });
+        } finally {
+            await lock.release(req.context);
+        }
+    }
+
+    async getScheduledScaling(req: Request, res: Response): Promise<void> {
+        const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+        if (!instanceGroup) {
+            res.sendStatus(404);
+            return;
+        }
+
+        if (!instanceGroup.scheduledScaling) {
+            res.status(200);
+            res.send({ scheduledScaling: null, activePeriod: null });
+            return;
+        }
+
+        const timezone = ScheduledScalingProcessor.resolveTimezone(
+            instanceGroup.scheduledScaling,
+            instanceGroup.region,
+            this.defaultTimezone,
+        );
+        const activePeriod = ScheduledScalingProcessor.findActivePeriod(
+            instanceGroup.scheduledScaling,
+            new Date(),
+            timezone,
+        );
+
+        res.status(200);
+        res.send({
+            scheduledScaling: instanceGroup.scheduledScaling,
+            activePeriod,
+            resolvedTimezone: timezone,
+            scheduledScalingActivePeriod: instanceGroup.scheduledScalingActivePeriod ?? null,
+            scheduledScalingBaseOptions: instanceGroup.scheduledScalingBaseOptions ?? null,
+        });
+    }
+
+    async deleteScheduledScaling(req: Request, res: Response): Promise<void> {
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            const instanceGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
+            if (!instanceGroup) {
+                res.sendStatus(404);
+                return;
+            }
+
+            const previousConfig = instanceGroup.scheduledScaling;
+            const previousPeriod = instanceGroup.scheduledScalingActivePeriod;
+            const oldDesiredCount = instanceGroup.scalingOptions.desiredCount;
+
+            // Restore baseline if we have one
+            if (instanceGroup.scheduledScalingBaseOptions) {
+                instanceGroup.scalingOptions = { ...instanceGroup.scheduledScalingBaseOptions };
+            }
+            delete instanceGroup.scheduledScaling;
+            delete instanceGroup.scheduledScalingActivePeriod;
+            delete instanceGroup.scheduledScalingBaseOptions;
+            instanceGroup.enableScheduler = true;
+            await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
+
+            await this.audit.saveAutoScalerActionItem(req.params.name, {
+                timestamp: Date.now(),
+                actionType: 'scheduledScalingDeleted',
+                count: 0,
+                oldDesiredCount,
+                newDesiredCount: instanceGroup.scalingOptions.desiredCount,
+                scaleMetrics: [],
+                detail: {
+                    previousConfig,
+                    previousActivePeriod: previousPeriod ?? 'none',
+                },
+            });
+
+            res.status(200);
+            res.send({ save: 'OK' });
+        } finally {
+            await lock.release(req.context);
+        }
     }
 }
 

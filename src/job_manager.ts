@@ -10,6 +10,7 @@ import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import * as promClient from 'prom-client';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
+import ScheduledScalingProcessor from './scheduled_scaling_processor';
 import { Context } from './context';
 
 export interface JobManagerOptions {
@@ -19,14 +20,17 @@ export interface JobManagerOptions {
     instanceGroupManager: InstanceGroupManager;
     instanceLauncher: InstanceLauncher;
     autoscaler: AutoscaleProcessor;
+    scheduledScalingProcessor: ScheduledScalingProcessor;
     sanityLoop: SanityLoop;
     metricsLoop: MetricsLoop;
     autoscalerProcessingTimeoutMs: number;
     launcherProcessingTimeoutMs: number;
     sanityLoopProcessingTimeoutMs: number;
+    jobsConcurrency: number;
 }
 
 export enum JobType {
+    ScheduledScaling = 'SCHEDULED_SCALING',
     Autoscale = 'AUTOSCALE',
     Launch = 'LAUNCH',
     Sanity = 'SANITY',
@@ -37,6 +41,7 @@ const jobCreateFailureCounter = new promClient.Counter({
     help: 'Counter for jobs failed to create',
     labelNames: ['type'],
 });
+jobCreateFailureCounter.labels(JobType.ScheduledScaling).inc(0);
 jobCreateFailureCounter.labels(JobType.Autoscale).inc(0);
 jobCreateFailureCounter.labels(JobType.Launch).inc(0);
 jobCreateFailureCounter.labels(JobType.Sanity).inc(0);
@@ -46,6 +51,7 @@ const jobCreateTotalCounter = new promClient.Counter({
     help: 'Counter for total job create operations',
     labelNames: ['type'],
 });
+jobCreateTotalCounter.labels(JobType.ScheduledScaling).inc(0);
 jobCreateTotalCounter.labels(JobType.Autoscale).inc(0);
 jobCreateTotalCounter.labels(JobType.Launch).inc(0);
 jobCreateTotalCounter.labels(JobType.Sanity).inc(0);
@@ -55,6 +61,7 @@ const jobProcessFailureCounter = new promClient.Counter({
     help: 'Counter for jobs processing failures',
     labelNames: ['type'],
 });
+jobProcessFailureCounter.labels(JobType.ScheduledScaling).inc(0);
 jobProcessFailureCounter.labels(JobType.Autoscale).inc(0);
 jobProcessFailureCounter.labels(JobType.Launch).inc(0);
 jobProcessFailureCounter.labels(JobType.Sanity).inc(0);
@@ -64,6 +71,7 @@ const jobProcessTotalCounter = new promClient.Counter({
     help: 'Counter for total jobs processed',
     labelNames: ['type'],
 });
+jobProcessTotalCounter.labels(JobType.ScheduledScaling).inc(0);
 jobProcessTotalCounter.labels(JobType.Autoscale).inc(0);
 jobProcessTotalCounter.labels(JobType.Launch).inc(0);
 jobProcessTotalCounter.labels(JobType.Sanity).inc(0);
@@ -90,12 +98,14 @@ export default class JobManager {
     private instanceGroupManager: InstanceGroupManager;
     private instanceLauncher: InstanceLauncher;
     private autoscaler: AutoscaleProcessor;
+    private scheduledScalingProcessor: ScheduledScalingProcessor;
     private sanityLoop: SanityLoop;
     private metricsLoop: MetricsLoop;
     private jobQueue: Queue;
     private autoscalerProcessingTimeoutMs: number;
     private launcherProcessingTimeoutMs: number;
     private sanityLoopProcessingTimeoutMs: number;
+    private jobsConcurrency: number;
     private logger: Logger;
 
     constructor(options: JobManagerOptions) {
@@ -104,11 +114,13 @@ export default class JobManager {
         this.instanceGroupManager = options.instanceGroupManager;
         this.instanceLauncher = options.instanceLauncher;
         this.autoscaler = options.autoscaler;
+        this.scheduledScalingProcessor = options.scheduledScalingProcessor;
         this.sanityLoop = options.sanityLoop;
         this.metricsLoop = options.metricsLoop;
         this.autoscalerProcessingTimeoutMs = options.autoscalerProcessingTimeoutMs;
         this.launcherProcessingTimeoutMs = options.launcherProcessingTimeoutMs;
         this.sanityLoopProcessingTimeoutMs = options.sanityLoopProcessingTimeoutMs;
+        this.jobsConcurrency = options.jobsConcurrency;
 
         this.jobQueue = this.createQueue(JobManager.jobQueueName, options.queueRedisOptions);
     }
@@ -143,7 +155,7 @@ export default class JobManager {
             this.logger.info(`Job ${jobId} failed with error ${err.message} but is being retried!`);
         });
 
-        newQueue.process((job: Job<JobData>, done: DoneCallback<boolean>) => {
+        newQueue.process(this.jobsConcurrency, (job: Job<JobData>, done: DoneCallback<boolean>) => {
             let ctx;
             const start = process.hrtime();
 
@@ -156,6 +168,14 @@ export default class JobManager {
                 ctx = new context.Context(pollLogger, start, pollId);
 
                 switch (job.data.type) {
+                    case JobType.ScheduledScaling:
+                        this.processJob(
+                            ctx,
+                            job,
+                            (ctx, group) => this.scheduledScalingProcessor.processScheduledScalingByGroup(ctx, group),
+                            done,
+                        );
+                        break;
                     case JobType.Autoscale:
                         this.processJob(
                             ctx,
@@ -303,6 +323,19 @@ export default class JobManager {
             }
 
             const instanceGroupNames = await this.instanceGroupManager.getAllInstanceGroupNames(ctx);
+
+            // populate queue health metrics BEFORE creating new jobs,
+            // so we measure residual from the previous cycle
+            const healthCheckResult = await this.jobQueue.checkHealth();
+            await this.metricsLoop.saveMetricQueueWaiting(healthCheckResult.waiting);
+
+            await this.createJobs(
+                ctx,
+                instanceGroupNames,
+                this.jobQueue,
+                JobType.ScheduledScaling,
+                this.autoscalerProcessingTimeoutMs,
+            );
             await this.createJobs(
                 ctx,
                 instanceGroupNames,
@@ -318,9 +351,6 @@ export default class JobManager {
                 this.launcherProcessingTimeoutMs,
             );
 
-            // populate some queue health metrics
-            const healthCheckResult = await this.jobQueue.checkHealth();
-            await this.metricsLoop.saveMetricQueueWaiting(healthCheckResult.waiting);
             await this.instanceGroupManager.setGroupJobsCreationGracePeriod(ctx);
         } catch (err) {
             ctx.logger.error(`[JobManager] Error while creating jobs for group ${err}`);
@@ -337,29 +367,40 @@ export default class JobManager {
         jobType: JobType,
         processingTimeoutMillis: number,
     ): Promise<void> {
-        instanceGroupNames.forEach((instanceGroupName) => {
-            ctx.logger.info(`[JobManager] Creating ${jobType} job for group ${instanceGroupName}`);
+        await Promise.all(
+            instanceGroupNames.map(async (instanceGroupName) => {
+                ctx.logger.info(`[JobManager] Creating ${jobType} job for group ${instanceGroupName}`);
 
-            const jobData: JobData = {
-                groupName: instanceGroupName,
-                type: jobType,
-            };
+                const jobData: JobData = {
+                    groupName: instanceGroupName,
+                    type: jobType,
+                };
 
-            jobCreateTotalCounter.inc({ type: jobData.type });
-            const newJob = jobQueue.createJob(jobData);
-            newJob
-                .timeout(processingTimeoutMillis)
-                .retries(0)
-                .save()
-                .then((job) => {
+                jobCreateTotalCounter.inc({ type: jobData.type });
+                const newJob = jobQueue.createJob(jobData);
+                try {
+                    const job = await newJob.timeout(processingTimeoutMillis).retries(0).save();
                     ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
-                })
-                .catch((error) => {
+                } catch (error) {
                     ctx.logger.info(
                         `[JobManager] Error while creating ${jobType} job for group ${instanceGroupName}: ${error}`,
                     );
                     jobCreateFailureCounter.inc({ type: jobData.type });
-                });
-        });
+                }
+            }),
+        );
+    }
+
+    async close(timeoutMs = 10000): Promise<void> {
+        await this.jobQueue.close(timeoutMs);
+    }
+
+    async isHealthy(): Promise<boolean> {
+        try {
+            await this.jobQueue.checkHealth();
+            return true;
+        } catch {
+            return false;
+        }
     }
 }

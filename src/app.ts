@@ -26,6 +26,7 @@ import { body, param, validationResult } from 'express-validator';
 import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
 import ScalingManager from './scaling_options_manager';
+import ScheduledScalingProcessor from './scheduled_scaling_processor';
 import RedisStore from './redis';
 import ConsulStore from './consul';
 import PrometheusClient from './prometheus';
@@ -40,6 +41,16 @@ import { AutoscalerLockManager } from './lock';
 
 const asLogger = new AutoscalerLogger({ logLevel: config.LogLevel });
 const logger = asLogger.createLogger(config.LogLevel);
+
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('[Process] Unhandled promise rejection', { reason, promise });
+});
+
+let shuttingDown = false;
+let jobsStarted = false;
+let groupJobsTimeout: NodeJS.Timeout;
+let sanityJobsTimeout: NodeJS.Timeout;
+let metricsTimeout: NodeJS.Timeout;
 
 // metrics listener
 const mapp = express();
@@ -59,6 +70,12 @@ const consulClient = new Consul({
 const redisOptions = <RedisOptions>{
     host: config.RedisHost,
     port: config.RedisPort,
+    retryStrategy(times: number) {
+        const delay = Math.min(times * 1000, 30000);
+        logger.info(`[Redis] Reconnecting in ${delay}ms (attempt ${times})`);
+        return delay;
+    },
+    maxRetriesPerRequest: null,
 };
 
 if (config.RedisPassword) {
@@ -132,12 +149,23 @@ switch (config.InstanceStoreProvider) {
 
 mapp.get('/health', async (req: express.Request, res: express.Response) => {
     logger.debug('Health check');
+    if (shuttingDown) {
+        res.status(503).send('shutting down');
+        return;
+    }
     if (req.query['deep']) {
-        const reply = await instanceStore.ping(req.context);
-        if (!reply) {
-            res.status(500).send('unhealthy');
+        const storeHealthy = await instanceStore.ping(req.context);
+        const queueHealthy = await jobManager.isHealthy();
+
+        if (!storeHealthy || !queueHealthy || !jobsStarted) {
+            const details = {
+                instanceStore: !!storeHealthy,
+                jobQueue: queueHealthy,
+                jobsStarted,
+            };
+            logger.warn('Deep health check failed', details);
+            res.status(500).json({ status: 'unhealthy', ...details });
         } else {
-            logger.debug('instance store ping reply', { reply });
             res.send('deeply healthy');
         }
     } else {
@@ -241,6 +269,15 @@ const autoscaleProcessor = new AutoscaleProcessor({
     defaultCloudGuardGraceCount: config.CloudGuardGraceCount,
     cloudGuardEnabled: config.CloudGuardEnabled,
     metricsLoop,
+    defaultTimezone: config.ScheduledScalingDefaultTimezone,
+});
+
+const scheduledScalingProcessor = new ScheduledScalingProcessor({
+    instanceGroupManager,
+    lockManager,
+    audit,
+    defaultTimezone: config.ScheduledScalingDefaultTimezone,
+    enabled: config.ScheduledScalingEnabled,
 });
 
 const instanceLauncher = new InstanceLauncher({
@@ -295,11 +332,13 @@ const jobManager = new JobManager({
     instanceGroupManager,
     instanceLauncher,
     autoscaler: autoscaleProcessor,
+    scheduledScalingProcessor,
     sanityLoop,
     metricsLoop,
     autoscalerProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     launcherProcessingTimeoutMs: config.GroupProcessingTimeoutMs,
     sanityLoopProcessingTimeoutMs: config.SanityProcessingTimoutMs,
+    jobsConcurrency: config.JobsConcurrency,
 });
 
 const scalingManager = new ScalingManager({
@@ -313,7 +352,7 @@ async function startProcessingGroups() {
     await createGroupProcessingJobs();
 }
 logger.info(`Waiting ${config.InitialWaitForPooling}ms before starting to loop for group processing`);
-setTimeout(startProcessingGroups, config.InitialWaitForPooling);
+groupJobsTimeout = setTimeout(startProcessingGroups, config.InitialWaitForPooling);
 
 const groupProcessingErrorCounter = new promClient.Counter({
     name: 'autoscaler_group_processing_errors',
@@ -329,15 +368,21 @@ async function createGroupProcessingJobs() {
     const ctx = new context.Context(pollLogger, start, pollId);
     try {
         await jobManager.createGroupProcessingJobs(ctx);
+        if (!jobsStarted) {
+            jobsStarted = true;
+            logger.info('[Process] Job creation loop started successfully');
+        }
     } catch (err) {
         ctx.logger.error(`Error while creating group processing jobs`, { err });
         // should increment some group processing error counter here
         groupProcessingErrorCounter.inc();
     }
-    setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
+    if (!shuttingDown) {
+        groupJobsTimeout = setTimeout(createGroupProcessingJobs, config.GroupJobsCreationIntervalSec * 1000);
+    }
 }
 
-createSanityProcessingJobs();
+sanityJobsTimeout = setTimeout(createSanityProcessingJobs, 0);
 
 async function createSanityProcessingJobs() {
     const start = Date.now();
@@ -351,12 +396,14 @@ async function createSanityProcessingJobs() {
     } catch (err) {
         ctx.logger.error(`Error while creating sanity processing jobs`, { err });
     }
-    setTimeout(createSanityProcessingJobs, config.SanityJobsCreationIntervalSec * 1000);
+    if (!shuttingDown) {
+        sanityJobsTimeout = setTimeout(createSanityProcessingJobs, config.SanityJobsCreationIntervalSec * 1000);
+    }
 }
 
 const asapFetcher = new ASAPPubKeyFetcher(config.AsapPubKeyBaseUrl, config.AsapPubKeyTTL);
 
-pollForMetrics(metricsLoop);
+metricsTimeout = setTimeout(() => pollForMetrics(metricsLoop), 0);
 
 async function pollForMetrics(metricsLoop: MetricsLoop) {
     try {
@@ -364,7 +411,9 @@ async function pollForMetrics(metricsLoop: MetricsLoop) {
     } catch (err) {
         logger.error('[MetricsLoop] Error in metrics poll', { err });
     }
-    setTimeout(pollForMetrics.bind(null, metricsLoop), config.MetricsLoopIntervalMs);
+    if (!shuttingDown) {
+        metricsTimeout = setTimeout(pollForMetrics.bind(null, metricsLoop), config.MetricsLoopIntervalMs);
+    }
 }
 
 const h = new Handlers({
@@ -377,6 +426,7 @@ const h = new Handlers({
     lockManager,
     audit,
     scalingManager,
+    defaultTimezone: config.ScheduledScalingDefaultTimezone,
 });
 
 const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop, shutdownManager });
@@ -541,6 +591,73 @@ app.put('/groups/:name/scaling-activities', async (req, res, next) => {
     }
 });
 
+app.put(
+    '/groups/:name/scheduled-scaling',
+    body('enabled').isBoolean().withMessage('enabled must be a boolean'),
+    body('timezone').optional().isString().withMessage('timezone must be a string'),
+    body('periods').isArray().withMessage('periods must be an array'),
+    body('periods.*.name').isString().notEmpty().withMessage('Period name must be a non-empty string'),
+    body('periods.*.dayOfWeek').isArray({ min: 1 }).withMessage('dayOfWeek must be a non-empty array'),
+    body('periods.*.dayOfWeek.*').isInt({ min: 0, max: 6 }).withMessage('dayOfWeek values must be 0-6'),
+    body('periods.*.startHour').isInt({ min: 0, max: 23 }).withMessage('startHour must be 0-23'),
+    body('periods.*.startMinute').optional().isInt({ min: 0, max: 59 }).withMessage('startMinute must be 0-59'),
+    body('periods.*.endHour').isInt({ min: 0, max: 23 }).withMessage('endHour must be 0-23'),
+    body('periods.*.endMinute').optional().isInt({ min: 0, max: 59 }).withMessage('endMinute must be 0-59'),
+    body('periods.*.priority').isNumeric().withMessage('priority must be a number'),
+    body('periods.*.scalingOptions.minDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.desiredCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.scaleUpQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.scaleDownQuantity')
+        .optional()
+        .isInt({ min: 0 })
+        .withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.scaleUpThreshold')
+        .optional()
+        .isFloat({ min: 0 })
+        .withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.scaleDownThreshold')
+        .optional()
+        .isFloat({ min: 0 })
+        .withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.scalePeriod').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.scaleUpPeriodsCount')
+        .optional()
+        .isInt({ min: 0 })
+        .withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.scaleDownPeriodsCount')
+        .optional()
+        .isInt({ min: 0 })
+        .withMessage('Value must be positive'),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.updateScheduledScaling(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+app.get('/groups/:name/scheduled-scaling', async (req, res, next) => {
+    try {
+        await h.getScheduledScaling(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
+app.delete('/groups/:name/scheduled-scaling', async (req, res, next) => {
+    try {
+        await h.deleteScheduledScaling(req, res);
+    } catch (err) {
+        next(err);
+    }
+});
+
 app.put('/groups/:name/instance-configuration', body('instanceConfigurationId').isString(), async (req, res, next) => {
     try {
         const errors = validationResult(req);
@@ -696,10 +813,65 @@ app.post('/groups/:name/actions/reconfigure-instances', async (req, res, next) =
     }
 });
 
-mapp.listen(config.MetricsServerPort, () => {
+const metricsServer = mapp.listen(config.MetricsServerPort, () => {
     logger.info(`...listening on :${config.MetricsServerPort}`);
 });
 
-app.listen(config.HTTPServerPort, () => {
+const appServer = app.listen(config.HTTPServerPort, () => {
     logger.info(`...listening on :${config.HTTPServerPort}`);
 });
+
+async function gracefulShutdown(signal: string) {
+    logger.info(`[Process] Received ${signal}, starting graceful shutdown`);
+    shuttingDown = true;
+
+    // Force exit after 45 seconds if graceful shutdown hangs
+    setTimeout(() => {
+        logger.error('[Process] Graceful shutdown timed out, forcing exit');
+        process.exit(1);
+    }, 45000).unref();
+
+    // 1. Stop scheduling new jobs
+    clearTimeout(groupJobsTimeout);
+    clearTimeout(sanityJobsTimeout);
+    clearTimeout(metricsTimeout);
+
+    // 2. Stop accepting new requests
+    await Promise.all([
+        new Promise<void>((resolve) => appServer.close(() => resolve())),
+        new Promise<void>((resolve) => metricsServer.close(() => resolve())),
+    ]);
+    logger.info('[Process] HTTP servers closed');
+
+    // 3. Drain job queue (wait up to 30s for in-flight jobs)
+    try {
+        await jobManager.close(30000);
+        logger.info('[Process] Job queue drained');
+    } catch (err) {
+        logger.error('[Process] Error draining job queue', { err });
+    }
+
+    // 4. Shut down lock manager
+    try {
+        if (lockManager.shutdown) {
+            await lockManager.shutdown();
+        }
+        logger.info('[Process] Lock manager shut down');
+    } catch (err) {
+        logger.error('[Process] Error shutting down lock manager', { err });
+    }
+
+    // 5. Disconnect Redis
+    try {
+        await redisClient.quit();
+        logger.info('[Process] Redis disconnected');
+    } catch (err) {
+        logger.error('[Process] Error disconnecting Redis', { err });
+    }
+
+    logger.info('[Process] Graceful shutdown complete');
+    process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

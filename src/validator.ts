@@ -102,7 +102,8 @@ export default class Validator {
                 instanceType.toLowerCase() == 'jigasi' ||
                 instanceType.toLowerCase() == 'nomad' ||
                 instanceType.toLowerCase() == 'whisper' ||
-                instanceType.toLowerCase() == 'jvb')
+                instanceType.toLowerCase() == 'jvb' ||
+                instanceType.toLowerCase() == 'selenium-grid')
         );
     }
 

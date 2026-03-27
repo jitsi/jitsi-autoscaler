@@ -83,6 +83,10 @@ const env = cleanEnv(process.env, {
 
     SCHEDULED_SCALING_ENABLED: bool({ default: true }),
     SCHEDULED_SCALING_DEFAULT_TIMEZONE: str({ default: 'UTC' }),
+    RESERVATION_DEFAULT_TTL_SEC: num({ default: 3600 }),
+    RESERVATION_SCALE_DOWN_GRACE_SEC: num({ default: 300 }),
+    RESERVATION_EXPIRY_LOOKAHEAD_SEC: num({ default: 600 }),
+    SELENIUM_GRID_FETCH_TIMEOUT_MS: num({ default: 5000 }),
 });
 
 const cloudProviders = env.CLOUD_PROVIDERS ? (env.CLOUD_PROVIDERS as string).split(',') : [env.CLOUD_PROVIDER];
@@ -191,4 +195,9 @@ export default {
     CloudGuardGraceCount: env.CLOUD_GUARD_GRACE_COUNT,
     ScheduledScalingEnabled: env.SCHEDULED_SCALING_ENABLED,
     ScheduledScalingDefaultTimezone: env.SCHEDULED_SCALING_DEFAULT_TIMEZONE,
+
+    ReservationDefaultTTLSec: env.RESERVATION_DEFAULT_TTL_SEC,
+    ReservationScaleDownGraceSec: env.RESERVATION_SCALE_DOWN_GRACE_SEC,
+    ReservationExpiryLookaheadSec: env.RESERVATION_EXPIRY_LOOKAHEAD_SEC,
+    SeleniumGridFetchTimeoutMs: env.SELENIUM_GRID_FETCH_TIMEOUT_MS,
 };

@@ -816,7 +816,7 @@ class Handlers {
                 const newDesired = Math.min(
                     Math.max(
                         lockedGroup.scalingOptions.desiredCount,
-                        lockedGroup.scalingOptions.minDesired + reservedCount,
+                        Math.max(lockedGroup.scalingOptions.minDesired, reservedCount),
                     ),
                     lockedGroup.scalingOptions.maxDesired,
                 );

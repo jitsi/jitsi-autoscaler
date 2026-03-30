@@ -66,8 +66,8 @@ describe('ReservationManager', () => {
 
         test('creates a pending reservation when capacity is exceeded', async () => {
             // Fill up capacity: minDesired=2, maxDesired=5
-            await manager.createReservation(context, 'grid-group', 3, 5, 2); // 2+3=5, at max
-            const pending = await manager.createReservation(context, 'grid-group', 1, 5, 2); // 2+3+1=6 > 5
+            await manager.createReservation(context, 'grid-group', 4, 5, 2); // max(2,4)=4 <= 5, active
+            const pending = await manager.createReservation(context, 'grid-group', 2, 5, 2); // max(2,6)=6 > 5
             assert.strictEqual(pending.status, ReservationStatus.Pending);
         });
 
@@ -154,9 +154,9 @@ describe('ReservationManager', () => {
 
     describe('promotePendingReservations', () => {
         test('promotes pending to active when capacity frees up', async () => {
-            // Create active reservation using all capacity (minDesired=2, maxDesired=5, reserve 3 -> total=5)
-            const r1 = await manager.createReservation(context, 'grid-group', 3, 5, 2);
-            // This will be pending (2+3+2=7 > 5)
+            // Create active reservation using all capacity (minDesired=2, maxDesired=5, reserve 5 -> max(2,5)=5)
+            const r1 = await manager.createReservation(context, 'grid-group', 5, 5, 2);
+            // This will be pending (max(2,5+2)=7 > 5)
             const r2 = await manager.createReservation(context, 'grid-group', 2, 5, 2);
             assert.strictEqual(r2.status, ReservationStatus.Pending);
 
@@ -189,8 +189,8 @@ describe('ReservationManager', () => {
         test('marks active reservation as fulfilled when instance count is sufficient', async () => {
             const r = await manager.createReservation(context, 'grid-group', 3, 10, 2);
 
-            // Simulate 5 instances running (minDesired=2, reserved=3, so need 5)
-            await manager.checkAndFulfillReservations(context, 'grid-group', 5, 2);
+            // Simulate 3 instances running (minDesired=2, reserved=3, need max(2,3)=3)
+            await manager.checkAndFulfillReservations(context, 'grid-group', 3, 2);
 
             const updated = savedReservations[r.id];
             assert.strictEqual(updated.status, ReservationStatus.Fulfilled);
@@ -198,9 +198,9 @@ describe('ReservationManager', () => {
         });
 
         test('does not fulfill when instance count is insufficient', async () => {
-            const r = await manager.createReservation(context, 'grid-group', 3, 10, 2);
+            const r = await manager.createReservation(context, 'grid-group', 5, 10, 2);
 
-            // Only 3 instances (need 2+3=5)
+            // Only 3 instances (need max(2,5)=5)
             await manager.checkAndFulfillReservations(context, 'grid-group', 3, 2);
 
             const updated = savedReservations[r.id];

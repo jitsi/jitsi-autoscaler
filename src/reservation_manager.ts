@@ -37,7 +37,8 @@ export default class ReservationManager {
         const activeReservations = await this.getActiveReservations(ctx, groupName);
         const totalReserved = activeReservations.reduce((sum, r) => sum + r.nodeCount, 0) + nodeCount;
 
-        const status = minDesired + totalReserved <= maxDesired ? ReservationStatus.Active : ReservationStatus.Pending;
+        const status =
+            Math.max(minDesired, totalReserved) <= maxDesired ? ReservationStatus.Active : ReservationStatus.Pending;
 
         const reservation: Reservation = {
             id: nanoid(12),
@@ -179,7 +180,7 @@ export default class ReservationManager {
         let currentReserved = activeReserved;
 
         for (const reservation of pending) {
-            if (minDesired + currentReserved + reservation.nodeCount <= maxDesired) {
+            if (Math.max(minDesired, currentReserved + reservation.nodeCount) <= maxDesired) {
                 reservation.status = ReservationStatus.Active;
                 await this.reservationStore.saveReservation(ctx, reservation);
                 currentReserved += reservation.nodeCount;
@@ -207,7 +208,7 @@ export default class ReservationManager {
         let cumulativeReserved = 0;
         for (const reservation of active) {
             cumulativeReserved += reservation.nodeCount;
-            if (currentInstanceCount >= minDesired + cumulativeReserved && !reservation.fulfilledAt) {
+            if (currentInstanceCount >= Math.max(minDesired, cumulativeReserved) && !reservation.fulfilledAt) {
                 reservation.status = ReservationStatus.Fulfilled;
                 reservation.fulfilledAt = Date.now();
                 await this.reservationStore.saveReservation(ctx, reservation);

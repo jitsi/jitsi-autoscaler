@@ -361,7 +361,7 @@ export default class AutoscaleProcessor {
 
         // Step 3: Compute reservation floor
         const reservedNodeCount = await this.reservationManager.getActiveReservedNodeCount(ctx, group.name);
-        const reservationFloor = group.scalingOptions.minDesired + reservedNodeCount;
+        const reservationFloor = Math.max(group.scalingOptions.minDesired, reservedNodeCount);
 
         // Step 4: Fetch grid queue size for organic scaling signal
         let queueSize = 0;

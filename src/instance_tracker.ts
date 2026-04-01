@@ -190,6 +190,7 @@ export class InstanceTracker {
                 case 'JVB':
                 case 'whisper':
                 case 'stress':
+                case 'selenium-grid':
                     // If node is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
                     if (!state.status.stats || state.status.stats.stress_level == undefined) {
                         trackMetric = false;

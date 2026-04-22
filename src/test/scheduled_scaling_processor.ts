@@ -474,6 +474,41 @@ describe('ScheduledScalingProcessor', () => {
         });
     });
 
+    describe('mergeWithLiveDesired', () => {
+        test('preserves live desiredCount when period does not specify it', () => {
+            const base = { ...currentScalingOptions, desiredCount: 5 };
+            const live = { ...currentScalingOptions, desiredCount: 12 };
+            const periodOverrides = { minDesired: 8 };
+            const result = ScheduledScalingProcessor.mergeWithLiveDesired(base, live, periodOverrides);
+            assert.strictEqual(result.desiredCount, 12);
+            assert.strictEqual(result.minDesired, 8);
+        });
+
+        test('uses period desiredCount when explicitly specified', () => {
+            const base = { ...currentScalingOptions, desiredCount: 5 };
+            const live = { ...currentScalingOptions, desiredCount: 12 };
+            const periodOverrides = { minDesired: 8, desiredCount: 10 };
+            const result = ScheduledScalingProcessor.mergeWithLiveDesired(base, live, periodOverrides);
+            assert.strictEqual(result.desiredCount, 10);
+        });
+
+        test('applies invariants: live desiredCount below new minDesired is bumped', () => {
+            const base = { ...currentScalingOptions, desiredCount: 5 };
+            const live = { ...currentScalingOptions, desiredCount: 3 };
+            const periodOverrides = { minDesired: 8 };
+            const result = ScheduledScalingProcessor.mergeWithLiveDesired(base, live, periodOverrides);
+            assert.strictEqual(result.desiredCount, 8);
+        });
+
+        test('period with desiredCount=0 is respected (not treated as unset)', () => {
+            const base = { ...currentScalingOptions, desiredCount: 5 };
+            const live = { ...currentScalingOptions, desiredCount: 12 };
+            const periodOverrides = { minDesired: 0, maxDesired: 0, desiredCount: 0 };
+            const result = ScheduledScalingProcessor.mergeWithLiveDesired(base, live, periodOverrides);
+            assert.strictEqual(result.desiredCount, 0);
+        });
+    });
+
     describe('resolveTimezone', () => {
         test('uses explicit timezone when provided', () => {
             const config = { enabled: true, timezone: 'Asia/Tokyo', periods: [] };

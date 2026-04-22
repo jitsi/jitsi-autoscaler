@@ -287,6 +287,23 @@ export default class ScheduledScalingProcessor {
         return matchingPeriods[0];
     }
 
+    /**
+     * Merge baseline options with period overrides, preserving the current live
+     * desiredCount when the period doesn't explicitly set one. This prevents
+     * schedule config updates from undoing autoscaler adjustments.
+     */
+    static mergeWithLiveDesired(
+        baseOptions: ScalingOptions,
+        liveOptions: ScalingOptions,
+        periodOverrides: Partial<ScalingOptions>,
+    ): ScalingOptions {
+        const merged: ScalingOptions = { ...baseOptions, ...periodOverrides };
+        if (periodOverrides.desiredCount === undefined) {
+            merged.desiredCount = liveOptions.desiredCount;
+        }
+        return ScheduledScalingProcessor.applyInvariants(merged);
+    }
+
     static applyInvariants(options: ScalingOptions): ScalingOptions {
         const resolved = { ...options };
         if (resolved.minDesired > resolved.desiredCount) {

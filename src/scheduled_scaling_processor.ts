@@ -123,11 +123,12 @@ export default class ScheduledScalingProcessor {
                     // First period entry — snapshot current options as baseline
                     group.scheduledScalingBaseOptions = { ...group.scalingOptions };
                 }
-                // Always merge period overrides onto the baseline
-                newOptions = ScheduledScalingProcessor.applyInvariants({
-                    ...group.scheduledScalingBaseOptions,
-                    ...activePeriod.scalingOptions,
-                });
+                // Merge period overrides onto the baseline, preserving live desiredCount
+                newOptions = ScheduledScalingProcessor.mergeWithLiveDesired(
+                    group.scheduledScalingBaseOptions,
+                    group.scalingOptions,
+                    activePeriod.scalingOptions,
+                );
                 if (newOptions.desiredCount === 0) {
                     ctx.logger.warn(
                         `[ScheduledScaling] Period "${activePeriod.name}" resolves to desiredCount=0 for group ${groupName}`,
@@ -139,6 +140,13 @@ export default class ScheduledScalingProcessor {
                 // Exiting all periods — restore baseline
                 if (group.scheduledScalingBaseOptions) {
                     newOptions = { ...group.scheduledScalingBaseOptions };
+                    // If the exiting period didn't explicitly set desiredCount,
+                    // preserve the live value to avoid undoing autoscaler adjustments
+                    const exitingPeriod = group.scheduledScaling?.periods?.find((p) => p.name === currentPeriodName);
+                    if (!exitingPeriod || exitingPeriod.scalingOptions.desiredCount === undefined) {
+                        newOptions.desiredCount = group.scalingOptions.desiredCount;
+                    }
+                    newOptions = ScheduledScalingProcessor.applyInvariants(newOptions);
                 } else {
                     // No baseline to restore (shouldn't happen, but be safe)
                     ctx.logger.warn(

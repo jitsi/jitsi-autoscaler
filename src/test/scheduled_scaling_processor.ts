@@ -711,16 +711,23 @@ describe('ScheduledScalingProcessor', () => {
             assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
         });
 
-        test('restores baseline when period ends', async () => {
+        test('restores baseline desiredCount when exiting period that explicitly set it', async () => {
             context = initContext();
             const baseOptions = { ...currentScalingOptions };
+            // Period with explicit desiredCount, narrow time window so findActivePeriod returns null
+            const expiredPeakPeriod = {
+                ...alwaysPeakPeriod,
+                dayOfWeek: [1],
+                startHour: 3,
+                endHour: 4,
+            };
             instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
                 name: groupName,
                 region: 'us-ashburn-1',
                 scalingOptions: { ...currentScalingOptions, minDesired: 10, maxDesired: 20, desiredCount: 10 },
                 scheduledScaling: {
                     enabled: true,
-                    periods: [], // No periods match — simulates period ending
+                    periods: [expiredPeakPeriod], // Period config present but doesn't match current time
                 },
                 scheduledScalingActivePeriod: 'always-peak',
                 scheduledScalingBaseOptions: baseOptions,
@@ -730,13 +737,50 @@ describe('ScheduledScalingProcessor', () => {
             assert.strictEqual(result, true);
 
             const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
-            // Scaling options restored to baseline
+            // Period had explicit desiredCount, so baseline desiredCount is restored
             assert.strictEqual(updatedGroup.scalingOptions.desiredCount, baseOptions.desiredCount);
             assert.strictEqual(updatedGroup.scalingOptions.minDesired, baseOptions.minDesired);
             assert.strictEqual(updatedGroup.scalingOptions.maxDesired, baseOptions.maxDesired);
             // Tracking fields cleared
             assert.strictEqual(updatedGroup.scheduledScalingActivePeriod, undefined);
             assert.strictEqual(updatedGroup.scheduledScalingBaseOptions, undefined);
+        });
+
+        test('preserves live desiredCount on exit when period did not set it', async () => {
+            context = initContext();
+            const baseOptions = { ...currentScalingOptions }; // desiredCount=2
+            // Period that only sets minDesired, NOT desiredCount
+            const minOnlyPeriod = {
+                name: 'min-only',
+                dayOfWeek: [1],
+                startHour: 3,
+                endHour: 4,
+                priority: 10,
+                scalingOptions: { minDesired: 10 },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                // Live desiredCount is 15 (autoscaler scaled up during the period)
+                scalingOptions: { ...currentScalingOptions, minDesired: 10, desiredCount: 15 },
+                scheduledScaling: {
+                    enabled: true,
+                    periods: [minOnlyPeriod],
+                },
+                scheduledScalingActivePeriod: 'min-only',
+                scheduledScalingBaseOptions: baseOptions,
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, true);
+
+            const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
+            // Period did NOT set desiredCount — live value (15) is preserved
+            assert.strictEqual(updatedGroup.scalingOptions.desiredCount, 15);
+            // Baseline minDesired restored
+            assert.strictEqual(updatedGroup.scalingOptions.minDesired, baseOptions.minDesired);
+            // maxDesired bumped by applyInvariants since desiredCount(15) > baseline maxDesired(5)
+            assert.strictEqual(updatedGroup.scalingOptions.maxDesired, 15);
         });
 
         test('switches periods using baseOptions, not current options', async () => {
@@ -777,6 +821,43 @@ describe('ScheduledScalingProcessor', () => {
             // Active period updated, baseOptions preserved
             assert.strictEqual(updatedGroup.scheduledScalingActivePeriod, 'night');
             assert.deepStrictEqual(updatedGroup.scheduledScalingBaseOptions, baseOptions);
+        });
+
+        test('preserves live desiredCount when switching to period without explicit desiredCount', async () => {
+            context = initContext();
+            const baseOptions = { ...currentScalingOptions }; // desiredCount=2
+            // Period-B only sets minDesired, does NOT set desiredCount
+            const periodB = {
+                name: 'night',
+                dayOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                startHour: 0,
+                endHour: 0,
+                priority: 20,
+                scalingOptions: { minDesired: 0, maxDesired: 3 },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                // Autoscaler scaled up to 12 during period-A
+                scalingOptions: { ...currentScalingOptions, minDesired: 10, maxDesired: 20, desiredCount: 12 },
+                scheduledScaling: {
+                    enabled: true,
+                    periods: [periodB],
+                },
+                scheduledScalingActivePeriod: 'always-peak',
+                scheduledScalingBaseOptions: baseOptions,
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, true);
+
+            const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
+            // Period-B does NOT set desiredCount — live value (12) is preserved
+            assert.strictEqual(updatedGroup.scalingOptions.desiredCount, 12);
+            // Period-B's minDesired/maxDesired are applied
+            assert.strictEqual(updatedGroup.scalingOptions.minDesired, 0);
+            // maxDesired bumped by applyInvariants since desiredCount(12) > maxDesired(3)
+            assert.strictEqual(updatedGroup.scalingOptions.maxDesired, 12);
         });
 
         test('backward compat: bootstraps group with no tracking fields', async () => {

@@ -652,10 +652,11 @@ class Handlers {
                     if (!instanceGroup.scheduledScalingBaseOptions) {
                         instanceGroup.scheduledScalingBaseOptions = { ...instanceGroup.scalingOptions };
                     }
-                    instanceGroup.scalingOptions = ScheduledScalingProcessor.applyInvariants({
-                        ...instanceGroup.scheduledScalingBaseOptions,
-                        ...activePeriod.scalingOptions,
-                    });
+                    instanceGroup.scalingOptions = ScheduledScalingProcessor.mergeWithLiveDesired(
+                        instanceGroup.scheduledScalingBaseOptions,
+                        instanceGroup.scalingOptions,
+                        activePeriod.scalingOptions,
+                    );
                     if (instanceGroup.scalingOptions.desiredCount === 0) {
                         req.context.logger.warn(
                             `[ScheduledScaling] Period "${activePeriod.name}" resolves to desiredCount=0 for group ${req.params.name}`,

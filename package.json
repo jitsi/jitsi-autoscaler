@@ -1,5 +1,5 @@
 {
-  "name": "jitsi-autoscaler",
+  "name": "@jitsi/autoscaler",
   "version": "1.0.0",
   "description": "Implements Autoscaling for Jitsi Services",
   "repository": {

@@ -54,6 +54,61 @@ Routes are defined in `src/app.ts`, handlers in `src/handlers.ts`:
 - `PUT /groups/options/full-scaling` — bulk scaling (used by external schedulers)
 - `POST /groups/:name/actions/reconfigure-instances|launch-protected` — group actions
 
+## MCP Server
+
+An MCP (Model Context Protocol) server is available at `src/mcp/`, allowing LLMs to interact with the autoscaler via Claude Code, Claude Desktop, or any MCP client.
+
+### Running the MCP Server
+
+```bash
+npm run build                    # Compile first
+MCP_AUTOSCALER_BASE_URL=http://localhost:3000 MCP_AUTH_TOKEN=<jwt> npm run mcp
+```
+
+### Using with Claude Code
+
+Add to your Claude Code MCP settings (`~/.claude/settings.json` or project `.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "jitsi-autoscaler": {
+      "command": "node",
+      "args": ["-r", "./src/polyfills.js", "dist/mcp/server.js"],
+      "cwd": "/path/to/jitsi-autoscaler",
+      "env": {
+        "MCP_AUTOSCALER_BASE_URL": "http://localhost:3000",
+        "MCP_AUTH_TOKEN": "<your-jwt-token>"
+      }
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_groups` | Search/list groups with filters (name, type, region, environment, cloud, tags) |
+| `describe_group` | Get detailed config of a group (scaling options, feature flags, tags, scheduled scaling) |
+| `get_group_report` | Live instance status report (counts by status, per-instance details) |
+| `get_group_audit` | Recent scaling decisions and launch history |
+| `create_group` | Create a new instance group |
+| `update_group` | Update an existing group (merge semantics) |
+| `update_scaling_options` | Update scaling thresholds/quantities |
+| `update_desired_count` | Update min/max/desired counts |
+| `update_scaling_activities` | Toggle autoscale/launch/scheduler/etc. |
+| `delete_group` | Delete an instance group |
+
+### Available Prompts
+
+- `diagnose_scaling_issues` — Guided workflow to diagnose why a group isn't scaling correctly
+- `capacity_overview` — Summarize all groups by type/region/environment
+
+### MCP Architecture
+
+The MCP server (`src/mcp/server.ts`) is a separate process that communicates with the autoscaler REST API over HTTP. It does not access Redis directly. Configuration is via environment variables: `MCP_AUTOSCALER_BASE_URL` and `MCP_AUTH_TOKEN`.
+
 ## Code Conventions
 
 - **TypeScript** with `noImplicitAny: true`, target ES2020, CommonJS modules

@@ -12,6 +12,7 @@ import {
     registerUpdateScalingActivities,
 } from './update_scaling';
 import { registerDeleteGroup } from './delete_group';
+import { registerUpdateScheduledScaling } from './update_scheduled_scaling';
 
 export function registerAllTools(server: McpServer, client: AutoscalerApiClient): void {
     registerSearchGroups(server, client);
@@ -23,5 +24,6 @@ export function registerAllTools(server: McpServer, client: AutoscalerApiClient)
     registerUpdateScalingOptions(server, client);
     registerUpdateDesiredCount(server, client);
     registerUpdateScalingActivities(server, client);
+    registerUpdateScheduledScaling(server, client);
     registerDeleteGroup(server, client);
 }

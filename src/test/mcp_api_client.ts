@@ -41,7 +41,7 @@ describe('AutoscalerApiClient', () => {
                 { name: 'group1', type: 'jibri', region: 'us-east' },
                 { name: 'group2', type: 'JVB', region: 'eu-west' },
             ];
-            fetchMock = mockFetchResponse(200, groups);
+            fetchMock = mockFetchResponse(200, { instanceGroups: groups });
             global.fetch = fetchMock;
 
             const result = await client.listGroups();
@@ -55,7 +55,7 @@ describe('AutoscalerApiClient', () => {
         });
 
         test('appends tag query params', async () => {
-            fetchMock = mockFetchResponse(200, []);
+            fetchMock = mockFetchResponse(200, { instanceGroups: [] });
             global.fetch = fetchMock;
 
             await client.listGroups({ environment: 'prod', shard: 's1' });
@@ -69,7 +69,7 @@ describe('AutoscalerApiClient', () => {
     describe('getGroup', () => {
         test('returns group when found', async () => {
             const group = { name: 'test-group', type: 'jibri' };
-            fetchMock = mockFetchResponse(200, group);
+            fetchMock = mockFetchResponse(200, { instanceGroup: group });
             global.fetch = fetchMock;
 
             const result = await client.getGroup('test-group');
@@ -169,7 +169,7 @@ describe('AutoscalerApiClient', () => {
     describe('getGroupReport', () => {
         test('returns report when found', async () => {
             const report = { groupName: 'g1', count: 3, desiredCount: 5 };
-            fetchMock = mockFetchResponse(200, report);
+            fetchMock = mockFetchResponse(200, { groupReport: report });
             global.fetch = fetchMock;
 
             const result = await client.getGroupReport('g1');
@@ -194,7 +194,7 @@ describe('AutoscalerApiClient', () => {
                 lastAutoScalerRun: '2024-01-01T00:00:00Z',
                 lastReconfigureRequest: '',
             };
-            fetchMock = mockFetchResponse(200, audit);
+            fetchMock = mockFetchResponse(200, { audit });
             global.fetch = fetchMock;
 
             const result = await client.getGroupAudit('g1');
@@ -206,7 +206,7 @@ describe('AutoscalerApiClient', () => {
     describe('getScheduledScaling', () => {
         test('returns config when found', async () => {
             const config = { enabled: true, timezone: 'UTC', periods: [] };
-            fetchMock = mockFetchResponse(200, config);
+            fetchMock = mockFetchResponse(200, { scheduledScaling: config });
             global.fetch = fetchMock;
 
             const result = await client.getScheduledScaling('g1');
@@ -224,9 +224,37 @@ describe('AutoscalerApiClient', () => {
         });
     });
 
+    describe('updateScheduledScaling', () => {
+        test('sends PUT with scheduled scaling config', async () => {
+            fetchMock = mockFetchResponse(200, undefined, 'text/plain');
+            global.fetch = fetchMock;
+
+            const config = {
+                enabled: true,
+                timezone: 'UTC',
+                periods: [
+                    {
+                        name: 'weekend-scaledown',
+                        dayOfWeek: [0, 6],
+                        startHour: 0,
+                        endHour: 0,
+                        priority: 1,
+                        scalingOptions: { minDesired: 3, scaleDownThreshold: 3, scaleUpThreshold: 2 },
+                    },
+                ],
+            };
+            await client.updateScheduledScaling('g1', config as any);
+
+            const [url, opts] = fetchMock.mock.calls[0].arguments;
+            assert.strictEqual(url, 'http://localhost:3000/groups/g1/scheduled-scaling');
+            assert.strictEqual(opts.method, 'PUT');
+            assert.deepStrictEqual(JSON.parse(opts.body), config);
+        });
+    });
+
     describe('URL encoding', () => {
         test('encodes group names with special characters', async () => {
-            fetchMock = mockFetchResponse(200, { name: 'group/special' });
+            fetchMock = mockFetchResponse(200, { instanceGroup: { name: 'group/special' } });
             global.fetch = fetchMock;
 
             await client.getGroup('group/special');
@@ -262,7 +290,7 @@ describe('AutoscalerApiClient', () => {
 
         test('returns new client with overridden URL', async () => {
             const overridden = client.withOverrides('http://other-host:4000', undefined);
-            fetchMock = mockFetchResponse(200, []);
+            fetchMock = mockFetchResponse(200, { instanceGroups: [] });
             global.fetch = fetchMock;
 
             await overridden.listGroups();
@@ -274,7 +302,7 @@ describe('AutoscalerApiClient', () => {
 
         test('returns new client with overridden token', async () => {
             const overridden = client.withOverrides(undefined, 'other-token');
-            fetchMock = mockFetchResponse(200, []);
+            fetchMock = mockFetchResponse(200, { instanceGroups: [] });
             global.fetch = fetchMock;
 
             await overridden.listGroups();
@@ -286,7 +314,7 @@ describe('AutoscalerApiClient', () => {
 
         test('returns new client with both overridden', async () => {
             const overridden = client.withOverrides('http://other:5000', 'new-token');
-            fetchMock = mockFetchResponse(200, []);
+            fetchMock = mockFetchResponse(200, { instanceGroups: [] });
             global.fetch = fetchMock;
 
             await overridden.listGroups();

@@ -74,11 +74,16 @@ export class AutoscalerApiClient {
         }
         const query = params.toString();
         const path = query ? `/groups?${query}` : '/groups';
-        return this.request<InstanceGroup[]>('GET', path);
+        const resp = await this.request<{ instanceGroups: InstanceGroup[] }>('GET', path);
+        return resp.instanceGroups;
     }
 
     async getGroup(name: string): Promise<InstanceGroup | null> {
-        return this.requestOrNull<InstanceGroup>('GET', `/groups/${encodeURIComponent(name)}`);
+        const resp = await this.requestOrNull<{ instanceGroup: InstanceGroup }>(
+            'GET',
+            `/groups/${encodeURIComponent(name)}`,
+        );
+        return resp?.instanceGroup ?? null;
     }
 
     async upsertGroup(name: string, group: InstanceGroup): Promise<void> {
@@ -125,21 +130,38 @@ export class AutoscalerApiClient {
     }
 
     async getGroupReport(name: string): Promise<GroupReport | null> {
-        return this.requestOrNull<GroupReport>('GET', `/groups/${encodeURIComponent(name)}/report`);
+        const resp = await this.requestOrNull<{ groupReport: GroupReport }>(
+            'GET',
+            `/groups/${encodeURIComponent(name)}/report`,
+        );
+        return resp?.groupReport ?? null;
     }
 
     async getGroupAudit(name: string): Promise<GroupAuditResponse | null> {
-        return this.requestOrNull<GroupAuditResponse>('GET', `/groups/${encodeURIComponent(name)}/group-audit`);
+        const resp = await this.requestOrNull<{ audit: GroupAuditResponse }>(
+            'GET',
+            `/groups/${encodeURIComponent(name)}/group-audit`,
+        );
+        return resp?.audit ?? null;
     }
 
     async getInstanceAudit(name: string): Promise<InstanceAuditResponse[] | null> {
-        return this.requestOrNull<InstanceAuditResponse[]>('GET', `/groups/${encodeURIComponent(name)}/instance-audit`);
+        const resp = await this.requestOrNull<{ audit: InstanceAuditResponse[] }>(
+            'GET',
+            `/groups/${encodeURIComponent(name)}/instance-audit`,
+        );
+        return resp?.audit ?? null;
     }
 
     async getScheduledScaling(name: string): Promise<ScheduledScalingConfig | null> {
-        return this.requestOrNull<ScheduledScalingConfig>(
+        const resp = await this.requestOrNull<{ scheduledScaling: ScheduledScalingConfig | null }>(
             'GET',
             `/groups/${encodeURIComponent(name)}/scheduled-scaling`,
         );
+        return resp?.scheduledScaling ?? null;
+    }
+
+    async updateScheduledScaling(name: string, config: ScheduledScalingConfig): Promise<void> {
+        await this.request<void>('PUT', `/groups/${encodeURIComponent(name)}/scheduled-scaling`, config);
     }
 }

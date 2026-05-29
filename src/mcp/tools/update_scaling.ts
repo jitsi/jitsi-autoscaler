@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerUpdateScalingOptions(server: McpServer, client: AutoscalerApiClient): void {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'update_scaling_options',
         'Update scaling thresholds and quantities for an instance group without changing other group settings.',
@@ -44,6 +46,8 @@ export function registerUpdateScalingOptions(server: McpServer, client: Autoscal
 }
 
 export function registerUpdateDesiredCount(server: McpServer, client: AutoscalerApiClient): void {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'update_desired_count',
         'Update the min, max, and/or desired instance count for a group.',
@@ -81,6 +85,8 @@ export function registerUpdateDesiredCount(server: McpServer, client: Autoscaler
 }
 
 export function registerUpdateScalingActivities(server: McpServer, client: AutoscalerApiClient): void {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'update_scaling_activities',
         'Toggle scaling features (autoscale, launch, scheduler, etc.) for an instance group.',

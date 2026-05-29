@@ -120,3 +120,4 @@ The MCP server (`src/mcp/server.ts`) is a separate process that communicates wit
 - **Dependency injection**: All major classes take an options object in constructor
 - **Context pattern**: `Context` object (logger + request ID) threaded through all async operations
 - **Node.js >=20** required
+- The MCP SDK's zod type inference is memory-intensive; CI build requires `NODE_OPTIONS=--max-old-space-size=8192`

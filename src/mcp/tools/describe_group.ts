@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerDescribeGroup(server: McpServer, client: AutoscalerApiClient): void {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'describe_group',
         'Get detailed configuration of a specific autoscaler instance group, including scaling options, feature flags, tags, and scheduled scaling.',
@@ -71,7 +73,7 @@ export function registerDescribeGroup(server: McpServer, client: AutoscalerApiCl
                     }
                 }
 
-                if (scheduledScaling && scheduledScaling.enabled && scheduledScaling.periods?.length > 0) {
+                if (scheduledScaling && scheduledScaling.periods?.length > 0) {
                     lines.push(
                         '',
                         '## Scheduled Scaling',

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerSearchGroups(server: McpServer, client: AutoscalerApiClient): void {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size; tsc with 8GB is fine
     server.tool(
         'search_groups',
         'Search and list autoscaler instance groups with optional filters. Returns a summary table of matching groups.',
@@ -25,7 +27,20 @@ export function registerSearchGroups(server: McpServer, client: AutoscalerApiCli
                 let groups = await c.listGroups(tags);
 
                 if (name_pattern) {
-                    const re = new RegExp(name_pattern, 'i');
+                    let re: RegExp;
+                    try {
+                        re = new RegExp(name_pattern, 'i');
+                    } catch {
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Invalid regex pattern: '${name_pattern}'`,
+                                },
+                            ],
+                            isError: true,
+                        };
+                    }
                     groups = groups.filter((g) => re.test(g.name));
                 }
                 if (type) {

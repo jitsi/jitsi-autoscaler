@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerGetGroupReport(server: McpServer, client: AutoscalerApiClient): void {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'get_group_report',
         'Get a live status report for an instance group, including instance counts by status and per-instance details.',

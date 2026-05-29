@@ -1,15 +1,19 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 // @ts-nocheck
-
 import assert from 'node:assert';
 import test, { afterEach, beforeEach, describe, mock } from 'node:test';
 import { AutoscalerApiClient } from '../mcp/api_client';
-import { InstanceGroup, ScheduledScalingConfig } from '../instance_store';
+import type { InstanceGroup, ScheduledScalingConfig } from '../instance_store';
 
 // Mock fetch globally
-let fetchMock;
+let fetchMock: ReturnType<typeof mock.fn>;
+const originalFetch = global.fetch;
 
-function mockFetchResponse(status: number, body: unknown, contentType = 'application/json') {
+function mockFetchResponse(
+    status: number,
+    body: unknown,
+    contentType = 'application/json',
+): ReturnType<typeof mock.fn> {
     return mock.fn(() =>
         Promise.resolve({
             ok: status >= 200 && status < 300,
@@ -31,9 +35,8 @@ describe('AutoscalerApiClient', () => {
     });
 
     afterEach(() => {
-        if (fetchMock) {
-            mock.restoreAll();
-        }
+        global.fetch = originalFetch;
+        mock.restoreAll();
     });
 
     describe('listGroups', () => {
@@ -96,7 +99,7 @@ describe('AutoscalerApiClient', () => {
             global.fetch = fetchMock;
 
             const group = { name: 'new-group', type: 'JVB' };
-            await client.upsertGroup('new-group', group as unknown as InstanceGroup);
+            await client.upsertGroup('new-group', group as InstanceGroup);
 
             const [url, opts] = fetchMock.mock.calls[0].arguments;
             assert.strictEqual(url, 'http://localhost:3000/groups/new-group');
@@ -244,7 +247,7 @@ describe('AutoscalerApiClient', () => {
                     },
                 ],
             };
-            await client.updateScheduledScaling('g1', config as unknown as ScheduledScalingConfig);
+            await client.updateScheduledScaling('g1', config as ScheduledScalingConfig);
 
             const [url, opts] = fetchMock.mock.calls[0].arguments;
             assert.strictEqual(url, 'http://localhost:3000/groups/g1/scheduled-scaling');

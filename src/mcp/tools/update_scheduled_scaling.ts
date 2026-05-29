@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerUpdateScheduledScaling(server: McpServer, client: AutoscalerApiClient): void {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'update_scheduled_scaling',
         "Update scheduled scaling config for a group. Without period_name, updates only top-level settings (enabled, timezone). With period_name, also updates that period's scaling overrides.",

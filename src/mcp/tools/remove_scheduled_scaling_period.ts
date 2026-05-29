@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerRemoveScheduledScalingPeriod(server: McpServer, client: AutoscalerApiClient): void {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'remove_scheduled_scaling_period',
         'Remove a scheduled scaling period from a group by name. If the last period is removed, the scheduled scaling config is preserved but will have no active periods.',

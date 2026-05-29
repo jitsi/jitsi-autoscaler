@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 export function registerPrompts(server: McpServer): void {
-    // @ts-ignore - MCP SDK zod type inference may exceed TypeScript recursion limit
+    // @ts-expect-error - MCP SDK zod type inference may exceed TypeScript recursion limit
     server.prompt(
         'diagnose_scaling_issues',
         'Diagnose why an instance group is not scaling as expected',
@@ -37,7 +37,6 @@ export function registerPrompts(server: McpServer): void {
         }),
     );
 
-    // @ts-ignore - MCP SDK zod type inference may exceed TypeScript recursion limit
     server.prompt('capacity_overview', 'Get an overview of all autoscaler groups and their capacity', {}, () => ({
         messages: [
             {

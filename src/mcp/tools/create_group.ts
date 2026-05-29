@@ -4,7 +4,7 @@ import { AutoscalerApiClient } from '../api_client';
 import { InstanceGroup } from '../../instance_store';
 
 export function registerCreateGroup(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-ignore - MCP SDK zod type inference may exceed TypeScript recursion limit
+    // @ts-expect-error - MCP SDK zod type inference may exceed TypeScript recursion limit
     server.tool(
         'create_group',
         'Create a new autoscaler instance group with the specified configuration.',

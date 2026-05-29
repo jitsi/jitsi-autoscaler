@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerDeleteGroup(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-ignore - MCP SDK zod type inference may exceed TypeScript recursion limit
     server.tool(
         'delete_group',
         'Delete an instance group. The group must have no active instances before it can be deleted.',

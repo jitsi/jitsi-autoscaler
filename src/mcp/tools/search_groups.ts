@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerSearchGroups(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-ignore - MCP SDK zod type inference may exceed TypeScript recursion limit
     server.tool(
         'search_groups',
         'Search and list autoscaler instance groups with optional filters. Returns a summary table of matching groups.',

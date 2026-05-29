@@ -111,3 +111,6 @@ config/*
 scripts/docker-build.sh
 
 .DS_STORE
+
+# MCP local config
+.mcp.json

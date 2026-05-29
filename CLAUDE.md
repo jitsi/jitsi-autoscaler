@@ -98,6 +98,9 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json` or project `.cla
 | `update_scaling_options` | Update scaling thresholds/quantities |
 | `update_desired_count` | Update min/max/desired counts |
 | `update_scaling_activities` | Toggle autoscale/launch/scheduler/etc. |
+| `add_scheduled_scaling_period` | Add a new scheduled scaling period (creates config if needed) |
+| `update_scheduled_scaling` | Update scaling overrides of an existing scheduled period |
+| `remove_scheduled_scaling_period` | Remove a scheduled scaling period by name |
 | `delete_group` | Delete an instance group |
 
 ### Available Prompts

@@ -4,6 +4,7 @@
 import assert from 'node:assert';
 import test, { afterEach, beforeEach, describe, mock } from 'node:test';
 import { AutoscalerApiClient } from '../mcp/api_client';
+import { InstanceGroup, ScheduledScalingConfig } from '../instance_store';
 
 // Mock fetch globally
 let fetchMock;
@@ -95,7 +96,7 @@ describe('AutoscalerApiClient', () => {
             global.fetch = fetchMock;
 
             const group = { name: 'new-group', type: 'JVB' };
-            await client.upsertGroup('new-group', group as any);
+            await client.upsertGroup('new-group', group as unknown as InstanceGroup);
 
             const [url, opts] = fetchMock.mock.calls[0].arguments;
             assert.strictEqual(url, 'http://localhost:3000/groups/new-group');
@@ -243,7 +244,7 @@ describe('AutoscalerApiClient', () => {
                     },
                 ],
             };
-            await client.updateScheduledScaling('g1', config as any);
+            await client.updateScheduledScaling('g1', config as unknown as ScheduledScalingConfig);
 
             const [url, opts] = fetchMock.mock.calls[0].arguments;
             assert.strictEqual(url, 'http://localhost:3000/groups/g1/scheduled-scaling');

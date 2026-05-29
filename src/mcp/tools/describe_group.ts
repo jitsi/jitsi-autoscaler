@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerDescribeGroup(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-ignore - MCP SDK zod type inference may exceed TypeScript recursion limit
     server.tool(
         'describe_group',
         'Get detailed configuration of a specific autoscaler instance group, including scaling options, feature flags, tags, and scheduled scaling.',

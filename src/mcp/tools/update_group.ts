@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 
 export function registerUpdateGroup(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-ignore - MCP SDK zod type inference may exceed TypeScript recursion limit
+    // @ts-expect-error - MCP SDK zod type inference may exceed TypeScript recursion limit
     server.tool(
         'update_group',
         'Update an existing instance group. Fetches the current group, merges the provided fields, and saves the result. Only specified fields are changed.',

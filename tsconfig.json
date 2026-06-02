@@ -5,9 +5,11 @@
         "allowSyntheticDefaultImports": true,
         "target": "es2020",
         "noImplicitAny": true,
+        "skipLibCheck": true,
         "moduleResolution": "node",
         "sourceMap": true,
         "outDir": "dist",
+        "rootDir": "./src",
         "baseUrl": ".",
         "paths": {
             "*": [

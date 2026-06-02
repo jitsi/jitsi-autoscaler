@@ -34,6 +34,16 @@ export function registerUpdateGroup(server: McpServer, client: AutoscalerApiClie
             scalePeriod: z.number().optional().describe('Measurement period in seconds'),
             scaleUpPeriodsCount: z.number().optional().describe('Periods above threshold to scale up'),
             scaleDownPeriodsCount: z.number().optional().describe('Periods below threshold to scale down'),
+            reservationScaleUpThreshold: z
+                .number()
+                .int()
+                .min(1)
+                .optional()
+                .describe('selenium-grid only: waiting reserved nodes before reservations raise the desired count'),
+            seleniumGridUrl: z
+                .string()
+                .optional()
+                .describe('selenium-grid only: URL of the Selenium Grid /status endpoint'),
             tags: z.record(z.string()).optional().describe('Tags (replaces all tags)'),
         },
         async (params) => {
@@ -65,6 +75,7 @@ export function registerUpdateGroup(server: McpServer, client: AutoscalerApiClie
                     merged.enableReconfiguration = params.enableReconfiguration;
                 if (params.gracePeriodTTLSec !== undefined) merged.gracePeriodTTLSec = params.gracePeriodTTLSec;
                 if (params.protectedTTLSec !== undefined) merged.protectedTTLSec = params.protectedTTLSec;
+                if (params.seleniumGridUrl !== undefined) merged.seleniumGridUrl = params.seleniumGridUrl;
                 if (params.tags !== undefined) merged.tags = params.tags;
 
                 // Merge scaling options
@@ -79,6 +90,8 @@ export function registerUpdateGroup(server: McpServer, client: AutoscalerApiClie
                 if (params.scalePeriod !== undefined) so.scalePeriod = params.scalePeriod;
                 if (params.scaleUpPeriodsCount !== undefined) so.scaleUpPeriodsCount = params.scaleUpPeriodsCount;
                 if (params.scaleDownPeriodsCount !== undefined) so.scaleDownPeriodsCount = params.scaleDownPeriodsCount;
+                if (params.reservationScaleUpThreshold !== undefined)
+                    so.reservationScaleUpThreshold = params.reservationScaleUpThreshold;
                 merged.scalingOptions = so;
 
                 await c.upsertGroup(params.name, merged);

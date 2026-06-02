@@ -68,7 +68,7 @@
     "watch-node": "nodemon -r ./src/polyfills.js dist/app.js",
     "watch-test": "glob -c \"node --test --watch --require ts-node/register\" \"src/test/**/*.ts\"",
     "lint": "npx eslint . --ext .ts,.tsx --fix",
-    "build": "npm run lint && tsc",
+    "build": "npm run lint && NODE_OPTIONS='--max-old-space-size=8192' tsc",
     "start-debug": "node --inspect=0.0.0.0:9229 -r ./src/polyfills.js dist/app.js",
     "start-profile": "node --prof -r ./src/polyfills.js dist/app.js",
     "start": "node -r ./src/polyfills.js dist/app.js",

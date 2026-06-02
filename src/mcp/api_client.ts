@@ -1,6 +1,16 @@
 import { InstanceGroup, ScheduledScalingConfig } from '../instance_store';
 import { GroupReport } from '../group_report';
 import { GroupAuditResponse, InstanceAuditResponse } from '../audit';
+import { Reservation, ReservationStatus } from '../reservation';
+
+/**
+ * A reservation as returned by the GET single/list endpoints, which annotate
+ * pending reservations with their place in line.
+ */
+export interface ReservationWithQueue extends Reservation {
+    queuePosition?: number | null;
+    aheadNodeCount?: number | null;
+}
 
 export class AutoscalerApiClient {
     private baseUrl: string;
@@ -111,6 +121,7 @@ export class AutoscalerApiClient {
             scalePeriod?: number;
             scaleUpPeriodsCount?: number;
             scaleDownPeriodsCount?: number;
+            reservationScaleUpThreshold?: number;
         },
     ): Promise<void> {
         await this.request<void>('PUT', `/groups/${encodeURIComponent(name)}/scaling-options`, options);
@@ -163,5 +174,52 @@ export class AutoscalerApiClient {
 
     async updateScheduledScaling(name: string, config: ScheduledScalingConfig): Promise<void> {
         await this.request<void>('PUT', `/groups/${encodeURIComponent(name)}/scheduled-scaling`, config);
+    }
+
+    // Reservations (selenium-grid groups only)
+
+    async createReservation(name: string, nodeCount: number, ttlSeconds?: number): Promise<Reservation> {
+        const resp = await this.request<{ reservation: Reservation }>(
+            'POST',
+            `/groups/${encodeURIComponent(name)}/reservations`,
+            { nodeCount, ...(ttlSeconds !== undefined && { ttlSeconds }) },
+        );
+        return resp.reservation;
+    }
+
+    async listReservations(name: string, statusFilter?: ReservationStatus[]): Promise<ReservationWithQueue[]> {
+        const params = new URLSearchParams();
+        if (statusFilter && statusFilter.length > 0) {
+            params.set('status', statusFilter.join(','));
+        }
+        const query = params.toString();
+        const path = `/groups/${encodeURIComponent(name)}/reservations${query ? `?${query}` : ''}`;
+        const resp = await this.request<{ reservations: ReservationWithQueue[] }>('GET', path);
+        return resp.reservations;
+    }
+
+    async getReservation(name: string, id: string): Promise<ReservationWithQueue | null> {
+        const resp = await this.requestOrNull<{ reservation: ReservationWithQueue }>(
+            'GET',
+            `/groups/${encodeURIComponent(name)}/reservations/${encodeURIComponent(id)}`,
+        );
+        return resp?.reservation ?? null;
+    }
+
+    async extendReservation(name: string, id: string, ttlSeconds: number): Promise<Reservation> {
+        const resp = await this.request<{ reservation: Reservation }>(
+            'PUT',
+            `/groups/${encodeURIComponent(name)}/reservations/${encodeURIComponent(id)}`,
+            { ttlSeconds },
+        );
+        return resp.reservation;
+    }
+
+    async cancelReservation(name: string, id: string): Promise<Reservation> {
+        const resp = await this.request<{ reservation: Reservation }>(
+            'DELETE',
+            `/groups/${encodeURIComponent(name)}/reservations/${encodeURIComponent(id)}`,
+        );
+        return resp.reservation;
     }
 }

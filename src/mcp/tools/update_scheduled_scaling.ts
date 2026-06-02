@@ -28,6 +28,14 @@ export function registerUpdateScheduledScaling(server: McpServer, client: Autosc
             scaleDownThreshold: z.number().optional().describe('Override scale down threshold during this period'),
             scaleUpQuantity: z.number().optional().describe('Override scale up quantity during this period'),
             scaleDownQuantity: z.number().optional().describe('Override scale down quantity during this period'),
+            reservationScaleUpThreshold: z
+                .number()
+                .int()
+                .min(1)
+                .optional()
+                .describe(
+                    'selenium-grid only: override the waiting-reserved-nodes threshold for scale-up during this period',
+                ),
         },
         async (params) => {
             try {
@@ -75,6 +83,8 @@ export function registerUpdateScheduledScaling(server: McpServer, client: Autosc
                     if (params.scaleDownThreshold !== undefined) so.scaleDownThreshold = params.scaleDownThreshold;
                     if (params.scaleUpQuantity !== undefined) so.scaleUpQuantity = params.scaleUpQuantity;
                     if (params.scaleDownQuantity !== undefined) so.scaleDownQuantity = params.scaleDownQuantity;
+                    if (params.reservationScaleUpThreshold !== undefined)
+                        so.reservationScaleUpThreshold = params.reservationScaleUpThreshold;
                 }
 
                 await c.updateScheduledScaling(params.name, config);

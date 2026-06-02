@@ -15,6 +15,13 @@ import { registerDeleteGroup } from './delete_group';
 import { registerUpdateScheduledScaling } from './update_scheduled_scaling';
 import { registerAddScheduledScalingPeriod } from './add_scheduled_scaling_period';
 import { registerRemoveScheduledScalingPeriod } from './remove_scheduled_scaling_period';
+import {
+    registerCreateReservation,
+    registerListReservations,
+    registerGetReservation,
+    registerExtendReservation,
+    registerCancelReservation,
+} from './reservations';
 
 export function registerAllTools(server: McpServer, client: AutoscalerApiClient): void {
     registerSearchGroups(server, client);
@@ -30,4 +37,9 @@ export function registerAllTools(server: McpServer, client: AutoscalerApiClient)
     registerAddScheduledScalingPeriod(server, client);
     registerRemoveScheduledScalingPeriod(server, client);
     registerDeleteGroup(server, client);
+    registerCreateReservation(server, client);
+    registerListReservations(server, client);
+    registerGetReservation(server, client);
+    registerExtendReservation(server, client);
+    registerCancelReservation(server, client);
 }

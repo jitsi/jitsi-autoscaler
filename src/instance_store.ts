@@ -56,6 +56,10 @@ export interface ScalingOptions {
     scaleUpPeriodsCount: number;
     scaleDownPeriodsCount: number;
     cloudGuardGraceCount?: number;
+    // selenium-grid only: minimum number of waiting reserved nodes (reserved capacity
+    // not yet covered by desiredCount) required before reservations raise desiredCount.
+    // Defaults to 1 when unset (scale up for the first waiting node).
+    reservationScaleUpThreshold?: number;
 }
 
 export interface InstanceGroupTags {

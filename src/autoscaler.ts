@@ -359,9 +359,22 @@ export default class AutoscaleProcessor {
             group.scalingOptions.minDesired,
         );
 
-        // Step 3: Compute reservation floor
+        // Step 3: Compute reservation floor, gated by the scale-up threshold.
+        // The floor is only allowed to grow once the number of waiting reserved nodes
+        // (reserved capacity not yet covered by desiredCount) reaches the threshold.
+        // It is always allowed to shrink toward the reserved count.
         const reservedNodeCount = await this.reservationManager.getActiveReservedNodeCount(ctx, group.name);
-        const reservationFloor = Math.max(group.scalingOptions.minDesired, reservedNodeCount);
+        const baseFloor = group.scalingOptions.minDesired;
+        const threshold = group.scalingOptions.reservationScaleUpThreshold ?? 1;
+        const uncovered = reservedNodeCount - group.scalingOptions.desiredCount;
+        let reservationFloor: number;
+        if (uncovered >= threshold) {
+            // Enough waiting demand to grow -- provision all reserved capacity.
+            reservationFloor = Math.max(baseFloor, reservedNodeCount);
+        } else {
+            // Not enough waiting to grow, but allow the floor to shrink toward reserved.
+            reservationFloor = Math.max(baseFloor, Math.min(reservedNodeCount, group.scalingOptions.desiredCount));
+        }
 
         // Step 4: Fetch grid queue size for organic scaling signal
         let queueSize = 0;

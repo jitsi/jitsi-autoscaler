@@ -999,4 +999,96 @@ describe('AutoscaleProcessor', () => {
             assert.strictEqual(result, true);
         });
     });
+
+    describe('processAutoscalingByGroup seleniumGridReservationTests', () => {
+        const reservationManager = {
+            expireStaleReservations: mock.fn(() => Promise.resolve([])),
+            promotePendingReservations: mock.fn(() => Promise.resolve([])),
+            getActiveReservedNodeCount: mock.fn(() => Promise.resolve(0)),
+            isScaleDownGraceActive: mock.fn(() => Promise.resolve(false)),
+            checkAndFulfillReservations: mock.fn(() => Promise.resolve()),
+        };
+        const seleniumGridClient = {
+            getGridStatus: mock.fn(() =>
+                Promise.resolve({ sessionQueueSize: 0, activeSessions: 0, maxSessions: 0, nodeCount: 0 }),
+            ),
+        };
+
+        const gridProcessor = new AutoscaleProcessor({
+            instanceGroupManager,
+            lockManager,
+            instanceTracker,
+            audit,
+            cloudManager,
+            cloudRetryStrategy,
+            cloudGuardEnabled: false,
+            reservationManager,
+            seleniumGridClient,
+        });
+
+        function gridGroup(overrides) {
+            return {
+                ...groupDetails,
+                type: 'selenium-grid',
+                enableCloudGuard: false,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    scaleUpThreshold: 1,
+                    scaleDownThreshold: 1,
+                    ...overrides,
+                },
+            };
+        }
+
+        function inventory(n) {
+            return Array.from({ length: n }, () => ({}));
+        }
+
+        test('weekend: a single waiting reservation wakes one node from 0 (threshold=1)', async () => {
+            const group = gridGroup({ minDesired: 0, maxDesired: 10, desiredCount: 0, reservationScaleUpThreshold: 1 });
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => group);
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory(0));
+            reservationManager.getActiveReservedNodeCount.mock.mockImplementationOnce(() => Promise.resolve(1));
+
+            await gridProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.strictEqual(group.scalingOptions.desiredCount, 1);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
+        });
+
+        test('weekday: a single overflow reservation does not grow the grid (threshold=2)', async () => {
+            const group = gridGroup({ minDesired: 5, maxDesired: 10, desiredCount: 5, reservationScaleUpThreshold: 2 });
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => group);
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory(5));
+            reservationManager.getActiveReservedNodeCount.mock.mockImplementationOnce(() => Promise.resolve(6));
+
+            await gridProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.strictEqual(group.scalingOptions.desiredCount, 5);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+        });
+
+        test('weekday: a second waiting reservation grows to cover all reserved (threshold=2)', async () => {
+            const group = gridGroup({ minDesired: 5, maxDesired: 10, desiredCount: 5, reservationScaleUpThreshold: 2 });
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => group);
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory(5));
+            reservationManager.getActiveReservedNodeCount.mock.mockImplementationOnce(() => Promise.resolve(7));
+
+            await gridProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.strictEqual(group.scalingOptions.desiredCount, 7);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
+        });
+
+        test('threshold defaults to 1 when unset', async () => {
+            const group = gridGroup({ minDesired: 0, maxDesired: 10, desiredCount: 0 });
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => group);
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => inventory(0));
+            reservationManager.getActiveReservedNodeCount.mock.mockImplementationOnce(() => Promise.resolve(1));
+
+            await gridProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.strictEqual(group.scalingOptions.desiredCount, 1);
+        });
+    });
 });

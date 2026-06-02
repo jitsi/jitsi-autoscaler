@@ -87,6 +87,36 @@ export default class ReservationManager {
         return reservations;
     }
 
+    /**
+     * Return the 1-based place in line for a pending reservation, plus the number of
+     * reserved nodes ahead of it (promotion is capacity-based, not count-based).
+     * Returns null for reservations that are not currently pending.
+     */
+    async getQueuePosition(ctx: Context, id: string): Promise<{ position: number; aheadNodeCount: number } | null> {
+        const reservation = await this.reservationStore.getReservation(ctx, id);
+        if (!reservation || reservation.status !== ReservationStatus.Pending) {
+            return null;
+        }
+        const pending = await this.getPendingReservationsFIFO(ctx, reservation.groupName);
+        const index = pending.findIndex((r) => r.id === id);
+        if (index < 0) {
+            return null;
+        }
+        const aheadNodeCount = pending.slice(0, index).reduce((sum, r) => sum + r.nodeCount, 0);
+        return { position: index + 1, aheadNodeCount };
+    }
+
+    /**
+     * List a group's pending reservations sorted FIFO by createdAt -- the order in
+     * which they will be promoted as capacity frees up.
+     */
+    async getPendingReservationsFIFO(ctx: Context, groupName: string): Promise<Reservation[]> {
+        const reservations = await this.reservationStore.listReservations(ctx, groupName);
+        return reservations
+            .filter((r) => r.status === ReservationStatus.Pending)
+            .sort((a, b) => a.createdAt - b.createdAt);
+    }
+
     async extendReservation(ctx: Context, id: string, ttlSeconds: number): Promise<Reservation | null> {
         const reservation = await this.reservationStore.getReservation(ctx, id);
         if (!reservation) {

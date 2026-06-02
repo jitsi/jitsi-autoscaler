@@ -53,6 +53,7 @@ interface InstanceGroupScalingOptionsRequest {
     scaleDownPeriodsCount?: number;
     gracePeriodTTLSec?: number;
     cloudGuardGraceCount?: number;
+    reservationScaleUpThreshold?: number;
 }
 export interface FullScalingOptions {
     minDesired: number;
@@ -588,6 +589,10 @@ class Handlers {
                 if (scalingOptionsRequest.cloudGuardGraceCount != null) {
                     instanceGroup.scalingOptions.cloudGuardGraceCount = scalingOptionsRequest.cloudGuardGraceCount;
                 }
+                if (scalingOptionsRequest.reservationScaleUpThreshold != null) {
+                    instanceGroup.scalingOptions.reservationScaleUpThreshold =
+                        scalingOptionsRequest.reservationScaleUpThreshold;
+                }
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 res.status(200);
                 res.send({ save: 'OK' });
@@ -808,19 +813,25 @@ class Handlers {
                 request.ttlSeconds,
             );
 
-            // If active, bump desiredCount
+            // If active, bump desiredCount -- but only once the waiting reserved demand
+            // reaches the scale-up threshold (mirrors the autoscaler floor gating).
             if (reservation.status === ReservationStatus.Active) {
                 const reservedCount = await this.reservationManager.getActiveReservedNodeCount(
                     req.context,
                     lockedGroup.name,
                 );
-                const newDesired = Math.min(
-                    Math.max(
-                        lockedGroup.scalingOptions.desiredCount,
-                        Math.max(lockedGroup.scalingOptions.minDesired, reservedCount),
-                    ),
-                    lockedGroup.scalingOptions.maxDesired,
-                );
+                const threshold = lockedGroup.scalingOptions.reservationScaleUpThreshold ?? 1;
+                const uncovered = reservedCount - lockedGroup.scalingOptions.desiredCount;
+                const newDesired =
+                    uncovered >= threshold
+                        ? Math.min(
+                              Math.max(
+                                  lockedGroup.scalingOptions.desiredCount,
+                                  Math.max(lockedGroup.scalingOptions.minDesired, reservedCount),
+                              ),
+                              lockedGroup.scalingOptions.maxDesired,
+                          )
+                        : lockedGroup.scalingOptions.desiredCount;
                 if (newDesired !== lockedGroup.scalingOptions.desiredCount) {
                     lockedGroup.scalingOptions.desiredCount = newDesired;
                     await this.instanceGroupManager.upsertInstanceGroup(req.context, lockedGroup);
@@ -844,8 +855,15 @@ class Handlers {
             res.sendStatus(404);
             return;
         }
+        const queue = await this.reservationManager.getQueuePosition(req.context, reservation.id);
         res.status(200);
-        res.send({ reservation });
+        res.send({
+            reservation: {
+                ...reservation,
+                queuePosition: queue?.position ?? null,
+                aheadNodeCount: queue?.aheadNodeCount ?? null,
+            },
+        });
     }
 
     async listReservations(req: Request, res: Response): Promise<void> {
@@ -858,8 +876,27 @@ class Handlers {
         }
 
         const reservations = await this.reservationManager.listReservations(req.context, group.name, statusFilter);
+
+        // Annotate pending reservations with their place in line (FIFO by createdAt) and
+        // the cumulative reserved nodes ahead of them.
+        const pending = await this.reservationManager.getPendingReservationsFIFO(req.context, group.name);
+        const queueById = new Map<string, { position: number; aheadNodeCount: number }>();
+        let aheadNodeCount = 0;
+        pending.forEach((r, idx) => {
+            queueById.set(r.id, { position: idx + 1, aheadNodeCount });
+            aheadNodeCount += r.nodeCount;
+        });
+        const annotated = reservations.map((r) => {
+            const queue = queueById.get(r.id);
+            return {
+                ...r,
+                queuePosition: queue?.position ?? null,
+                aheadNodeCount: queue?.aheadNodeCount ?? null,
+            };
+        });
+
         res.status(200);
-        res.send({ reservations });
+        res.send({ reservations: annotated });
     }
 
     async extendReservation(req: Request, res: Response): Promise<void> {
@@ -908,9 +945,9 @@ class Handlers {
                 req.context,
                 lockedGroup.name,
             );
-            const newDesired = Math.max(
-                lockedGroup.scalingOptions.minDesired,
-                lockedGroup.scalingOptions.minDesired + updatedReservedCount,
+            const newDesired = Math.min(
+                Math.max(lockedGroup.scalingOptions.minDesired, updatedReservedCount),
+                lockedGroup.scalingOptions.maxDesired,
             );
             if (newDesired !== lockedGroup.scalingOptions.desiredCount) {
                 lockedGroup.scalingOptions.desiredCount = newDesired;

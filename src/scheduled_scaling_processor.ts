@@ -135,6 +135,13 @@ export default class ScheduledScalingProcessor {
                         { newOptions },
                     );
                 }
+                if (newOptions.maxDesired === 0) {
+                    ctx.logger.warn(
+                        `[ScheduledScaling] Period "${activePeriod.name}" resolves to maxDesired=0 for group ${groupName} -- ` +
+                            `reservations cannot be satisfied while this period is active`,
+                        { newOptions },
+                    );
+                }
                 group.scheduledScalingActivePeriod = activePeriod.name;
             } else {
                 // Exiting all periods — restore baseline

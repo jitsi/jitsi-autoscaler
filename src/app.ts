@@ -532,6 +532,10 @@ app.put(
     body('scalingOptions.minDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions.maxDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions.desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions.reservationScaleUpThreshold')
+        .optional()
+        .isInt({ min: 1 })
+        .withMessage('Value must be at least 1'),
     body('scalingOptions').custom((value) => {
         if (!validator.groupHasValidDesiredValues(value.minDesired, value.maxDesired, value.desiredCount)) {
             throw new Error('Desired count must be between min and max; min cannot be grater than max');
@@ -590,6 +594,7 @@ app.put(
     body('scalePeriod').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scaleUpPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('reservationScaleUpThreshold').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
     async (req, res, next) => {
         try {
             const errors = validationResult(req);
@@ -649,6 +654,10 @@ app.put(
         .optional()
         .isInt({ min: 0 })
         .withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.reservationScaleUpThreshold')
+        .optional()
+        .isInt({ min: 1 })
+        .withMessage('Value must be at least 1'),
     async (req, res, next) => {
         try {
             const errors = validationResult(req);

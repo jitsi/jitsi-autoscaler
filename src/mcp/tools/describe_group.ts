@@ -62,6 +62,19 @@ export function registerDescribeGroup(server: McpServer, client: AutoscalerApiCl
                 if (group.scalingOptions.cloudGuardGraceCount !== undefined) {
                     lines.push(`- **Cloud Guard Grace Count:** ${group.scalingOptions.cloudGuardGraceCount}`);
                 }
+                if (group.scalingOptions.reservationScaleUpThreshold !== undefined) {
+                    lines.push(
+                        `- **Reservation Scale-Up Threshold:** ${group.scalingOptions.reservationScaleUpThreshold}`,
+                    );
+                }
+
+                if (group.type === 'selenium-grid' || group.seleniumGridUrl) {
+                    lines.push(
+                        '',
+                        '## Selenium Grid',
+                        `- **Grid Status URL:** ${group.seleniumGridUrl || '(not set)'}`,
+                    );
+                }
 
                 lines.push('', '## TTLs', `- **Grace Period TTL:** ${group.gracePeriodTTLSec}s`);
                 lines.push(`- **Protected TTL:** ${group.protectedTTLSec}s`);
@@ -103,6 +116,8 @@ export function registerDescribeGroup(server: McpServer, client: AutoscalerApiCl
                                 optParts.push(`upThreshold=${opts.scaleUpThreshold}`);
                             if (opts.scaleDownThreshold !== undefined)
                                 optParts.push(`downThreshold=${opts.scaleDownThreshold}`);
+                            if (opts.reservationScaleUpThreshold !== undefined)
+                                optParts.push(`reservationScaleUpThreshold=${opts.reservationScaleUpThreshold}`);
                             if (optParts.length > 0) {
                                 lines.push(`- **Scaling Overrides:** ${optParts.join(', ')}`);
                             }

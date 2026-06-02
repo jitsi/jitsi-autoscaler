@@ -19,6 +19,14 @@ export function registerUpdateScalingOptions(server: McpServer, client: Autoscal
             scalePeriod: z.number().optional().describe('Measurement period in seconds'),
             scaleUpPeriodsCount: z.number().optional().describe('Consecutive periods above threshold to scale up'),
             scaleDownPeriodsCount: z.number().optional().describe('Consecutive periods below threshold to scale down'),
+            reservationScaleUpThreshold: z
+                .number()
+                .int()
+                .min(1)
+                .optional()
+                .describe(
+                    'selenium-grid only: minimum number of waiting reserved nodes before reservations raise the desired count',
+                ),
         },
         async ({ base_url, auth_token, name, ...options }) => {
             try {

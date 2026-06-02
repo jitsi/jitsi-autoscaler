@@ -12,7 +12,9 @@ export function registerCreateGroup(server: McpServer, client: AutoscalerApiClie
             base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
             auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Unique name for the instance group'),
-            type: z.string().describe('Instance type (e.g. jibri, sip-jibri, jigasi, JVB, nomad, whisper)'),
+            type: z
+                .string()
+                .describe('Instance type (e.g. jibri, sip-jibri, jigasi, JVB, nomad, whisper, selenium-grid)'),
             region: z.string().describe('Region for the group'),
             environment: z.string().describe('Environment name'),
             cloud: z.string().describe('Cloud provider (e.g. oracle, digitalocean, nomad, custom)'),
@@ -51,6 +53,20 @@ export function registerCreateGroup(server: McpServer, client: AutoscalerApiClie
                 .optional()
                 .default(4)
                 .describe('Consecutive periods below threshold to trigger scale down'),
+            reservationScaleUpThreshold: z
+                .number()
+                .int()
+                .min(1)
+                .optional()
+                .describe(
+                    'selenium-grid only: minimum number of waiting reserved nodes before reservations raise the desired count (default 1)',
+                ),
+            seleniumGridUrl: z
+                .string()
+                .optional()
+                .describe(
+                    'selenium-grid only: URL of the Selenium Grid /status endpoint used for organic queue scaling',
+                ),
             tags: z.record(z.string()).optional().default({}).describe('Key-value tags for the group'),
         },
         async (params) => {
@@ -94,8 +110,12 @@ export function registerCreateGroup(server: McpServer, client: AutoscalerApiClie
                         scalePeriod: params.scalePeriod,
                         scaleUpPeriodsCount: params.scaleUpPeriodsCount,
                         scaleDownPeriodsCount: params.scaleDownPeriodsCount,
+                        ...(params.reservationScaleUpThreshold !== undefined && {
+                            reservationScaleUpThreshold: params.reservationScaleUpThreshold,
+                        }),
                     },
                     tags: params.tags,
+                    ...(params.seleniumGridUrl !== undefined && { seleniumGridUrl: params.seleniumGridUrl }),
                 };
 
                 await client.withOverrides(params.base_url, params.auth_token).upsertGroup(params.name, group);

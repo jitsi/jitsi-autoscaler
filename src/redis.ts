@@ -2,6 +2,8 @@ import { CloudInstance } from './cloud_manager';
 import { Context } from './context';
 import InstanceStore, { InstanceDetails, InstanceGroup, InstanceState } from './instance_store';
 import MetricsStore, { InstanceMetric } from './metrics_store';
+import { Reservation } from './reservation';
+import { ReservationStore } from './reservation_store';
 import Redis from 'ioredis';
 
 export interface RedisMetricsOptions {
@@ -15,7 +17,7 @@ export interface RedisMetricsOptions {
     serviceLevelMetricsTTL: number;
 }
 
-export default class RedisStore implements MetricsStore, InstanceStore {
+export default class RedisStore implements MetricsStore, InstanceStore, ReservationStore {
     private readonly GROUPS_HASH_NAME = 'allgroups';
     private redisClient: Redis;
     private readonly redisScanCount: number;
@@ -568,5 +570,79 @@ export default class RedisStore implements MetricsStore, InstanceStore {
                 }
             });
         });
+    }
+
+    // Reservation store methods
+
+    private reservationKey(id: string): string {
+        return `reservation:${id}`;
+    }
+
+    private reservationGroupSetKey(groupName: string): string {
+        return `reservations:group:${groupName}`;
+    }
+
+    private reservationScaleDownGraceKey(groupName: string): string {
+        return `reservation:scaledown-grace:${groupName}`;
+    }
+
+    async saveReservation(ctx: Context, reservation: Reservation): Promise<void> {
+        const key = this.reservationKey(reservation.id);
+        const ttl = Math.max(Math.ceil((reservation.expiresAt - Date.now()) / 1000) + 3600, 3600);
+        await this.redisClient.set(key, JSON.stringify(reservation), 'EX', ttl);
+        await this.redisClient.sadd(this.reservationGroupSetKey(reservation.groupName), reservation.id);
+        await this.extendTTLForKey(this.reservationGroupSetKey(reservation.groupName), this.groupRelatedDataTTL);
+        ctx.logger.debug('Saved reservation', { reservationId: reservation.id });
+    }
+
+    async getReservation(_ctx: Context, id: string): Promise<Reservation | null> {
+        const result = await this.redisClient.get(this.reservationKey(id));
+        if (result) {
+            return JSON.parse(result);
+        }
+        return null;
+    }
+
+    async listReservations(ctx: Context, groupName: string): Promise<Reservation[]> {
+        const ids = await this.redisClient.smembers(this.reservationGroupSetKey(groupName));
+        if (ids.length === 0) {
+            return [];
+        }
+        const pipeline = this.redisClient.pipeline();
+        for (const id of ids) {
+            pipeline.get(this.reservationKey(id));
+        }
+        const results = await pipeline.exec();
+        const reservations: Reservation[] = [];
+        const expiredIds: string[] = [];
+        if (results) {
+            for (let i = 0; i < results.length; i++) {
+                const value = results[i][1];
+                if (value) {
+                    reservations.push(JSON.parse(value as string));
+                } else {
+                    expiredIds.push(ids[i]);
+                }
+            }
+        }
+        if (expiredIds.length > 0) {
+            await this.redisClient.srem(this.reservationGroupSetKey(groupName), ...expiredIds);
+            ctx.logger.debug('Cleaned up expired reservation IDs from set', { groupName, count: expiredIds.length });
+        }
+        return reservations;
+    }
+
+    async deleteReservation(_ctx: Context, id: string, groupName: string): Promise<void> {
+        await this.redisClient.del(this.reservationKey(id));
+        await this.redisClient.srem(this.reservationGroupSetKey(groupName), id);
+    }
+
+    async setScaleDownGrace(_ctx: Context, groupName: string, ttlSec: number): Promise<void> {
+        await this.redisClient.set(this.reservationScaleDownGraceKey(groupName), 'active', 'EX', ttlSec);
+    }
+
+    async isScaleDownGraceActive(_ctx: Context, groupName: string): Promise<boolean> {
+        const result = await this.redisClient.get(this.reservationScaleDownGraceKey(groupName));
+        return result !== null;
     }
 }

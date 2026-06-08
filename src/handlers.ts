@@ -815,7 +815,11 @@ class Handlers {
 
             // If active, bump desiredCount -- but only once the waiting reserved demand
             // reaches the scale-up threshold (mirrors the autoscaler floor gating).
-            if (reservation.status === ReservationStatus.Active) {
+            // When autoscaling is disabled the group only takes and holds reservations:
+            // it records them (still respecting the active/pending capacity math) but does
+            // not drive the desired count. The held reservations are processed by the
+            // autoscaler once autoscaling is turned back on.
+            if (lockedGroup.enableAutoScale && reservation.status === ReservationStatus.Active) {
                 const reservedCount = await this.reservationManager.getActiveReservedNodeCount(
                     req.context,
                     lockedGroup.name,
@@ -850,7 +854,11 @@ class Handlers {
         const group = await this.getSeleniumGridGroup(req, res);
         if (!group) return;
 
-        const reservation = await this.reservationManager.getReservation(req.context, req.params.id);
+        const reservation = await this.reservationManager.getReservation(
+            req.context,
+            req.params.id,
+            group.enableAutoScale,
+        );
         if (!reservation || reservation.groupName !== group.name) {
             res.sendStatus(404);
             return;
@@ -930,28 +938,33 @@ class Handlers {
                 return;
             }
 
-            // Recalculate desired count
+            // Recalculate desired count -- but only when autoscaling is enabled. While the
+            // group is in "take and hold" mode (autoscaling off) cancelling a reservation
+            // just releases the held capacity; promotion and desired-count adjustments are
+            // deferred to the autoscaler once autoscaling is turned back on.
             const lockedGroup = await this.instanceGroupManager.getInstanceGroup(req.context, req.params.name);
 
-            // Promote any pending reservations now that capacity may be free
-            await this.reservationManager.promotePendingReservations(
-                req.context,
-                lockedGroup.name,
-                lockedGroup.scalingOptions.maxDesired,
-                lockedGroup.scalingOptions.minDesired,
-            );
+            if (lockedGroup.enableAutoScale) {
+                // Promote any pending reservations now that capacity may be free
+                await this.reservationManager.promotePendingReservations(
+                    req.context,
+                    lockedGroup.name,
+                    lockedGroup.scalingOptions.maxDesired,
+                    lockedGroup.scalingOptions.minDesired,
+                );
 
-            const updatedReservedCount = await this.reservationManager.getActiveReservedNodeCount(
-                req.context,
-                lockedGroup.name,
-            );
-            const newDesired = Math.min(
-                Math.max(lockedGroup.scalingOptions.minDesired, updatedReservedCount),
-                lockedGroup.scalingOptions.maxDesired,
-            );
-            if (newDesired !== lockedGroup.scalingOptions.desiredCount) {
-                lockedGroup.scalingOptions.desiredCount = newDesired;
-                await this.instanceGroupManager.upsertInstanceGroup(req.context, lockedGroup);
+                const updatedReservedCount = await this.reservationManager.getActiveReservedNodeCount(
+                    req.context,
+                    lockedGroup.name,
+                );
+                const newDesired = Math.min(
+                    Math.max(lockedGroup.scalingOptions.minDesired, updatedReservedCount),
+                    lockedGroup.scalingOptions.maxDesired,
+                );
+                if (newDesired !== lockedGroup.scalingOptions.desiredCount) {
+                    lockedGroup.scalingOptions.desiredCount = newDesired;
+                    await this.instanceGroupManager.upsertInstanceGroup(req.context, lockedGroup);
+                }
             }
 
             res.status(200);

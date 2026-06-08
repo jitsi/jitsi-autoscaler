@@ -59,7 +59,12 @@ export default class ReservationManager {
         return reservation;
     }
 
-    async getReservation(ctx: Context, id: string): Promise<Reservation | null> {
+    /**
+     * Fetch a reservation by id. When processingEnabled is false (the owning group has
+     * autoscaling turned off, i.e. "take and hold" mode) the reservation is held
+     * indefinitely and is never lazily expired, even past its TTL.
+     */
+    async getReservation(ctx: Context, id: string, processingEnabled = true): Promise<Reservation | null> {
         const reservation = await this.reservationStore.getReservation(ctx, id);
         if (!reservation) {
             return null;
@@ -67,7 +72,7 @@ export default class ReservationManager {
         if (this.isTerminal(reservation.status)) {
             return reservation;
         }
-        if (reservation.expiresAt < Date.now()) {
+        if (processingEnabled && reservation.expiresAt < Date.now()) {
             reservation.status = ReservationStatus.Expired;
             await this.reservationStore.saveReservation(ctx, reservation);
             ctx.logger.info(`Lazily expired reservation ${reservation.id}`);

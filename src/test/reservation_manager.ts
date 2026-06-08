@@ -128,6 +128,15 @@ describe('ReservationManager', () => {
             assert.strictEqual(result.status, ReservationStatus.Active);
             assert.strictEqual(result.id, reservation.id);
         });
+
+        test('holds a past-due reservation indefinitely when processing is disabled', async () => {
+            const reservation = await manager.createReservation(context, 'grid-group', 1, 10, 2, 1);
+            // Past-due, but the owning group has autoscaling off ("take and hold" mode).
+            savedReservations[reservation.id].expiresAt = Date.now() - 1000;
+
+            const result = await manager.getReservation(context, reservation.id, false);
+            assert.strictEqual(result.status, ReservationStatus.Active);
+        });
     });
 
     describe('extendReservation', () => {

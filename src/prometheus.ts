@@ -4,6 +4,12 @@ import { PrometheusDriver, QueryResult } from 'prometheus-query';
 import MetricsStore, { InstanceMetric } from './metrics_store';
 import { Context } from './context';
 
+// Escape a value for safe interpolation into a PromQL label matcher (e.g. group="...").
+// PromQL string literals require backslash, double-quote and newline to be escaped.
+export function escapeLabelValue(v: string): string {
+    return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+}
+
 export interface PromLabels {
     [key: string]: string;
 }
@@ -101,8 +107,11 @@ export default class PrometheusClient implements MetricsStore {
         }
     }
 
-    public async prometheusRangeQuery(ctx: Context, query: string): Promise<QueryResult> {
-        const start = new Date().getTime() - 1 * 60 * 60 * 1000;
+    public async prometheusRangeQuery(ctx: Context, query: string, windowSeconds?: number): Promise<QueryResult> {
+        // Size the lookback to the caller's window, never shorter than 1h, so long scaling windows
+        // (scalePeriod * period count > 3600s) are not silently truncated.
+        const windowMs = Math.max((windowSeconds ?? 0) * 1000, 60 * 60 * 1000);
+        const start = new Date().getTime() - windowMs;
         const end = new Date();
         const step = 60; // 1 point every minute
         try {
@@ -114,8 +123,11 @@ export default class PrometheusClient implements MetricsStore {
 
             return res;
         } catch (err) {
+            // Rethrow so a Prometheus outage surfaces as a store-level failure (matching Redis mode)
+            // rather than reading as "no stress metrics" and silently stalling autoscaling decisions.
             promQueryErrors.inc();
             ctx.logger.error('Error querying Prometheus:', { query, err });
+            throw err;
         }
     }
 
@@ -140,23 +152,20 @@ export default class PrometheusClient implements MetricsStore {
         return false;
     }
 
-    async fetchInstanceMetrics(ctx: Context, group: string): Promise<InstanceMetric[]> {
-        const query = `autoscaler_instance_stress_level{group="${group}"}`;
+    async fetchInstanceMetrics(ctx: Context, group: string, windowSeconds?: number): Promise<InstanceMetric[]> {
+        const query = `autoscaler_instance_stress_level{group="${escapeLabelValue(group)}"}`;
         const metricItems: InstanceMetric[] = [];
-        try {
-            const res = await this.prometheusRangeQuery(ctx, query);
-            res.result.forEach((promItem) => {
-                promItem.values.forEach((v: PromQueryValue) => {
-                    metricItems.push(<InstanceMetric>{
-                        value: v.value,
-                        timestamp: new Date(v.time).getTime(),
-                        instanceId: promItem.metric.labels.instance,
-                    });
+        // Let query errors propagate: a Prometheus outage must fail the cycle, not read as "no metrics".
+        const res = await this.prometheusRangeQuery(ctx, query, windowSeconds);
+        res.result.forEach((promItem) => {
+            promItem.values.forEach((v: PromQueryValue) => {
+                metricItems.push(<InstanceMetric>{
+                    value: v.value,
+                    timestamp: new Date(v.time).getTime(),
+                    instanceId: promItem.metric.labels.instance,
                 });
             });
-        } catch (err) {
-            ctx.logger.error('Error fetching instance metrics:', { group, err });
-        }
+        });
         return metricItems;
     }
 

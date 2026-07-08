@@ -8,7 +8,10 @@ export interface InstanceMetric {
 
 interface MetricsStore {
     fetchInstanceMetrics: {
-        (ctx: Context, group: string): Promise<InstanceMetric[]>;
+        // windowSeconds is the lookback window the caller needs (scalePeriod * max period count).
+        // The Redis implementation ignores it (it stores/cleans by metricTTL); Prometheus uses it to
+        // size the range query so long scaling windows are not silently truncated.
+        (ctx: Context, group: string, windowSeconds?: number): Promise<InstanceMetric[]>;
     };
     writeInstanceMetric: {
         (ctx: Context, group: string, item: InstanceMetric): Promise<boolean>;

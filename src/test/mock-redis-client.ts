@@ -156,6 +156,42 @@ export class MockRedisClient {
         return Promise.resolve(['0', values.filter((v) => v !== undefined)]); // Return cursor '0' to indicate completion
     }
 
+    // Set operations
+    async sadd(key: string, ...members: string[]): Promise<number> {
+        if (!this.sets.has(key)) {
+            this.sets.set(key, new Set());
+        }
+        let added = 0;
+        for (const member of members) {
+            if (!this.sets.get(key)!.has(member)) {
+                this.sets.get(key)!.add(member);
+                added++;
+            }
+        }
+        return added;
+    }
+
+    async smembers(key: string): Promise<string[]> {
+        this.checkTTL(key);
+        if (!this.sets.has(key)) {
+            return [];
+        }
+        return Array.from(this.sets.get(key)!);
+    }
+
+    async srem(key: string, ...members: string[]): Promise<number> {
+        if (!this.sets.has(key)) {
+            return 0;
+        }
+        let removed = 0;
+        for (const member of members) {
+            if (this.sets.get(key)!.delete(member)) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     // Sorted set operations
     async zadd(key: string, score: number, member: string): Promise<number> {
         if (!this.sortedSets.has(key)) {
@@ -283,8 +319,6 @@ export class MockRedisPipeline {
     private commands: Array<{
         command: string;
         args: any[];
-        resolve: (result: any) => void;
-        reject: (error: Error) => void;
     }> = [];
 
     private redisClient: MockRedisClient;
@@ -293,25 +327,29 @@ export class MockRedisPipeline {
         this.redisClient = redisClient;
     }
 
-    // Key operations
-    get(key: string) {
+    // Key operations - chainable like ioredis pipelines
+    get(key: string): this {
         return this.addCommand('get', [key]);
     }
 
-    set(key: string, value: string, expiryMode?: string, time?: number) {
+    set(key: string, value: string, expiryMode?: string, time?: number): this {
         return this.addCommand('set', [key, value, expiryMode, time]);
     }
 
+    del(key: string): this {
+        return this.addCommand('del', [key]);
+    }
+
     // Hash operations
-    hget(hash: string, field: string) {
+    hget(hash: string, field: string): this {
         return this.addCommand('hget', [hash, field]);
     }
 
-    hset(hash: string, field: string, value: string) {
+    hset(hash: string, field: string, value: string): this {
         return this.addCommand('hset', [hash, field, value]);
     }
 
-    hdel(hash: string, field: string) {
+    hdel(hash: string, field: string): this {
         return this.addCommand('hdel', [hash, field]);
     }
 
@@ -329,6 +367,9 @@ export class MockRedisPipeline {
                     case 'set':
                         result = await this.redisClient.set(cmd.args[0], cmd.args[1], cmd.args[2], cmd.args[3]);
                         break;
+                    case 'del':
+                        result = await this.redisClient.del(cmd.args[0]);
+                        break;
                     case 'hget':
                         result = await this.redisClient.hget(cmd.args[0], cmd.args[1]);
                         break;
@@ -342,10 +383,8 @@ export class MockRedisPipeline {
                         throw new Error(`Unsupported command: ${cmd.command}`);
                 }
                 results.push([null, result]);
-                cmd.resolve(result);
             } catch (error) {
                 results.push([error as Error, null]);
-                cmd.reject(error as Error);
             }
         }
 
@@ -355,9 +394,8 @@ export class MockRedisPipeline {
         return results;
     }
 
-    private addCommand(command: string, args: any[]) {
-        return new Promise<any>((resolve, reject) => {
-            this.commands.push({ command, args, resolve, reject });
-        });
+    private addCommand(command: string, args: any[]): this {
+        this.commands.push({ command, args });
+        return this;
     }
 }

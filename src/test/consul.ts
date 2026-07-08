@@ -7,6 +7,7 @@ import test, { beforeEach, afterEach, describe, mock } from 'node:test';
 import ConsulClient, { ConsulOptions } from '../consul';
 import { ConsulLockManager } from '../lock_manager';
 import Consul from 'consul';
+import { MockConsulClient } from './mock-consul-client';
 
 const asLogger = new AutoscalerLogger({ logLevel: 'debug' });
 const logger = asLogger.createLogger('debug');
@@ -165,5 +166,137 @@ describe('ConsulClient', () => {
             const res = await client.getInstanceGroup(ctx, group.name);
             assert.strictEqual(res, undefined);
         });
+    });
+});
+
+describe('ConsulStore data operations (in-memory client)', () => {
+    let mockConsul: MockConsulClient;
+    let store: ConsulClient;
+
+    beforeEach(() => {
+        mockConsul = new MockConsulClient();
+        store = new ConsulClient({
+            client: mockConsul,
+            idleTTL: 60,
+            provisioningTTL: 60,
+            shutdownStatusTTL: 60,
+        });
+    });
+
+    afterEach(() => {
+        mockConsul.clearAll();
+    });
+
+    // C1: checkValue must await fetchTTLValue and reflect presence/expiry
+    describe('checkValue (C1)', () => {
+        test('returns false for a missing key', async () => {
+            assert.strictEqual(await store.checkValue(ctx, 'missing'), false);
+        });
+
+        test('returns true for an unexpired value', async () => {
+            await store.setValue(ctx, 'k', 'v', 60);
+            assert.strictEqual(await store.checkValue(ctx, 'k'), true);
+        });
+
+        test('returns false for an expired value', async () => {
+            await store.setValue(ctx, 'k', 'v', -1);
+            assert.strictEqual(await store.checkValue(ctx, 'k'), false);
+        });
+    });
+
+    // C2: group definitions and per-group data must live in separate trees
+    test('group listings exclude per-group data (C2)', async () => {
+        await store.upsertInstanceGroup(ctx, group);
+        await store.saveInstanceStatus(ctx, group.name, {
+            instanceId: 'i-1',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now(),
+            metadata: { group: group.name },
+        });
+        await store.setShutdownStatus(ctx, [{ instanceId: 'i-1', group: group.name }], 'shutdown', 60);
+
+        const groups = await store.getAllInstanceGroups(ctx);
+        assert.strictEqual(groups.length, 1, 'expect exactly one group, not phantom data groups');
+        assert.strictEqual(groups[0].name, group.name);
+
+        const names = await store.getAllInstanceGroupNames(ctx);
+        assert.deepStrictEqual(names, [group.name]);
+    });
+
+    // C3: reconfigure write/read/delete paths must agree
+    test('reconfigure date set/get/unset are consistent (C3)', async () => {
+        const date = new Date().toISOString();
+        await store.setReconfigureDate(ctx, [{ instanceId: 'i-1', group: group.name }], date, 60);
+
+        assert.strictEqual(await store.getReconfigureDate(ctx, group.name, 'i-1'), date);
+        assert.deepStrictEqual(await store.getReconfigureDates(ctx, group.name, ['i-1']), [date]);
+
+        await store.unsetReconfigureDate(ctx, 'i-1', group.name);
+        assert.strictEqual(await store.getReconfigureDate(ctx, group.name, 'i-1'), '');
+    });
+
+    test('expired reconfigure date reads as empty (C3)', async () => {
+        await store.writeTTLValue(ctx, `autoscaler/group-data/${group.name}/reconfigure/i-1`, 'old-date', -1);
+        assert.strictEqual(await store.getReconfigureDate(ctx, group.name, 'i-1'), '');
+    });
+
+    // C4: expired TTL entries must be deleted by their full consul path
+    test('fetchRecursiveTTLValues deletes expired entries by full key (C4)', async () => {
+        const prefix = 'autoscaler/group-data/testgroup/shutdown';
+        await store.writeTTLValue(ctx, `${prefix}/x`, 'shutdown', -1);
+        assert.ok(mockConsul.keys().includes(`${prefix}/x`), 'precondition: key exists');
+
+        const res = await store.fetchRecursiveTTLValues(ctx, prefix);
+        assert.deepStrictEqual(res, {}, 'expect empty map after expired entries are dropped');
+        assert.ok(!mockConsul.keys().includes(`${prefix}/x`), 'expect the full key to be deleted from consul');
+    });
+
+    // C5: instance states must expire like the Redis store
+    test('fetchInstanceStates trims expired states (C5)', async () => {
+        await store.saveInstanceStatus(ctx, group.name, {
+            instanceId: 'i-fresh',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now(),
+            metadata: { group: group.name },
+        });
+        await store.saveInstanceStatus(ctx, group.name, {
+            instanceId: 'i-expired',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now() - 120 * 1000, // idleTTL 60s -> expired
+            metadata: { group: group.name },
+        });
+
+        const states = await store.fetchInstanceStates(ctx, group.name);
+        assert.strictEqual(states.length, 1, 'expect only the fresh state');
+        assert.strictEqual(states[0].instanceId, 'i-fresh');
+        assert.ok(
+            !mockConsul.keys().includes(`autoscaler/group-data/${group.name}/states/i-expired`),
+            'expect the expired state key to be deleted',
+        );
+    });
+
+    // C6: empty group must not crash
+    test('fetchInstanceStates returns [] for an unknown group (C6)', async () => {
+        const states = await store.fetchInstanceStates(ctx, 'no-such-group');
+        assert.deepStrictEqual(states, []);
+    });
+
+    // C7: an expired reservation must be cleaned up on read
+    test('getReservation deletes an expired reservation (C7)', async () => {
+        const reservation = { id: 'res-1', groupName: group.name, expiresAt: Date.now() + 60 * 1000 };
+        await store.saveReservation(ctx, reservation);
+        assert.ok(await store.getReservation(ctx, 'res-1'), 'precondition: reservation readable');
+
+        // overwrite with an already-expired TTL wrapper
+        await store.writeTTLValue(ctx, `autoscaler/reservations/${group.name}/res-1`, JSON.stringify(reservation), -1);
+        const res = await store.getReservation(ctx, 'res-1');
+        assert.strictEqual(res, null, 'expect expired reservation to read as null');
+        assert.ok(
+            !mockConsul.keys().includes(`autoscaler/reservations/${group.name}/res-1`),
+            'expect expired reservation key to be deleted',
+        );
     });
 });

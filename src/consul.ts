@@ -14,9 +14,13 @@ export interface ConsulOptions {
     port?: number;
     secure?: boolean;
     groupsPrefix?: string;
+    groupDataPrefix?: string;
     valuesPrefix?: string;
-    instancesPrefix?: string;
     client?: Consul;
+    // Instance-state expiry TTLs (seconds), mirroring the Redis store. See filterOutAndTrimExpiredStates.
+    idleTTL?: number;
+    provisioningTTL?: number;
+    shutdownStatusTTL?: number;
 }
 
 interface TTLValue {
@@ -28,12 +32,21 @@ interface TTLValueMap {
     [key: string]: TTLValue;
 }
 
+// NOTE: Consul TTL semantics are wall-clock timestamps compared client-side (see writeTTLValue /
+// fetchTTLValue, which compare `expires` against Date.now()). Consul mode therefore requires
+// synchronized clocks across all autoscaler nodes; skewed clocks cause premature or delayed expiry.
 export default class ConsulStore implements InstanceStore, ReservationStore {
     private client: Consul;
+    // Group definitions live under groupsPrefix; all per-group data (states, shutdown, confirmation,
+    // protected, reconfigure, cloud instances) lives under groupDataPrefix. Keeping them in separate
+    // trees prevents recursive group listings from parsing instance data as phantom InstanceGroups.
     private groupsPrefix = 'autoscaler/groups/';
+    private groupDataPrefix = 'autoscaler/group-data/';
     private valuesPrefix = 'autoscaler/values/';
-    private instancesPrefix = 'autoscaler/instances/';
     private reservationsPrefix = 'autoscaler/reservations/';
+    private idleTTL = 300;
+    private provisioningTTL = 900;
+    private shutdownStatusTTL = 600;
 
     constructor(options: ConsulOptions) {
         if (!options.client && (!options.host || !options.port)) {
@@ -47,11 +60,20 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         if (options.groupsPrefix) {
             this.groupsPrefix = options.groupsPrefix;
         }
+        if (options.groupDataPrefix) {
+            this.groupDataPrefix = options.groupDataPrefix;
+        }
         if (options.valuesPrefix) {
             this.valuesPrefix = options.valuesPrefix;
         }
-        if (options.instancesPrefix) {
-            this.instancesPrefix = options.instancesPrefix;
+        if (options.idleTTL !== undefined) {
+            this.idleTTL = options.idleTTL;
+        }
+        if (options.provisioningTTL !== undefined) {
+            this.provisioningTTL = options.provisioningTTL;
+        }
+        if (options.shutdownStatusTTL !== undefined) {
+            this.shutdownStatusTTL = options.shutdownStatusTTL;
         }
     }
 
@@ -68,7 +90,7 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
             p.push(
                 this.writeTTLValue(
                     ctx,
-                    `${this.groupsPrefix}${instance.group}/shutdown/${instance.instanceId}`,
+                    `${this.groupDataPrefix}${instance.group}/shutdown/${instance.instanceId}`,
                     status,
                     ttl,
                 ),
@@ -81,7 +103,7 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     }
 
     async fetchShutdownStatus(ctx: Context, group: string, clean = true): Promise<TTLValueMap> {
-        return this.fetchRecursiveTTLValues(ctx, `${this.groupsPrefix}${group}/shutdown`, clean);
+        return this.fetchRecursiveTTLValues(ctx, `${this.groupDataPrefix}${group}/shutdown`, clean);
     }
 
     async getShutdownStatuses(ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> {
@@ -90,7 +112,7 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     }
 
     async fetchShutdownConfirmations(ctx: Context, group: string): Promise<TTLValueMap> {
-        return this.fetchRecursiveTTLValues(ctx, `${this.groupsPrefix}${group}/confirmation`);
+        return this.fetchRecursiveTTLValues(ctx, `${this.groupDataPrefix}${group}/confirmation`);
     }
 
     async getShutdownConfirmations(ctx: Context, group: string, instanceIds: string[]): Promise<(string | false)[]> {
@@ -106,12 +128,12 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     }
 
     async getShutdownStatus(ctx: Context, group: string, instanceId: string): Promise<boolean> {
-        const v = await this.fetchTTLValue(ctx, `${this.groupsPrefix}${group}/shutdown/${instanceId}`);
+        const v = await this.fetchTTLValue(ctx, `${this.groupDataPrefix}${group}/shutdown/${instanceId}`);
         return v !== undefined;
     }
 
     async getShutdownConfirmation(ctx: Context, group: string, instanceId: string): Promise<false | string> {
-        const v = await this.fetchTTLValue(ctx, `${this.groupsPrefix}${group}/confirmation/${instanceId}`);
+        const v = await this.fetchTTLValue(ctx, `${this.groupDataPrefix}${group}/confirmation/${instanceId}`);
         if (v) {
             return v.status;
         } else {
@@ -131,7 +153,7 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
             p.push(
                 this.writeTTLValue(
                     ctx,
-                    `${this.groupsPrefix}${instance.group}/confirmation/${instance.instanceId}`,
+                    `${this.groupDataPrefix}${instance.group}/confirmation/${instance.instanceId}`,
                     status,
                     ttl,
                 ),
@@ -150,11 +172,11 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         protectedTTL: number,
         mode: string,
     ): Promise<boolean> {
-        return this.writeTTLValue(ctx, `${this.groupsPrefix}${group}/protected/${instanceId}`, mode, protectedTTL);
+        return this.writeTTLValue(ctx, `${this.groupDataPrefix}${group}/protected/${instanceId}`, mode, protectedTTL);
     }
 
     async areScaleDownProtected(ctx: Context, group: string, instanceIds: string[]): Promise<boolean[]> {
-        const res = await this.fetchRecursiveTTLValues(ctx, `${this.groupsPrefix}${group}/protected`);
+        const res = await this.fetchRecursiveTTLValues(ctx, `${this.groupDataPrefix}${group}/protected`);
         const scaleProtectedInstances = Object.keys(res);
 
         return instanceIds.map((instanceId) => scaleProtectedInstances.includes(instanceId));
@@ -169,7 +191,14 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     ): Promise<boolean> {
         const p = <Promise<boolean>[]>[];
         for (const instance of instanceDetails) {
-            p.push(this.writeTTLValue(ctx, `${this.instancesPrefix}/reconfigure/${instance.instanceId}`, date, ttl));
+            p.push(
+                this.writeTTLValue(
+                    ctx,
+                    `${this.groupDataPrefix}${instance.group}/reconfigure/${instance.instanceId}`,
+                    date,
+                    ttl,
+                ),
+            );
         }
 
         return (await Promise.allSettled(p))
@@ -178,13 +207,14 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     }
 
     async unsetReconfigureDate(ctx: Context, instanceId: string, group: string): Promise<boolean> {
-        return this.delete(`${this.groupsPrefix}${group}/reconfigure/${instanceId}`);
+        return this.delete(`${this.groupDataPrefix}${group}/reconfigure/${instanceId}`);
     }
 
     async getReconfigureDates(ctx: Context, group: string, instanceIds: string[]): Promise<string[]> {
-        const res = await this.fetchRecursiveTTLValues(ctx, `${this.groupsPrefix}${group}/reconfigure`);
+        // fetchRecursiveTTLValues keys its map by the stripped (bare instance id) key.
+        const res = await this.fetchRecursiveTTLValues(ctx, `${this.groupDataPrefix}${group}/reconfigure`);
         return instanceIds.map((instanceId) => {
-            const reconfigure = res[`${this.groupsPrefix}${group}/reconfigure/${instanceId}`];
+            const reconfigure = res[instanceId];
             if (reconfigure) {
                 return reconfigure.status;
             } else {
@@ -194,13 +224,9 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     }
     async getReconfigureDate(ctx: Context, group: string, instanceId: string): Promise<string> {
         try {
-            const v = await this.fetch(ctx, `${this.groupsPrefix}${group}/reconfigure/${instanceId}`);
-            if (v) {
-                const reconfigure = JSON.parse(v.Value);
-                return reconfigure.status;
-            } else {
-                return '';
-            }
+            // Use fetchTTLValue so an expired reconfigure date reads as '' (it checks the expiry).
+            const v = await this.fetchTTLValue(ctx, `${this.groupDataPrefix}${group}/reconfigure/${instanceId}`);
+            return v?.status ?? '';
         } catch (err) {
             ctx.logger.error(`Failed to get reconfigure date from consul: ${err}`, { err });
             throw err;
@@ -253,7 +279,9 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
 
     async deleteInstanceGroup(ctx: Context, group: string): Promise<void> {
         try {
+            // Delete both the group definition and the whole per-group data subtree.
             await this.delete(`${this.groupsPrefix}${group}`);
+            await this.client.kv.del({ key: `${this.groupDataPrefix}${group}/`, recurse: true });
             return;
         } catch (err) {
             ctx.logger.error(`Failed to delete instance group from consul: ${err}`, { group, err });
@@ -263,26 +291,71 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
 
     async fetchInstanceStates(ctx: Context, group: string): Promise<InstanceState[]> {
         try {
-            const states = await this.client.kv.get({ key: `${this.groupsPrefix}${group}/states`, recurse: true });
-            return Object.entries(states).map(([_k, v]) => <InstanceState>JSON.parse(v.Value));
+            const states = await this.client.kv.get({ key: `${this.groupDataPrefix}${group}/states`, recurse: true });
+            // kv.get returns undefined when no keys match; Object.entries(undefined) would throw.
+            if (!states) {
+                return [];
+            }
+            const rawStates = Object.entries(states).map(([_k, v]) => <InstanceState>JSON.parse(v.Value));
+            return this.filterOutAndTrimExpiredStates(ctx, group, rawStates);
         } catch (err) {
             ctx.logger.error(`Failed to get instance states from consul: ${err}`, { err });
             throw err;
         }
     }
 
-    // TODO: implement this method
+    // Mirror RedisStore.doFilterOutAndTrimExpiredStates: pick a TTL by provisioning / shutting-down /
+    // idle, compare state.timestamp + ttl against wall clock, keep valid states and delete expired ones.
     async filterOutAndTrimExpiredStates(
-        _ctx: Context,
-        _group: string,
+        ctx: Context,
+        group: string,
         states: InstanceState[],
     ): Promise<InstanceState[]> {
-        return states;
+        const shutdownStatuses = await this.getShutdownStatuses(
+            ctx,
+            group,
+            states.map((state) => state.instanceId),
+        );
+
+        const validStates: InstanceState[] = [];
+        const p: Promise<boolean>[] = [];
+        for (let i = 0; i < states.length; i++) {
+            const state = states[i];
+            let statusTTL = this.idleTTL;
+            if (state.status && state.status.provisioning) {
+                statusTTL = this.provisioningTTL;
+            }
+            const isInstanceShuttingDown = state.isShuttingDown || shutdownStatuses[i];
+            if (isInstanceShuttingDown) {
+                statusTTL = this.shutdownStatusTTL;
+            }
+
+            let isValidState: boolean;
+            if (state.timestamp === undefined || state.timestamp === null) {
+                ctx.logger.warn(`state has no timestamp, treating as expired`, { group, state });
+                isValidState = false;
+            } else {
+                isValidState = state.timestamp + 1000 * statusTTL >= Date.now();
+            }
+
+            if (isValidState) {
+                validStates.push(state);
+            } else {
+                ctx.logger.debug(`will delete expired state`, { group, state });
+                p.push(this.delete(`${this.groupDataPrefix}${group}/states/${state.instanceId}`));
+            }
+        }
+        (await Promise.allSettled(p)).map((r) => {
+            if (r.status === 'rejected') {
+                ctx.logger.error(`Failed to delete expired state from consul: ${r.reason}`, { group });
+            }
+        });
+        return validStates;
     }
 
     async saveInstanceStatus(ctx: Context, group: string, state: InstanceState): Promise<boolean> {
         try {
-            await this.write(ctx, `${this.groupsPrefix}${group}/states/${state.instanceId}`, JSON.stringify(state));
+            await this.write(ctx, `${this.groupDataPrefix}${group}/states/${state.instanceId}`, JSON.stringify(state));
             return true;
         } catch (err) {
             ctx.logger.error(`Failed to save instance state into consul: ${err}`, { group, state, err });
@@ -307,14 +380,19 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
 
     async fetchRecursiveTTLValues(ctx: Context, key: string, clean = true): Promise<TTLValueMap> {
         const values = <TTLValueMap>{};
+        // Track the full Consul path per short key so expired entries are deleted by their real key,
+        // not the stripped instance id (deleting a bare id is a no-op and leaks KV garbage).
+        const fullKeys: { [shortKey: string]: string } = {};
         (await this.fetchRecursive(ctx, key)).map((v) => {
-            values[v.Key.replace(`${key}/`, '')] = <TTLValue>JSON.parse(v.Value);
+            const shortKey = v.Key.replace(`${key}/`, '');
+            values[shortKey] = <TTLValue>JSON.parse(v.Value);
+            fullKeys[shortKey] = v.Key;
         });
         if (clean) {
             const p: Promise<boolean>[] = [];
             Object.entries(values).map(([k, v]) => {
                 if (v.expires <= Date.now()) {
-                    p.push(this.delete(k));
+                    p.push(this.delete(fullKeys[k]));
                     delete values[k];
                 }
             });
@@ -373,11 +451,8 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     // the value is considered expired if the timestamp is in the past
     async checkValue(ctx: Context, key: string): Promise<boolean> {
         try {
-            const res = this.fetchTTLValue(ctx, this.valuesPrefix + key);
-            if (!res) {
-                return false;
-            }
-            return true;
+            const res = await this.fetchTTLValue(ctx, this.valuesPrefix + key);
+            return res !== undefined;
         } catch (err) {
             return false;
         }
@@ -386,7 +461,7 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     // save cloud instances
     async saveCloudInstances(ctx: Context, group: string, instances: CloudInstance[]): Promise<boolean> {
         try {
-            await this.write(ctx, `${this.groupsPrefix}${group}/instances`, JSON.stringify(instances));
+            await this.write(ctx, `${this.groupDataPrefix}${group}/instances`, JSON.stringify(instances));
             return true;
         } catch (err) {
             ctx.logger.error(`Failed to save cloud instances into consul: ${err}`, { group, instances, err });
@@ -395,8 +470,8 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     }
 
     async existsAtLeastOneGroup(ctx: Context): Promise<boolean> {
-        const res = await this.getAllInstanceGroups(ctx);
-        return res && res.length > 0;
+        const names = await this.getAllInstanceGroupNames(ctx);
+        return names && names.length > 0;
     }
 
     async delete(key: string): Promise<boolean> {
@@ -438,6 +513,12 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
                 const ttlValue = JSON.parse(item.Value) as TTLValue;
                 if (ttlValue.expires > Date.now()) {
                     return JSON.parse(ttlValue.status);
+                }
+                // Expired reservation: clean it up (by its full key) rather than leaving it in the KV.
+                try {
+                    await this.delete(item.Key);
+                } catch (err) {
+                    ctx.logger.error(`Failed to delete expired reservation from consul`, { id, key: item.Key, err });
                 }
                 return null;
             }

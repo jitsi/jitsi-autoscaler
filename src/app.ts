@@ -133,6 +133,9 @@ switch (config.InstanceStoreProvider) {
     case 'consul':
         instanceStore = new ConsulStore({
             client: consulClient,
+            idleTTL: config.IdleTTL,
+            provisioningTTL: config.ProvisioningTTL,
+            shutdownStatusTTL: config.ShutdownStatusTTL,
         });
         break;
     default:
@@ -223,6 +226,7 @@ if (config.LockProvider === 'consul') {
         consulClient,
         jobCreationLockTTL: config.JobsCreationLockTTLMs,
         groupLockTTLMs: config.GroupLockTTLMs,
+        logger,
     });
 } else {
     lockManager = new RedisLockManager(logger, {

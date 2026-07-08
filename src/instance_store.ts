@@ -217,6 +217,9 @@ export interface InstanceStore {
     deleteInstanceGroup: { (ctx: Context, groupName: string): Promise<void> };
 
     // key related methods
+    // checkValue MUST let store errors propagate (throw), never swallow them as `false`. A false return
+    // means "the key is genuinely absent/expired"; a store outage must fail the cycle, not read as absent
+    // (otherwise scale-down protection / reservation grace flags fail open). Both stores follow this.
     checkValue: { (ctx: Context, key: string): Promise<boolean> };
     setValue: { (ctx: Context, key: string, value: string, ttl: number): Promise<boolean> };
 

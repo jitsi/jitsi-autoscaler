@@ -12,7 +12,7 @@ const _values = {};
 // with instance_store.ts / metrics_store.ts (the cross-provider store_contract.ts test is the real guard).
 export const mockStore = {
     // metrics
-    fetchInstanceMetrics: mock.fn((_ctx: Context, _group: string, _windowSeconds?: number) => [
+    fetchInstanceMetrics: mock.fn((_ctx: Context, _group: string, _windowSeconds?: number, _stepSeconds?: number) => [
         { value: 0.5, instanceId: 'i-0a1b2c3d4e5f6g7h8', timestamp: Date.now() - 350 },
     ]),
     cleanInstanceMetrics: mock.fn(() => true),

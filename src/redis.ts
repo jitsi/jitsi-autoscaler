@@ -39,7 +39,12 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         this.redisScanCount = options.redisScanCount;
     }
 
-    async fetchInstanceMetrics(ctx: Context, group: string, _windowSeconds?: number): Promise<InstanceMetric[]> {
+    async fetchInstanceMetrics(
+        ctx: Context,
+        group: string,
+        _windowSeconds?: number,
+        _stepSeconds?: number,
+    ): Promise<InstanceMetric[]> {
         const items: string[] = await this.redisClient.zrange(this.getGroupMetricsKey(group), 0, -1);
         return items.map((item) => <InstanceMetric>JSON.parse(item));
     }

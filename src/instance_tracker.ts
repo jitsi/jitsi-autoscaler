@@ -265,8 +265,13 @@ export class InstanceTracker {
         });
     }
 
-    async fetchInstanceMetrics(ctx: Context, group: string, windowSeconds?: number): Promise<InstanceMetric[]> {
-        return this.metricsStore.fetchInstanceMetrics(ctx, group, windowSeconds);
+    async fetchInstanceMetrics(
+        ctx: Context,
+        group: string,
+        windowSeconds?: number,
+        stepSeconds?: number,
+    ): Promise<InstanceMetric[]> {
+        return this.metricsStore.fetchInstanceMetrics(ctx, group, windowSeconds, stepSeconds);
     }
 
     async cleanInstanceMetrics(ctx: Context, group: string): Promise<boolean> {
@@ -291,10 +296,11 @@ export class InstanceTracker {
         }
 
         const inventoryStart = process.hrtime();
-        // Window the metrics fetch to the full range the periods span, so a Prometheus-backed store
-        // does not truncate long scaling windows (the Redis store ignores this argument).
+        // Window the metrics fetch to the full range the periods span and request per-period resolution,
+        // so a Prometheus-backed store does not truncate long scaling windows or coarsen sub-60s periods
+        // (the Redis store ignores both arguments).
         const windowSeconds = periodsCount * periodDurationSeconds;
-        const items = await this.fetchInstanceMetrics(ctx, group, windowSeconds);
+        const items = await this.fetchInstanceMetrics(ctx, group, windowSeconds, periodDurationSeconds);
 
         const instancesInMetrics = <string[]>[];
         items.forEach((itemJson) => {

@@ -95,6 +95,26 @@ for (const provider of providers) {
             assert.deepStrictEqual(await store.getAllInstanceGroupNames(ctx), []);
         });
 
+        // Reservations (TTL expiry+3600s) and the grace flag are group-scoped and would otherwise
+        // resurrect on a recreated group; both stores must purge them on delete. (Per-instance
+        // shutdown/protected flags are keyed globally by instance id with their own short TTL and are
+        // intentionally not enumerated here.)
+        test('deleteInstanceGroup purges reservations and the grace flag', async () => {
+            await store.upsertInstanceGroup(ctx, group);
+            await store.saveReservation(ctx, { id: 'res-1', groupName: group.name, expiresAt: Date.now() + 60 * 1000 });
+            await store.setScaleDownGrace(ctx, group.name, 60);
+
+            await store.deleteInstanceGroup(ctx, group.name);
+
+            assert.strictEqual(await store.getReservation(ctx, 'res-1'), null, 'reservation should be gone');
+            assert.deepStrictEqual(
+                await store.listReservations(ctx, group.name),
+                [],
+                'reservation list should be empty',
+            );
+            assert.strictEqual(await store.isScaleDownGraceActive(ctx, group.name), false, 'grace flag should be gone');
+        });
+
         test('save / fetch / expire instance states', async () => {
             await store.saveInstanceStatus(ctx, group.name, freshState('i-fresh'));
             await store.saveInstanceStatus(ctx, group.name, expiredState('i-expired'));

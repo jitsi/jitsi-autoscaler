@@ -284,6 +284,34 @@ describe('ConsulStore data operations (in-memory client)', () => {
         assert.deepStrictEqual(states, []);
     });
 
+    // C4-CAS: clean-path deletes must be CAS-guarded so a concurrently-refreshed value is not clobbered
+    test('deleteCas only deletes when the ModifyIndex still matches', async () => {
+        await mockConsul.kv.set('some/key', 'v1');
+        const stale = (await mockConsul.kv.get('some/key')).ModifyIndex;
+
+        // a concurrent writer refreshes the value, bumping ModifyIndex
+        await mockConsul.kv.set('some/key', 'v2');
+
+        assert.strictEqual(await store.deleteCas('some/key', stale), false, 'stale CAS delete must fail');
+        assert.ok(mockConsul.keys().includes('some/key'), 'refreshed value must survive a stale CAS delete');
+
+        const current = (await mockConsul.kv.get('some/key')).ModifyIndex;
+        assert.strictEqual(await store.deleteCas('some/key', current), true, 'matching CAS delete must succeed');
+        assert.ok(!mockConsul.keys().includes('some/key'), 'value must be gone after a matching CAS delete');
+    });
+
+    // Phantom groups: leftover legacy per-group data under groupsPrefix must not be listed as groups
+    test('group listings ignore legacy nested keys under groupsPrefix', async () => {
+        await store.upsertInstanceGroup(ctx, group);
+        // legacy layout wrote per-group data under the definitions prefix
+        await mockConsul.kv.set('autoscaler/groups/test/states/i-legacy', JSON.stringify({ foo: 'bar' }));
+
+        assert.deepStrictEqual(await store.getAllInstanceGroupNames(ctx), ['test']);
+        const groups = await store.getAllInstanceGroups(ctx);
+        assert.strictEqual(groups.length, 1);
+        assert.strictEqual(groups[0].name, 'test');
+    });
+
     // C7: an expired reservation must be cleaned up on read
     test('getReservation deletes an expired reservation (C7)', async () => {
         const reservation = { id: 'res-1', groupName: group.name, expiresAt: Date.now() + 60 * 1000 };

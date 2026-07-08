@@ -252,7 +252,12 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         if (!res) {
             return [];
         }
-        return Object.entries(res).map(([_k, v]) => v.Key.replace(this.groupsPrefix, ''));
+        // A group definition key is `${groupsPrefix}<name>` with no further nesting. Older builds wrote
+        // per-group data (states/shutdown/...) under this same prefix; skip any such leftover nested keys
+        // so they aren't parsed as phantom groups named e.g. `jvb-east/states/i-123`.
+        return Object.entries(res)
+            .map(([_k, v]) => v.Key.replace(this.groupsPrefix, ''))
+            .filter((name) => name.length > 0 && !name.includes('/'));
     }
 
     async getAllInstanceGroups(ctx: Context): Promise<InstanceGroup[]> {
@@ -264,7 +269,11 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
             return [];
         }
         ctx.logger.debug('received consul k/v results', { key, res });
-        return Object.entries(res).map(([_k, v]) => <InstanceGroup>JSON.parse(v.Value));
+        // Only bare `${groupsPrefix}<name>` keys are group definitions; skip nested legacy data keys
+        // (see getAllInstanceGroupNames) so instance data is never cast to a phantom InstanceGroup.
+        return Object.entries(res)
+            .filter(([_k, v]) => !v.Key.replace(this.groupsPrefix, '').includes('/'))
+            .map(([_k, v]) => <InstanceGroup>JSON.parse(v.Value));
     }
 
     async upsertInstanceGroup(ctx: Context, group: InstanceGroup): Promise<boolean> {
@@ -279,9 +288,13 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
 
     async deleteInstanceGroup(ctx: Context, group: string): Promise<void> {
         try {
-            // Delete both the group definition and the whole per-group data subtree.
+            // Delete the group definition, the whole per-group data subtree, the reservations subtree, and
+            // the scale-down grace flag. Reservations and the grace flag live outside groupDataPrefix, so
+            // omitting them would resurrect stale reservations (TTL expiry+3600s) if the group is recreated.
             await this.delete(`${this.groupsPrefix}${group}`);
             await this.client.kv.del({ key: `${this.groupDataPrefix}${group}/`, recurse: true });
+            await this.client.kv.del({ key: `${this.reservationsPrefix}${group}/`, recurse: true });
+            await this.delete(`${this.valuesPrefix}reservation-scaledown-grace:${group}`);
             return;
         } catch (err) {
             ctx.logger.error(`Failed to delete instance group from consul: ${err}`, { group, err });
@@ -311,6 +324,10 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         group: string,
         states: InstanceState[],
     ): Promise<InstanceState[]> {
+        // Skip the recursive shutdown-status fetch entirely for idle/empty groups.
+        if (states.length === 0) {
+            return [];
+        }
         const shutdownStatuses = await this.getShutdownStatuses(
             ctx,
             group,
@@ -380,19 +397,25 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
 
     async fetchRecursiveTTLValues(ctx: Context, key: string, clean = true): Promise<TTLValueMap> {
         const values = <TTLValueMap>{};
-        // Track the full Consul path per short key so expired entries are deleted by their real key,
-        // not the stripped instance id (deleting a bare id is a no-op and leaks KV garbage).
-        const fullKeys: { [shortKey: string]: string } = {};
+        // Track the full Consul path and ModifyIndex per short key so expired entries are deleted by their
+        // real key (not the stripped instance id, which is a no-op) and only via a CAS that fails if the
+        // value changed since we read it.
+        const meta: { [shortKey: string]: { fullKey: string; modifyIndex: number } } = {};
         (await this.fetchRecursive(ctx, key)).map((v) => {
             const shortKey = v.Key.replace(`${key}/`, '');
             values[shortKey] = <TTLValue>JSON.parse(v.Value);
-            fullKeys[shortKey] = v.Key;
+            meta[shortKey] = { fullKey: v.Key, modifyIndex: v.ModifyIndex };
         });
         if (clean) {
             const p: Promise<boolean>[] = [];
             Object.entries(values).map(([k, v]) => {
                 if (v.expires <= Date.now()) {
-                    p.push(this.delete(fullKeys[k]));
+                    // CAS-guarded delete: if a concurrent writer refreshed this key between the fetch above
+                    // and here (e.g. setShutdownStatus re-setting the same key), the ModifyIndex no longer
+                    // matches and Consul rejects the delete, so we never drop a live value. We still exclude
+                    // it from this read's result (the value we hold is the expired one); the next read picks
+                    // up the refreshed value.
+                    p.push(this.deleteCas(meta[k].fullKey, meta[k].modifyIndex));
                     delete values[k];
                 }
             });
@@ -448,14 +471,13 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         return this.writeTTLValue(ctx, this.valuesPrefix + key, value, ttl);
     }
 
-    // the value is considered expired if the timestamp is in the past
+    // The value is considered expired if the timestamp is in the past. Errors are allowed to propagate
+    // (matching RedisStore.checkValue): swallowing them here would read a Consul outage as "flag not set",
+    // so scale-down protection and reservation grace flags would fail open and let protected/reserved
+    // instances be scaled down while the store is broken. Callers already skip the cycle on a throw.
     async checkValue(ctx: Context, key: string): Promise<boolean> {
-        try {
-            const res = await this.fetchTTLValue(ctx, this.valuesPrefix + key);
-            return res !== undefined;
-        } catch (err) {
-            return false;
-        }
+        const res = await this.fetchTTLValue(ctx, this.valuesPrefix + key);
+        return res !== undefined;
     }
 
     // save cloud instances
@@ -477,6 +499,12 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     async delete(key: string): Promise<boolean> {
         await this.client.kv.del(key);
         return true;
+    }
+
+    // CAS-guarded delete: only removes the key if its ModifyIndex still matches (i.e. it hasn't been
+    // rewritten since it was read). Returns false when the CAS check fails, without throwing.
+    async deleteCas(key: string, modifyIndex: number): Promise<boolean> {
+        return this.client.kv.del({ key, cas: modifyIndex });
     }
 
     async ping(ctx: Context): Promise<boolean | string> {

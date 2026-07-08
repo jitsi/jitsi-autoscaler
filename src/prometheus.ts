@@ -107,13 +107,22 @@ export default class PrometheusClient implements MetricsStore {
         }
     }
 
-    public async prometheusRangeQuery(ctx: Context, query: string, windowSeconds?: number): Promise<QueryResult> {
-        // Size the lookback to the caller's window, never shorter than 1h, so long scaling windows
-        // (scalePeriod * period count > 3600s) are not silently truncated.
-        const windowMs = Math.max((windowSeconds ?? 0) * 1000, 60 * 60 * 1000);
+    public async prometheusRangeQuery(
+        ctx: Context,
+        query: string,
+        windowSeconds?: number,
+        stepSeconds?: number,
+    ): Promise<QueryResult> {
+        // Size the lookback to the caller's window (plus one step of margin for boundary safety); fall
+        // back to 1h only when no window is given. This covers long scaling windows without over-fetching
+        // ~6-12x for short ones.
+        // Resolution follows the group's scalePeriod, capped at 60s (min(60, scalePeriod)); groups with a
+        // sub-60s scalePeriod would otherwise get only one sample per minute, leaving per-period buckets
+        // empty and skewing scaling decisions.
+        const step = stepSeconds && stepSeconds > 0 ? Math.min(60, Math.ceil(stepSeconds)) : 60;
+        const windowMs = windowSeconds && windowSeconds > 0 ? (windowSeconds + step) * 1000 : 60 * 60 * 1000;
         const start = new Date().getTime() - windowMs;
         const end = new Date();
-        const step = 60; // 1 point every minute
         try {
             const qStart = process.hrtime();
             const res = await this.promDriver.rangeQuery(query, start, end, step);
@@ -152,11 +161,16 @@ export default class PrometheusClient implements MetricsStore {
         return false;
     }
 
-    async fetchInstanceMetrics(ctx: Context, group: string, windowSeconds?: number): Promise<InstanceMetric[]> {
+    async fetchInstanceMetrics(
+        ctx: Context,
+        group: string,
+        windowSeconds?: number,
+        stepSeconds?: number,
+    ): Promise<InstanceMetric[]> {
         const query = `autoscaler_instance_stress_level{group="${escapeLabelValue(group)}"}`;
         const metricItems: InstanceMetric[] = [];
         // Let query errors propagate: a Prometheus outage must fail the cycle, not read as "no metrics".
-        const res = await this.prometheusRangeQuery(ctx, query, windowSeconds);
+        const res = await this.prometheusRangeQuery(ctx, query, windowSeconds, stepSeconds);
         res.result.forEach((promItem) => {
             promItem.values.forEach((v: PromQueryValue) => {
                 metricItems.push(<InstanceMetric>{

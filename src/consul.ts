@@ -270,13 +270,13 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
             return [];
         }
         ctx.logger.debug('received consul k/v results', { key, res });
-        // Only bare `${groupsPrefix}<name>` keys are group definitions; skip nested legacy data keys and a
-        // bare prefix placeholder (empty name, e.g. a directory key created via the Consul UI) so instance
-        // data / empty values are never cast to a phantom InstanceGroup or crash JSON.parse.
+        // Only bare `${groupsPrefix}<name>` keys with a non-empty value are group definitions; skip nested
+        // legacy data keys, a bare-prefix placeholder (empty name), and empty-valued keys (e.g. a directory
+        // key created via the Consul UI) so nothing is cast to a phantom InstanceGroup or crashes JSON.parse.
         return Object.entries(res)
             .filter(([_k, v]) => {
                 const name = v.Key.replace(this.groupsPrefix, '');
-                return name.length > 0 && !name.includes('/');
+                return name.length > 0 && !name.includes('/') && !!v.Value;
             })
             .map(([_k, v]) => <InstanceGroup>JSON.parse(v.Value));
     }
@@ -329,10 +329,10 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         group: string,
         states: InstanceState[],
     ): Promise<InstanceState[]> {
-        // Skip the recursive shutdown-status fetch entirely for idle/empty groups. Trade-off: this also
-        // skips reaping expired shutdown-status entries for a scaled-to-zero group, so a small, bounded set
-        // of expired keys may linger under group-data/<group>/shutdown until the group scales back up (the
-        // next non-empty pass reaps them) or is deleted (deleteInstanceGroup drops the whole subtree).
+        // Skip the recursive shutdown-status fetch here for idle/empty groups. This does not leak expired
+        // shutdown-status keys: trimCurrent(filterShutdown=true) — the default on the autoscaler/launcher/
+        // metrics paths — calls filterOutInstancesShuttingDown -> getShutdownStatuses ->
+        // fetchRecursiveTTLValues(clean=true) every cycle regardless of instance count, which reaps them.
         if (states.length === 0) {
             return [];
         }

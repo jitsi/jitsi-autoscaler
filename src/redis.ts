@@ -138,15 +138,16 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         ctx: Context,
         pipeline: ChainableCommander,
         opName: string,
+        logContext?: Record<string, unknown>,
     ): Promise<PipelineResult[]> {
         const results = await pipeline.exec();
         if (!results) {
-            ctx.logger.error(`${opName} failed in pipeline.exec()`);
+            ctx.logger.error(`${opName} failed in pipeline.exec()`, logContext);
             throw new Error(`${opName} pipeline.exec() returned null`);
         }
         for (const [err] of results) {
             if (err) {
-                ctx.logger.error(`${opName} pipeline command errored`, { err });
+                ctx.logger.error(`${opName} pipeline command errored`, { err, ...logContext });
                 throw new Error(`${opName} pipeline command errored: ${err}`);
             }
         }
@@ -164,7 +165,9 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         fields.forEach((instanceId: string) => {
             pipeline.hget(groupInstancesStatesKey, instanceId);
         });
-        const instanceStates = await this.execPipelineOrThrow(ctx, pipeline, 'getInstanceStates');
+        const instanceStates = await this.execPipelineOrThrow(ctx, pipeline, 'getInstanceStates', {
+            key: groupInstancesStatesKey,
+        });
 
         for (const state of instanceStates) {
             if (state[1]) {
@@ -336,7 +339,7 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             const key = this.protectedKey(instanceId);
             pipeline.get(key);
         });
-        const instances = await this.execPipelineOrThrow(ctx, pipeline, 'areScaleDownProtected');
+        const instances = await this.execPipelineOrThrow(ctx, pipeline, 'areScaleDownProtected', { group });
         return instances.map((instance) => instance[1] == 'isScaleDownProtected');
     }
 
@@ -373,7 +376,7 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             const key = this.reconfigureKey(instanceId);
             pipeline.get(key);
         });
-        const instances = await this.execPipelineOrThrow(ctx, pipeline, 'getReconfigureDates');
+        const instances = await this.execPipelineOrThrow(ctx, pipeline, 'getReconfigureDates', { group });
         return instances.map((instance) => <string>instance[1]);
     }
 

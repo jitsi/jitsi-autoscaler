@@ -72,6 +72,32 @@ describe('ConsulLockManager acquire behavior', () => {
 
         await assert.rejects(() => lm.lockGroup(ctx, 'g'), /Failed to obtain lock/);
         assert.strictEqual(client.kv.set.mock.callCount(), 3, 'group-lock contention should retry up to 3 times');
+        assert.strictEqual(client.session.create.mock.callCount(), 1, 'contention must not rotate the session');
+        await lm.shutdown();
+    });
+
+    // Concurrent acquire errors must rotate the shared session exactly once (memoized rotation).
+    test('concurrent acquire errors rotate the session once', async () => {
+        const client = makeConsulClient();
+        let calls = 0;
+        client.kv.set = mock.fn(async () => {
+            calls++;
+            // the first acquire from each of the two concurrent callers errors (triggering rotation);
+            // the retries then succeed
+            if (calls <= 2) {
+                throw new Error('transport blip');
+            }
+            return true;
+        });
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 180000, jobCreationLockTTL: 30000 });
+
+        const [a, b] = await Promise.all([lm.lockKey(ctx, 'a'), lm.lockKey(ctx, 'b')]);
+        assert.ok(a && b, 'both callers should acquire');
+        assert.strictEqual(
+            client.session.create.mock.callCount(),
+            2,
+            'one initial session + exactly one rotation shared by both callers',
+        );
         await lm.shutdown();
     });
 
@@ -84,6 +110,15 @@ describe('ConsulLockManager acquire behavior', () => {
         const locker = await lm.lockGroup(ctx, 'g');
         assert.ok(locker, 'expect a locker once a retry acquires');
         await lm.shutdown();
+    });
+
+    // After shutdown() no new session may be created (would leak a live server-side session + renew loop).
+    test('does not create a session after shutdown', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 180000, jobCreationLockTTL: 30000 });
+        await lm.shutdown();
+        await assert.rejects(() => lm.lockGroup(ctx, 'g'), /shutting down/);
+        assert.strictEqual(client.session.create.mock.callCount(), 0, 'no session should be created after shutdown');
     });
 
     // A transport error rotates the session once and retries. The old session must NOT be destroyed (it may

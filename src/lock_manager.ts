@@ -78,6 +78,11 @@ export class ConsulLockManager implements AutoscalerLockManager {
     private rotationPromise?: Promise<string>;
     // Consecutive renewal failures; used to keep a session alive across transient renew errors.
     private renewFailureCount = 0;
+    // Monotonic token identifying the current session creation; bumped on clear/rotation to invalidate
+    // an in-flight createConsulSession that has been superseded.
+    private creationToken = 0;
+    // Set once shutdown() runs so no new session is created (or committed) afterwards.
+    private shuttingDown = false;
 
     private static readonly ACQUIRE_RETRY_COUNT = 3;
     private static readonly ACQUIRE_RETRY_DELAY_MS = 200;
@@ -100,6 +105,9 @@ export class ConsulLockManager implements AutoscalerLockManager {
     }
 
     async initConsulSession(): Promise<string> {
+        if (this.shuttingDown) {
+            throw new Error('ConsulLockManager is shutting down');
+        }
         if (this.consulSession) {
             return this.consulSession;
         }
@@ -110,29 +118,51 @@ export class ConsulLockManager implements AutoscalerLockManager {
     }
 
     private async createConsulSession(): Promise<string> {
+        // Token this creation so a clearSession()/rotation/shutdown that races the in-flight create can
+        // invalidate it: a create must never commit (or leak) a session once it has been superseded.
+        const token = ++this.creationToken;
+        let created: string;
         try {
             const s = await this.consulClient.session.create({
                 behavior: 'release',
                 ttl: `${this.consulSessionTTLSeconds}s`,
                 lockdelay: '1s',
             });
-            this.consulSession = s.ID;
-            this.scheduleRenew();
-            return s.ID;
+            created = s.ID;
         } catch (err) {
             // Clear the in-flight promise so the next call retries session creation.
-            this.sessionPromise = undefined;
+            if (this.creationToken === token) {
+                this.sessionPromise = undefined;
+            }
             throw err;
         }
+        if (this.shuttingDown || this.creationToken !== token) {
+            // Superseded while creating. Destroy the never-committed session only when shutting down (nothing
+            // holds locks under it); otherwise leave it to decay at its TTL, per the never-destroy policy.
+            if (this.shuttingDown) {
+                await this.destroySessionBestEffort(created);
+            }
+            throw new Error('consul session creation superseded');
+        }
+        this.consulSession = created;
+        this.scheduleRenew();
+        return created;
     }
 
     private scheduleRenew(): void {
+        // Clear any pending renew timer first, so overlapping calls (a manual renew while a scheduled one is
+        // still pending) can't orphan a handle or leave two renew loops running against the same session.
+        if (this.consulRenewTimeout) {
+            clearTimeout(this.consulRenewTimeout);
+        }
         this.consulRenewTimeout = setTimeout(() => {
             // renewConsulSession handles its own errors; never let a rejection escape this bare timer.
             this.renewConsulSession().catch((err) => {
                 this.logger?.error('Unexpected error renewing consul session', { err });
             });
         }, this.consulSessionRenewInterval);
+        // A background renew timer must never keep the process alive on its own.
+        this.consulRenewTimeout.unref?.();
     }
 
     async renewConsulSession(): Promise<boolean> {
@@ -182,6 +212,8 @@ export class ConsulLockManager implements AutoscalerLockManager {
         this.consulSession = undefined;
         this.sessionPromise = undefined;
         this.renewFailureCount = 0;
+        // Invalidate any in-flight createConsulSession so it won't commit a now-superseded session.
+        this.creationToken++;
         if (this.consulRenewTimeout) {
             clearTimeout(this.consulRenewTimeout);
             this.consulRenewTimeout = undefined;
@@ -212,17 +244,26 @@ export class ConsulLockManager implements AutoscalerLockManager {
         return this.rotationPromise;
     }
 
+    // Destroy a session best-effort. Only ever called for a session that nothing holds locks under: the
+    // current session during shutdown(), or a never-committed session abandoned mid-creation while shutting
+    // down. Rotation/renewal-exhaustion must NOT destroy — see rotateSession's rationale.
+    private async destroySessionBestEffort(session?: string): Promise<void> {
+        if (!session) {
+            return;
+        }
+        try {
+            await this.consulClient.session.destroy(session);
+        } catch (err) {
+            this.logger?.warn('Error destroying consul session', { err });
+        }
+    }
+
     async shutdown(): Promise<void> {
-        // shutdown() is the only place a session is destroyed: nothing else holds locks under it here.
+        // shutdown() is the only place a committed session is destroyed: nothing else holds locks under it here.
+        this.shuttingDown = true;
         const session = this.consulSession;
         this.clearSession();
-        if (session) {
-            try {
-                await this.consulClient.session.destroy(session);
-            } catch (err) {
-                this.logger?.warn('Error destroying consul session on shutdown', { err });
-            }
-        }
+        await this.destroySessionBestEffort(session);
     }
 
     async lockGroup(ctx: Context, group: string): Promise<AutoscalerLock> {
@@ -238,13 +279,16 @@ export class ConsulLockManager implements AutoscalerLockManager {
     }
 
     async lockKey(ctx: Context, key: string, retryOnContention = true): Promise<AutoscalerLock> {
-        // Capture the exact session that acquires the lock and hand it to the ConsulLocker. Reading
-        // this.consulSession again after acquire would be a bug: a concurrent rotation could swap it, so
-        // release() would target the wrong session and the lock would stay held until its TTL lapses.
-        let session = await this.initConsulSession();
         let rotated = false;
         let contentionAttempts = 0;
         for (;;) {
+            // Re-fetch the active session at the top of every attempt. During a retry sleep a concurrent
+            // rotation/renewal-exhaustion may have replaced or abandoned the session we last used; acquiring
+            // under an abandoned-but-still-alive session (nothing renews it) would let the lock silently
+            // lapse at its TTL mid-job. initConsulSession returns the live session or creates a fresh one.
+            // The session we successfully acquire under is the one handed to the ConsulLocker, so release()
+            // always targets the correct session.
+            const session = await this.initConsulSession();
             let lock;
             try {
                 ctx.logger.debug(`Obtaining consul lock ${key}`);
@@ -256,7 +300,7 @@ export class ConsulLockManager implements AutoscalerLockManager {
                 if (!rotated) {
                     rotated = true;
                     ctx.logger.warn(`Error acquiring consul lock ${key}, rotating session and retrying`, { err });
-                    session = await this.rotateSession(session);
+                    await this.rotateSession(session);
                     continue;
                 }
                 ctx.logger.error(`Error obtaining consul lock for key ${key}`, err);

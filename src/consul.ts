@@ -5,6 +5,7 @@ import InstanceStore, { InstanceDetails, InstanceGroup, InstanceState } from './
 import { CloudInstance } from './cloud_manager';
 import { Reservation } from './reservation';
 import { ReservationStore } from './reservation_store';
+import { partitionExpiredStates } from './instance_state_expiry';
 
 // implments the InstanceStore interface using consul K/V API calls
 // uses the got library to make HTTP requests
@@ -269,10 +270,14 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
             return [];
         }
         ctx.logger.debug('received consul k/v results', { key, res });
-        // Only bare `${groupsPrefix}<name>` keys are group definitions; skip nested legacy data keys
-        // (see getAllInstanceGroupNames) so instance data is never cast to a phantom InstanceGroup.
+        // Only bare `${groupsPrefix}<name>` keys are group definitions; skip nested legacy data keys and a
+        // bare prefix placeholder (empty name, e.g. a directory key created via the Consul UI) so instance
+        // data / empty values are never cast to a phantom InstanceGroup or crash JSON.parse.
         return Object.entries(res)
-            .filter(([_k, v]) => !v.Key.replace(this.groupsPrefix, '').includes('/'))
+            .filter(([_k, v]) => {
+                const name = v.Key.replace(this.groupsPrefix, '');
+                return name.length > 0 && !name.includes('/');
+            })
             .map(([_k, v]) => <InstanceGroup>JSON.parse(v.Value));
     }
 
@@ -317,14 +322,17 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         }
     }
 
-    // Mirror RedisStore.doFilterOutAndTrimExpiredStates: pick a TTL by provisioning / shutting-down /
-    // idle, compare state.timestamp + ttl against wall clock, keep valid states and delete expired ones.
+    // Uses the shared expiry policy (see instance_state_expiry.ts) so Consul and Redis stay in lockstep,
+    // then deletes the expired state keys from Consul.
     async filterOutAndTrimExpiredStates(
         ctx: Context,
         group: string,
         states: InstanceState[],
     ): Promise<InstanceState[]> {
-        // Skip the recursive shutdown-status fetch entirely for idle/empty groups.
+        // Skip the recursive shutdown-status fetch entirely for idle/empty groups. Trade-off: this also
+        // skips reaping expired shutdown-status entries for a scaled-to-zero group, so a small, bounded set
+        // of expired keys may linger under group-data/<group>/shutdown until the group scales back up (the
+        // next non-empty pass reaps them) or is deleted (deleteInstanceGroup drops the whole subtree).
         if (states.length === 0) {
             return [];
         }
@@ -334,40 +342,25 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
             states.map((state) => state.instanceId),
         );
 
-        const validStates: InstanceState[] = [];
-        const p: Promise<boolean>[] = [];
-        for (let i = 0; i < states.length; i++) {
-            const state = states[i];
-            let statusTTL = this.idleTTL;
-            if (state.status && state.status.provisioning) {
-                statusTTL = this.provisioningTTL;
-            }
-            const isInstanceShuttingDown = state.isShuttingDown || shutdownStatuses[i];
-            if (isInstanceShuttingDown) {
-                statusTTL = this.shutdownStatusTTL;
-            }
+        const { valid, expired } = partitionExpiredStates(
+            ctx,
+            group,
+            states,
+            shutdownStatuses,
+            { idleTTL: this.idleTTL, provisioningTTL: this.provisioningTTL, shutdownStatusTTL: this.shutdownStatusTTL },
+            Date.now(),
+        );
 
-            let isValidState: boolean;
-            if (state.timestamp === undefined || state.timestamp === null) {
-                ctx.logger.warn(`state has no timestamp, treating as expired`, { group, state });
-                isValidState = false;
-            } else {
-                isValidState = state.timestamp + 1000 * statusTTL >= Date.now();
-            }
-
-            if (isValidState) {
-                validStates.push(state);
-            } else {
-                ctx.logger.debug(`will delete expired state`, { group, state });
-                p.push(this.delete(`${this.groupDataPrefix}${group}/states/${state.instanceId}`));
-            }
-        }
+        const p = expired.map((state) => {
+            ctx.logger.debug(`will delete expired state`, { group, state });
+            return this.delete(`${this.groupDataPrefix}${group}/states/${state.instanceId}`);
+        });
         (await Promise.allSettled(p)).map((r) => {
             if (r.status === 'rejected') {
                 ctx.logger.error(`Failed to delete expired state from consul: ${r.reason}`, { group });
             }
         });
-        return validStates;
+        return valid;
     }
 
     async saveInstanceStatus(ctx: Context, group: string, state: InstanceState): Promise<boolean> {

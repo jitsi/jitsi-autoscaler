@@ -414,8 +414,10 @@ export class InstanceTracker {
     }
 
     async trimCurrent(ctx: Context, group: string, filterShutdown = true): Promise<InstanceState[]> {
-        const rawStates = await this.getGroupInstanceStates(ctx, group);
-        const states = await this.filterOutAndTrimExpiredStates(ctx, group, rawStates);
+        // fetchInstanceStates already trims expired states inside the store (the single source of the
+        // expiry policy for both providers), so we don't re-filter here — that was a redundant second
+        // recursive KV sweep in Consul mode.
+        const states = await this.getGroupInstanceStates(ctx, group);
         ctx.logger.debug(`instance states`, { group, states });
 
         if (filterShutdown) {

@@ -127,6 +127,24 @@ describe('PrometheusClient', () => {
             );
         });
 
+        // P2: step must be min(60, scalePeriod) so sub-60s periods keep resolution
+        test('will set the query step to min(60, scalePeriod)', async () => {
+            const cases = [
+                { stepSeconds: 30, expected: 30 },
+                { stepSeconds: 300, expected: 60 },
+                { stepSeconds: undefined, expected: 60 },
+            ];
+            for (const c of cases) {
+                let capturedStep;
+                driver.rangeQuery.mock.mockImplementationOnce((_query, _start, _end, step) => {
+                    capturedStep = step;
+                    return <Result>{ result: [] };
+                });
+                await client.fetchInstanceMetrics(ctx, group, 3600, c.stepSeconds);
+                assert.strictEqual(capturedStep, c.expected, `stepSeconds=${c.stepSeconds} -> step=${c.expected}`);
+            }
+        });
+
         // P3: group names with quotes/backslashes must be escaped into the PromQL matcher
         test('will escape special characters in the group label', async () => {
             let capturedQuery;

@@ -265,8 +265,13 @@ export class InstanceTracker {
         });
     }
 
-    async fetchInstanceMetrics(ctx: Context, group: string): Promise<InstanceMetric[]> {
-        return this.metricsStore.fetchInstanceMetrics(ctx, group);
+    async fetchInstanceMetrics(
+        ctx: Context,
+        group: string,
+        windowSeconds?: number,
+        stepSeconds?: number,
+    ): Promise<InstanceMetric[]> {
+        return this.metricsStore.fetchInstanceMetrics(ctx, group, windowSeconds, stepSeconds);
     }
 
     async cleanInstanceMetrics(ctx: Context, group: string): Promise<boolean> {
@@ -291,7 +296,11 @@ export class InstanceTracker {
         }
 
         const inventoryStart = process.hrtime();
-        const items = await this.fetchInstanceMetrics(ctx, group);
+        // Window the metrics fetch to the full range the periods span and request per-period resolution,
+        // so a Prometheus-backed store does not truncate long scaling windows or coarsen sub-60s periods
+        // (the Redis store ignores both arguments).
+        const windowSeconds = periodsCount * periodDurationSeconds;
+        const items = await this.fetchInstanceMetrics(ctx, group, windowSeconds, periodDurationSeconds);
 
         const instancesInMetrics = <string[]>[];
         items.forEach((itemJson) => {
@@ -405,8 +414,10 @@ export class InstanceTracker {
     }
 
     async trimCurrent(ctx: Context, group: string, filterShutdown = true): Promise<InstanceState[]> {
-        const rawStates = await this.getGroupInstanceStates(ctx, group);
-        const states = await this.filterOutAndTrimExpiredStates(ctx, group, rawStates);
+        // fetchInstanceStates already trims expired states inside the store (the single source of the
+        // expiry policy for both providers), so we don't re-filter here — that was a redundant second
+        // recursive KV sweep in Consul mode.
+        const states = await this.getGroupInstanceStates(ctx, group);
         ctx.logger.debug(`instance states`, { group, states });
 
         if (filterShutdown) {

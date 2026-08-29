@@ -86,26 +86,78 @@ describe('PrometheusClient', () => {
         const group = 'test';
 
         test('will fetch metrics for the correct group', async () => {
-            const res = await client.fetchInstanceMetrics(ctx, group, driver);
+            const res = await client.fetchInstanceMetrics(ctx, group);
             assert.notEqual(res.length, 0);
             assert.strictEqual(res[0].instanceId, 'test');
             assert.strictEqual(res[0].value, 0.1);
         });
 
-        test('will handle errors when fetching', async () => {
+        // P1: a query error must propagate (rejection), not resolve to an empty [] that reads as "no metrics"
+        test('will propagate errors when fetching', async () => {
             driver.rangeQuery.mock.mockImplementationOnce(() => {
                 throw new Error('EXPECTED ERROR: DISREGARD');
             });
-            const res = await client.fetchInstanceMetrics(ctx, group, driver);
-            assert.strictEqual(res.length, 0);
+            await assert.rejects(
+                () => client.fetchInstanceMetrics(ctx, group),
+                'expect fetchInstanceMetrics to reject on a query error',
+            );
         });
 
         test('will handle empty sets when fetching', async () => {
             driver.rangeQuery.mock.mockImplementationOnce(() => {
                 return <Result>{ result: [] };
             });
-            const res = await client.fetchInstanceMetrics(ctx, group, driver);
+            const res = await client.fetchInstanceMetrics(ctx, group);
             assert.strictEqual(res.length, 0);
+        });
+
+        // P2: the range query lookback must cover the requested window (scalePeriod * period count)
+        test('will size the range query to at least the requested window', async () => {
+            let capturedStart;
+            const before = Date.now();
+            driver.rangeQuery.mock.mockImplementationOnce((_query, start) => {
+                capturedStart = start;
+                return <Result>{ result: [] };
+            });
+            const windowSeconds = 300 * 24; // scalePeriod=300, scaleUpPeriodsCount=24 -> 2 hours
+            await client.fetchInstanceMetrics(ctx, group, windowSeconds);
+            assert.ok(
+                before - capturedStart >= windowSeconds * 1000,
+                `expect lookback (${before - capturedStart}ms) to be at least the window (${windowSeconds * 1000}ms)`,
+            );
+        });
+
+        // P2: step must be min(60, scalePeriod) so sub-60s periods keep resolution
+        test('will set the query step to min(60, scalePeriod)', async () => {
+            const cases = [
+                { stepSeconds: 30, expected: 30 },
+                { stepSeconds: 300, expected: 60 },
+                { stepSeconds: undefined, expected: 60 },
+            ];
+            for (const c of cases) {
+                let capturedStep;
+                driver.rangeQuery.mock.mockImplementationOnce((_query, _start, _end, step) => {
+                    capturedStep = step;
+                    return <Result>{ result: [] };
+                });
+                await client.fetchInstanceMetrics(ctx, group, 3600, c.stepSeconds);
+                assert.strictEqual(capturedStep, c.expected, `stepSeconds=${c.stepSeconds} -> step=${c.expected}`);
+            }
+        });
+
+        // P3: group names with quotes/backslashes must be escaped into the PromQL matcher
+        test('will escape special characters in the group label', async () => {
+            let capturedQuery;
+            driver.rangeQuery.mock.mockImplementationOnce((query) => {
+                capturedQuery = query;
+                return <Result>{ result: [] };
+            });
+            await client.fetchInstanceMetrics(ctx, 'ev"il\\group');
+            assert.strictEqual(
+                capturedQuery,
+                'autoscaler_instance_stress_level{group="ev\\"il\\\\group"}',
+                'expect quote and backslash to be escaped in the query',
+            );
         });
     });
 

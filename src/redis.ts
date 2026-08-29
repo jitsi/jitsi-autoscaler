@@ -4,7 +4,10 @@ import InstanceStore, { InstanceDetails, InstanceGroup, InstanceState } from './
 import MetricsStore, { InstanceMetric } from './metrics_store';
 import { Reservation } from './reservation';
 import { ReservationStore } from './reservation_store';
-import Redis from 'ioredis';
+import { partitionExpiredStates } from './instance_state_expiry';
+import Redis, { ChainableCommander } from 'ioredis';
+
+type PipelineResult = [error: Error | null, result: unknown];
 
 export interface RedisMetricsOptions {
     redisClient: Redis;
@@ -39,7 +42,12 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         this.redisScanCount = options.redisScanCount;
     }
 
-    async fetchInstanceMetrics(ctx: Context, group: string): Promise<InstanceMetric[]> {
+    async fetchInstanceMetrics(
+        ctx: Context,
+        group: string,
+        _windowSeconds?: number,
+        _stepSeconds?: number,
+    ): Promise<InstanceMetric[]> {
         const items: string[] = await this.redisClient.zrange(this.getGroupMetricsKey(group), 0, -1);
         return items.map((item) => <InstanceMetric>JSON.parse(item));
     }
@@ -58,7 +66,6 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         instanceStates: InstanceState[],
     ): Promise<InstanceState[]> {
         const groupInstancesStatesKey = this.getGroupInstancesStatesKey(group);
-        const groupInstancesStatesResponse = <InstanceState[]>[];
         const deletePipeline = this.redisClient.pipeline();
 
         const shutdownStatuses: boolean[] = await this.getShutdownStatuses(
@@ -69,33 +76,21 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             }),
         );
 
-        for (let i = 0; i < instanceStates.length; i++) {
-            const state = instanceStates[i];
-            let statusTTL = this.idleTTL;
-            if (state.status && state.status.provisioning) {
-                statusTTL = this.provisioningTTL;
-            }
-
-            const isInstanceShuttingDown = state.isShuttingDown || shutdownStatuses[i];
-            if (isInstanceShuttingDown) {
-                // We keep shutdown status a bit longer, to be consistent to Oracle Search API which has a delay in seeing Terminating status
-                statusTTL = this.shutdownStatusTTL;
-            }
-
-            const expiresAt = new Date(state.timestamp + 1000 * statusTTL);
-            const isValidState: boolean = expiresAt >= new Date();
-            if (isValidState) {
-                groupInstancesStatesResponse.push(state);
-            } else {
-                deletePipeline.hdel(groupInstancesStatesKey, state.instanceId);
-                ctx.logger.debug(`will delete expired state:`, {
-                    expiresAt,
-                    state,
-                });
-            }
+        // Shared expiry policy (see instance_state_expiry.ts) so Redis and Consul stay in lockstep.
+        const { valid, expired } = partitionExpiredStates(
+            ctx,
+            group,
+            instanceStates,
+            shutdownStatuses,
+            { idleTTL: this.idleTTL, provisioningTTL: this.provisioningTTL, shutdownStatusTTL: this.shutdownStatusTTL },
+            Date.now(),
+        );
+        for (const state of expired) {
+            deletePipeline.hdel(groupInstancesStatesKey, state.instanceId);
+            ctx.logger.debug(`will delete expired state:`, { state });
         }
         await deletePipeline.exec();
-        return groupInstancesStatesResponse;
+        return valid;
     }
 
     async fetchInstanceStates(ctx: Context, group: string): Promise<InstanceState[]> {
@@ -119,12 +114,8 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             );
             cursor = result[0];
             if (result[1].length > 0) {
-                const instanceStates = await this.getInstanceStates(result[1], groupInstancesStatesKey);
-                const validInstanceStates = await this.filterOutAndTrimExpiredStates(
-                    ctx,
-                    groupInstancesStatesKey,
-                    instanceStates,
-                );
+                const instanceStates = await this.getInstanceStates(ctx, result[1], groupInstancesStatesKey);
+                const validInstanceStates = await this.filterOutAndTrimExpiredStates(ctx, group, instanceStates);
                 states = states.concat(validInstanceStates);
             }
             scanCounts++;
@@ -140,31 +131,51 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         return states;
     }
 
-    private async getInstanceStates(fields: string[], groupInstancesStatesKey: string): Promise<InstanceState[]> {
+    // Executes a pipeline and returns its per-command results, throwing if exec() returned null or any
+    // command errored. Reads must fail closed: a per-command error must never be read as "flag not set"
+    // (that would let a shutting-down instance count as active, or a protected instance be scaled down).
+    private async execPipelineOrThrow(
+        ctx: Context,
+        pipeline: ChainableCommander,
+        opName: string,
+        logContext?: Record<string, unknown>,
+    ): Promise<PipelineResult[]> {
+        const results = await pipeline.exec();
+        if (!results) {
+            ctx.logger.error(`${opName} failed in pipeline.exec()`, logContext);
+            throw new Error(`${opName} pipeline.exec() returned null`);
+        }
+        for (const [err] of results) {
+            if (err) {
+                ctx.logger.error(`${opName} pipeline command errored`, { err, ...logContext });
+                throw new Error(`${opName} pipeline command errored: ${err}`);
+            }
+        }
+        return results as PipelineResult[];
+    }
+
+    private async getInstanceStates(
+        ctx: Context,
+        fields: string[],
+        groupInstancesStatesKey: string,
+    ): Promise<InstanceState[]> {
         const instanceStatesResponse: InstanceState[] = [];
         const pipeline = this.redisClient.pipeline();
 
         fields.forEach((instanceId: string) => {
             pipeline.hget(groupInstancesStatesKey, instanceId);
         });
-        const instanceStates = await pipeline.exec();
+        const instanceStates = await this.execPipelineOrThrow(ctx, pipeline, 'getInstanceStates', {
+            key: groupInstancesStatesKey,
+        });
 
-        if (instanceStates) {
-            for (const state of instanceStates) {
-                if (state[1]) {
-                    instanceStatesResponse.push(<InstanceState>JSON.parse(<string>state[1]));
-                }
+        for (const state of instanceStates) {
+            if (state[1]) {
+                instanceStatesResponse.push(<InstanceState>JSON.parse(<string>state[1]));
             }
-        } else {
-            return [];
         }
 
         return instanceStatesResponse;
-    }
-
-    async fetchInstanceGroups(_ctx: Context): Promise<string[]> {
-        const groups = await this.redisClient.keys('instances:status:*');
-        return groups.map((group) => group.split(':')[2]);
     }
 
     async saveInstanceStatus(ctx: Context, group: string, state: InstanceState): Promise<boolean> {
@@ -256,15 +267,8 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             const key = this.shutDownKey(instanceId);
             pipeline.get(key);
         });
-        const instances = await pipeline.exec();
-        if (instances) {
-            return instances.map((instance: [error: Error | null, result: unknown]) => {
-                return instance[1] == <unknown>'shutdown';
-            });
-        } else {
-            ctx.logger.error('ShutdownStatus Failed in pipeline.exec()');
-            return [];
-        }
+        const instances = await this.execPipelineOrThrow(ctx, pipeline, 'getShutdownStatuses');
+        return instances.map((instance) => instance[1] == <unknown>'shutdown');
     }
 
     async getShutdownConfirmations(ctx: Context, _group: string, instanceIds: string[]): Promise<(string | false)[]> {
@@ -273,19 +277,14 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             const key = this.shutDownConfirmedKey(instanceId);
             pipeline.get(key);
         });
-        const instances = await pipeline.exec();
-        if (instances) {
-            return instances.map((instance: [error: Error | null, result: unknown]) => {
-                if (instance[1] == null) {
-                    return false;
-                } else {
-                    return <string>instance[1];
-                }
-            });
-        } else {
-            ctx.logger.error('ShutdownConfirmations Failed in pipeline.exec()');
-            return [];
-        }
+        const instances = await this.execPipelineOrThrow(ctx, pipeline, 'getShutdownConfirmations');
+        return instances.map((instance) => {
+            if (instance[1] == null) {
+                return false;
+            } else {
+                return <string>instance[1];
+            }
+        });
     }
 
     async getShutdownStatus(ctx: Context, _group: string, instanceId: string): Promise<boolean> {
@@ -311,7 +310,7 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         return true;
     }
 
-    async getShutdownConfirmation(ctx: Context, instanceId: string): Promise<false | string> {
+    async getShutdownConfirmation(ctx: Context, _group: string, instanceId: string): Promise<false | string> {
         const key = this.shutDownConfirmedKey(instanceId);
         const res = await this.redisClient.get(key);
         ctx.logger.debug('Read shutdown confirmation', { key, res });
@@ -340,15 +339,8 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             const key = this.protectedKey(instanceId);
             pipeline.get(key);
         });
-        const instances = await pipeline.exec();
-        if (instances) {
-            return instances.map((instance: [error: Error | null, result: unknown]) => {
-                return instance[1] == 'isScaleDownProtected';
-            });
-        } else {
-            ctx.logger.error('ScaleDownProtected Failed in pipeline.exec()', { group });
-            return [];
-        }
+        const instances = await this.execPipelineOrThrow(ctx, pipeline, 'areScaleDownProtected', { group });
+        return instances.map((instance) => instance[1] == 'isScaleDownProtected');
     }
 
     reconfigureKey(instanceId: string): string {
@@ -384,15 +376,8 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             const key = this.reconfigureKey(instanceId);
             pipeline.get(key);
         });
-        const instances = await pipeline.exec();
-        if (instances) {
-            return instances.map((instance: [error: Error | null, result: unknown]) => {
-                return <string>instance[1];
-            });
-        } else {
-            ctx.logger.error('ReconfigureDates Failed in pipeline.exec()', { group });
-            return [];
-        }
+        const instances = await this.execPipelineOrThrow(ctx, pipeline, 'getReconfigureDates', { group });
+        return instances.map((instance) => <string>instance[1]);
     }
 
     async getReconfigureDate(ctx: Context, _group: string, instanceId: string): Promise<string> {
@@ -508,14 +493,21 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
 
     async deleteInstanceGroup(ctx: Context, groupName: string): Promise<void> {
         ctx.logger.info(`Deleting group ${groupName}`);
-        const result = await this.redisClient
+        // Collect reservation keys so they are removed along with the rest of the group data.
+        const reservationIds = await this.redisClient.smembers(this.reservationGroupSetKey(groupName));
+        const pipeline = this.redisClient
             .pipeline()
             .hdel(this.GROUPS_HASH_NAME, groupName)
             .del(this.getGroupInstancesStatesKey(groupName))
             .del(this.getGroupMetricsKey(groupName))
             .del(`cloud-instances-list:${groupName}`)
             .del(`service-metrics:${groupName}:untracked-count`)
-            .exec();
+            .del(this.reservationGroupSetKey(groupName))
+            .del(this.reservationScaleDownGraceKey(groupName));
+        for (const id of reservationIds) {
+            pipeline.del(this.reservationKey(id));
+        }
+        const result = await pipeline.exec();
 
         if (result) {
             ctx.logger.info(`Group ${groupName} is deleted`, { result });

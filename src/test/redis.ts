@@ -241,4 +241,93 @@ describe('RedisStore with Mock Redis Client', () => {
         assert.equal(scanResult[0], '0', 'expect scan cursor to be 0');
         assert.deepEqual(scanResult[1], ['field2', 'value2'], 'expect field2 and value2 to be in scan result');
     });
+
+    // R1: expired instance states must be HDEL'd from the correct key
+    test('fetchInstanceStates deletes expired states from the group hash', async () => {
+        const group = 'testgroup';
+        const key = `instances:status:${group}`;
+        const freshState = {
+            instanceId: 'i-fresh',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now(),
+            metadata: { group },
+        };
+        const expiredState = {
+            instanceId: 'i-expired',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now() - 120 * 1000, // idleTTL is 60s, so 120s old is expired
+            metadata: { group },
+        };
+        await mockRedisClient.hset(key, freshState.instanceId, JSON.stringify(freshState));
+        await mockRedisClient.hset(key, expiredState.instanceId, JSON.stringify(expiredState));
+
+        const states = await redisStore.fetchInstanceStates(context, group);
+
+        assert.equal(states.length, 1, 'expect only the fresh state to be returned');
+        assert.equal(states[0].instanceId, 'i-fresh', 'expect the fresh state to be returned');
+        assert.equal(
+            await mockRedisClient.hget(key, 'i-expired'),
+            null,
+            'expect the expired state to be HDELed from instances:status:<group>',
+        );
+        assert.notEqual(
+            await mockRedisClient.hget(key, 'i-fresh'),
+            null,
+            'expect the fresh state to remain in the hash',
+        );
+    });
+
+    // R3: per-command pipeline errors must throw rather than read as "flag not set"
+    test('getShutdownStatuses throws when a pipeline command errors', async () => {
+        const fakeClient = {
+            pipeline() {
+                return {
+                    get() {
+                        return this;
+                    },
+                    async exec() {
+                        return [[new Error('x'), null]];
+                    },
+                };
+            },
+        };
+        const store = new RedisStore({
+            redisClient: fakeClient as unknown as Redis,
+            redisScanCount: 100,
+            idleTTL: 60,
+            metricTTL: 60,
+            provisioningTTL: 60,
+            shutdownStatusTTL: 60,
+            groupRelatedDataTTL: 60,
+            serviceLevelMetricsTTL: 60,
+        });
+        await assert.rejects(
+            () => store.getShutdownStatuses(context, 'group', ['i-1']),
+            'expect getShutdownStatuses to throw on a pipeline command error',
+        );
+    });
+
+    // R5: deleting a group must remove reservation keys too
+    test('deleteInstanceGroup removes reservation keys', async () => {
+        const group = 'test-group';
+        const reservation = {
+            id: 'res-1',
+            groupName: group,
+            expiresAt: Date.now() + 60 * 1000,
+        };
+        await redisStore.saveReservation(context, reservation);
+
+        assert.notEqual(await redisStore.getReservation(context, 'res-1'), null, 'expect reservation to exist');
+
+        await redisStore.deleteInstanceGroup(context, group);
+
+        assert.equal(await redisStore.getReservation(context, 'res-1'), null, 'expect reservation key to be deleted');
+        assert.equal(
+            await mockRedisClient.get('reservations:group:' + group),
+            null,
+            'expect the reservation group set to be deleted',
+        );
+    });
 });

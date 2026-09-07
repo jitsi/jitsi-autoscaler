@@ -189,3 +189,122 @@ describe('ConsulLockManager session renewal', () => {
         await lm.shutdown();
     });
 });
+
+// L2: the shared Consul session TTL must be derived from the configured lock TTLs (the options used to be
+// accepted and ignored, leaving a hardcoded 1h session that stalled a group for up to an hour after a crash).
+describe('ConsulLockManager session TTL derivation (L2)', () => {
+    test('derives the session TTL from the largest configured lock TTL and renews at a third of it', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 180000, jobCreationLockTTL: 30000 });
+        await lm.initConsulSession();
+
+        assert.strictEqual(client.session.create.mock.callCount(), 1);
+        const args = client.session.create.mock.calls[0].arguments[0];
+        assert.strictEqual(args.ttl, '180s', 'session TTL must equal max(groupLockTTLMs, jobCreationLockTTL)');
+        assert.strictEqual(args.behavior, 'release', 'locks must be released (not deleted) when the session lapses');
+        assert.strictEqual(lm.consulSessionRenewInterval, 60000, 'renew at TTL/3');
+        await lm.shutdown();
+    });
+
+    test('uses jobCreationLockTTL when it is the larger of the two', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 20000, jobCreationLockTTL: 45000 });
+        await lm.initConsulSession();
+        assert.strictEqual(client.session.create.mock.calls[0].arguments[0].ttl, '45s');
+        assert.strictEqual(lm.consulSessionRenewInterval, 15000);
+        await lm.shutdown();
+    });
+
+    test('falls back to a bounded 90s session when no lock TTLs are configured', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client });
+        await lm.initConsulSession();
+        assert.strictEqual(client.session.create.mock.calls[0].arguments[0].ttl, '90s');
+        assert.strictEqual(lm.consulSessionRenewInterval, 30000);
+        await lm.shutdown();
+    });
+
+    test('falls back to 90s when the configured TTL is below the Consul 10s minimum', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 3000, jobCreationLockTTL: 1000 });
+        await lm.initConsulSession();
+        assert.strictEqual(client.session.create.mock.calls[0].arguments[0].ttl, '90s');
+        await lm.shutdown();
+    });
+
+    test('never renews faster than every 5s', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 10000, jobCreationLockTTL: 10000 });
+        await lm.initConsulSession();
+        assert.strictEqual(client.session.create.mock.calls[0].arguments[0].ttl, '10s');
+        assert.strictEqual(lm.consulSessionRenewInterval, 5000, 'TTL/3 would be 3.3s; floor is 5s');
+        await lm.shutdown();
+    });
+});
+
+// L3: first-time session creation must be memoized so concurrent lockKey() calls share one session
+// (previously each created its own; the loser's session and renew timer leaked).
+describe('ConsulLockManager session creation memoization (L3)', () => {
+    test('concurrent first-time lockKey calls create exactly one session', async () => {
+        const client = makeConsulClient();
+        // slow creation so both callers are in flight before either commits
+        client.session.create = mock.fn(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return { ID: 's1' };
+        });
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 180000, jobCreationLockTTL: 30000 });
+
+        const [a, b, c] = await Promise.all([lm.lockKey(ctx, 'a'), lm.lockKey(ctx, 'b'), lm.lockGroup(ctx, 'g')]);
+        assert.ok(a && b && c, 'all callers should acquire');
+        assert.strictEqual(client.session.create.mock.callCount(), 1, 'concurrent callers must share one session');
+        assert.strictEqual(a.session, 's1');
+        assert.strictEqual(b.session, 's1');
+        assert.strictEqual(c.session, 's1');
+        await lm.shutdown();
+        assert.strictEqual(client.session.destroy.mock.callCount(), 1, 'shutdown destroys the single session');
+    });
+
+    test('a failed session creation clears the memo so the next call retries', async () => {
+        const client = makeConsulClient();
+        let attempts = 0;
+        client.session.create = mock.fn(async () => {
+            if (++attempts === 1) {
+                throw new Error('consul down');
+            }
+            return { ID: `s${attempts}` };
+        });
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 180000, jobCreationLockTTL: 30000 });
+
+        await assert.rejects(() => lm.lockKey(ctx, 'a'), /consul down/, 'the first call surfaces the failure');
+        const locker = await lm.lockKey(ctx, 'a');
+        assert.strictEqual(client.session.create.mock.callCount(), 2, 'the memoized failure must not be sticky');
+        assert.strictEqual(locker.session, 's2');
+        await lm.shutdown();
+    });
+
+    test('concurrent callers all see the same creation failure and the next call recovers', async () => {
+        const client = makeConsulClient();
+        let attempts = 0;
+        client.session.create = mock.fn(async () => {
+            attempts++;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            if (attempts === 1) {
+                throw new Error('consul down');
+            }
+            return { ID: `s${attempts}` };
+        });
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 180000, jobCreationLockTTL: 30000 });
+
+        const results = await Promise.allSettled([lm.lockKey(ctx, 'a'), lm.lockKey(ctx, 'b')]);
+        assert.deepEqual(
+            results.map((r) => r.status),
+            ['rejected', 'rejected'],
+        );
+        assert.strictEqual(client.session.create.mock.callCount(), 1, 'one shared create attempt for both callers');
+
+        const locker = await lm.lockKey(ctx, 'a');
+        assert.strictEqual(locker.session, 's2');
+        assert.strictEqual(client.session.create.mock.callCount(), 2);
+        await lm.shutdown();
+    });
+});

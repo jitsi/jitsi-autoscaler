@@ -335,4 +335,31 @@ describe('InstanceTracker', () => {
             assert.deepEqual(results, [4.25, 3]);
         });
     });
+
+    // P2: the tracker must forward the full scaling window and the per-period step to the metrics store,
+    // so a Prometheus-backed store neither truncates long windows nor coarsens sub-60s periods.
+    describe('metrics window forwarding (P2)', () => {
+        test('passes windowSeconds = periods * scalePeriod and stepSeconds = scalePeriod', async () => {
+            const scalePeriod = 300;
+            const periods = Math.max(24, 2); // scaleUpPeriodsCount=24, scaleDownPeriodsCount=2 -> 2 hours
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => []);
+
+            await instanceTracker.getMetricInventoryPerPeriod(context, groupName, periods, scalePeriod);
+
+            const call = mockStore.fetchInstanceMetrics.mock.calls.at(-1);
+            assert.strictEqual(call.arguments[1], groupName, 'group name is forwarded');
+            assert.strictEqual(call.arguments[2], 7200, 'windowSeconds must cover every period (24 * 300s)');
+            assert.strictEqual(call.arguments[3], scalePeriod, 'stepSeconds must be the scale period');
+        });
+
+        test('forwards sub-60s scale periods unchanged so the store can keep per-period resolution', async () => {
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => []);
+
+            await instanceTracker.getMetricInventoryPerPeriod(context, groupName, 3, 10);
+
+            const call = mockStore.fetchInstanceMetrics.mock.calls.at(-1);
+            assert.strictEqual(call.arguments[2], 30);
+            assert.strictEqual(call.arguments[3], 10);
+        });
+    });
 });

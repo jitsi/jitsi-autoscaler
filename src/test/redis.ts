@@ -330,4 +330,112 @@ describe('RedisStore with Mock Redis Client', () => {
             'expect the reservation group set to be deleted',
         );
     });
+
+    // R3 (breadth): every pipelined read must fail closed, both on a per-command error and on a null exec().
+    // A flaky Redis must never read as "flag not set" (shutting-down instance counted as active, protected
+    // instance scaled down, reconfigure date lost, instance state silently dropped).
+    describe('pipelined reads fail closed (R3)', () => {
+        function storeWithExecResult(execResult) {
+            const fakeClient = {
+                pipeline() {
+                    return {
+                        get() {
+                            return this;
+                        },
+                        hget() {
+                            return this;
+                        },
+                        async exec() {
+                            return execResult;
+                        },
+                    };
+                },
+                // used by fetchInstanceStates before it reaches the pipelined hget
+                async expire() {
+                    return 1;
+                },
+                async hscan() {
+                    return ['0', ['i-1']];
+                },
+            };
+            return new RedisStore({
+                redisClient: fakeClient as unknown as Redis,
+                redisScanCount: 100,
+                idleTTL: 60,
+                metricTTL: 60,
+                provisioningTTL: 60,
+                shutdownStatusTTL: 60,
+                groupRelatedDataTTL: 60,
+                serviceLevelMetricsTTL: 60,
+            });
+        }
+
+        const readers = [
+            { name: 'getShutdownStatuses', call: (s) => s.getShutdownStatuses(context, 'group', ['i-1']) },
+            { name: 'getShutdownConfirmations', call: (s) => s.getShutdownConfirmations(context, 'group', ['i-1']) },
+            { name: 'areScaleDownProtected', call: (s) => s.areScaleDownProtected(context, 'group', ['i-1']) },
+            { name: 'getReconfigureDates', call: (s) => s.getReconfigureDates(context, 'group', ['i-1']) },
+            {
+                name: 'fetchInstanceStates (via getInstanceStates)',
+                call: (s) => s.fetchInstanceStates(context, 'group'),
+            },
+        ];
+
+        for (const reader of readers) {
+            test(`${reader.name} throws when a pipeline command errors`, async () => {
+                await assert.rejects(
+                    () => reader.call(storeWithExecResult([[new Error('x'), null]])),
+                    /pipeline command errored/,
+                    `${reader.name} must not read a per-command error as "not set"`,
+                );
+                assert.ok(context.logger.error.mock.callCount() >= 1, 'the failure must be logged');
+            });
+
+            test(`${reader.name} throws when exec() returns null`, async () => {
+                await assert.rejects(
+                    () => reader.call(storeWithExecResult(null)),
+                    /returned null/,
+                    `${reader.name} must not read a null exec() as an empty result`,
+                );
+            });
+        }
+    });
+
+    // R6: a state without a timestamp must be treated as expired explicitly (logged + deleted), not by
+    // accident of a NaN comparison.
+    test('fetchInstanceStates treats a state without a timestamp as expired and warns', async () => {
+        const group = 'testgroup';
+        const key = `instances:status:${group}`;
+        const freshState = {
+            instanceId: 'i-fresh',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now(),
+            metadata: { group },
+        };
+        const noTimestampState = {
+            instanceId: 'i-no-timestamp',
+            instanceType: 'test',
+            status: { provisioning: false },
+            metadata: { group },
+        };
+        await mockRedisClient.hset(key, freshState.instanceId, JSON.stringify(freshState));
+        await mockRedisClient.hset(key, noTimestampState.instanceId, JSON.stringify(noTimestampState));
+
+        const states = await redisStore.fetchInstanceStates(context, group);
+
+        assert.deepEqual(
+            states.map((s) => s.instanceId),
+            ['i-fresh'],
+            'expect only the timestamped state to be returned',
+        );
+        assert.equal(
+            await mockRedisClient.hget(key, 'i-no-timestamp'),
+            null,
+            'expect the timestamp-less state to be deleted from the hash',
+        );
+        const warnings = context.logger.warn.mock.calls.filter((c) => String(c.arguments[0]).includes('no timestamp'));
+        assert.equal(warnings.length, 1, 'expect exactly one explicit warning about the missing timestamp');
+        assert.equal(warnings[0].arguments[1].group, group, 'expect the warning to carry the group');
+    });
 });

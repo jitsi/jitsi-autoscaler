@@ -350,3 +350,32 @@ this pass.
 
 Each PR: run `npm run build && npm test`, and include the regression tests named above.
 Do not commit or push without explicit approval from the repo owner.
+
+---
+
+## Implementation notes (status as of 2026-09-07)
+
+All items above are implemented on branch `JIT-16014-storage-lock-remediation` (PR #189) and every
+item has a regression test. Where the implementation deliberately departs from the prescribed fix
+text, the code comment at the site explains why; the departures are:
+
+- **P2** — the Prometheus lookback is `windowSeconds + step` (1h only when no window is supplied),
+  not `max(windowSeconds, 3600)`. The autoscaler only buckets `periodsCount` periods, so fetching a
+  full hour for a 5-minute window was 6–12× over-fetch. `step = min(60, scalePeriod)` as planned.
+- **L1** — a transient renew failure retains the session and retries while `failures × interval < TTL`;
+  the session reference is dropped only on exhaustion. Clearing on the first failure would release
+  every live lock this node holds (session `behavior: 'release'`). Any acquire error rotates the
+  session once, rather than sniffing Consul's error text (which the transport frequently masks).
+- **L2** — the session TTL is derived from `max(groupLockTTLMs, jobCreationLockTTL)` (floor 10s,
+  fallback 90s) with renewal at TTL/3 (min 5s). With the config defaults this is 180s/60s, not the
+  90s/30s figure the plan used as an example; the options are consumed, not dead.
+- **L5** — contention retry applies to group locks only. `lockJobCreation` fails fast on purpose: a
+  retry could let a second node acquire after the winner releases and create duplicate job batches.
+- **Workstream 5.1** — TypeScript cannot reject a fewer-parameter implementation via interface
+  assignability (parameter bivariance / fewer-params rule), so instead `src/test/store_interface_arity.ts`
+  asserts, at type level, that every `RedisStore`/`ConsulStore`/`PrometheusClient` method covers its
+  interface's parameter count. ts-node type-checks the file when the suite runs, and a `@ts-expect-error`
+  self-check proves the guard rejects the exact R2 drift.
+
+Out of scope here but found alongside (see `docs/CODE_REVIEW_FINDINGS.md`): the Consul write path and
+the Redis write pipelines are still fail-open; `ConsulStore.ping` returns the caught error object.

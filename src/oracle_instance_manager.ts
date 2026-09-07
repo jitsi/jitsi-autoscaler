@@ -24,8 +24,13 @@ export interface OracleInstanceManagerOptions {
 export default class OracleInstanceManager implements CloudInstanceManager {
     private isDryRun: boolean;
     private provider: common.ConfigFileAuthenticationDetailsProvider;
-    private identityClient: identity.IdentityClient;
-    private computeManagementClient: core.ComputeManagementClient;
+    // Clients are region-scoped and cached per region rather than shared as a single mutable
+    // instance. The OCI SDK clients carry region as instance state (`.regionId`); mutating a
+    // shared client from concurrent launches/lookups for different regions is a race, since
+    // job processing is concurrent (JOBS_CONCURRENCY > 1) and requests can be sent out under
+    // whichever region happened to be set most recently by an unrelated concurrent call.
+    private identityClientsByRegion: Map<string, identity.IdentityClient> = new Map();
+    private computeManagementClientsByRegion: Map<string, core.ComputeManagementClient> = new Map();
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
@@ -33,14 +38,30 @@ export default class OracleInstanceManager implements CloudInstanceManager {
             options.ociConfigurationFilePath,
             options.ociConfigurationProfile,
         );
-        this.identityClient = new identity.IdentityClient({ authenticationDetailsProvider: this.provider });
-        this.computeManagementClient = new core.ComputeManagementClient({
-            authenticationDetailsProvider: this.provider,
-        });
 
         this.launchInstances = this.launchInstances.bind(this);
         this.getAvailabilityDomains = this.getAvailabilityDomains.bind(this);
         this.getFaultDomains = this.getFaultDomains.bind(this);
+    }
+
+    private getIdentityClient(region: string): identity.IdentityClient {
+        let client = this.identityClientsByRegion.get(region);
+        if (!client) {
+            client = new identity.IdentityClient({ authenticationDetailsProvider: this.provider });
+            client.regionId = region;
+            this.identityClientsByRegion.set(region, client);
+        }
+        return client;
+    }
+
+    private getComputeManagementClient(region: string): core.ComputeManagementClient {
+        let client = this.computeManagementClientsByRegion.get(region);
+        if (!client) {
+            client = new core.ComputeManagementClient({ authenticationDetailsProvider: this.provider });
+            client.regionId = region;
+            this.computeManagementClientsByRegion.set(region, client);
+        }
+        return client;
     }
 
     async launchInstances(
@@ -51,7 +72,6 @@ export default class OracleInstanceManager implements CloudInstanceManager {
     ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
 
-        this.computeManagementClient.regionId = group.region;
         const availabilityDomains: string[] = await this.getAvailabilityDomains(group.compartmentId, group.region);
 
         const faultDomainsByAD = await this.getFaultDomainsByAD(group.compartmentId, group.region, availabilityDomains);
@@ -197,7 +217,7 @@ export default class OracleInstanceManager implements CloudInstanceManager {
             return true;
         }
         try {
-            const launchResponse = await this.computeManagementClient.launchInstanceConfiguration({
+            const launchResponse = await this.getComputeManagementClient(group.region).launchInstanceConfiguration({
                 instanceConfigurationId: groupInstanceConfigurationId,
                 instanceConfiguration: overwriteComputeInstanceDetails,
             });
@@ -232,9 +252,8 @@ export default class OracleInstanceManager implements CloudInstanceManager {
 
     //TODO in the future, the list of ADs/FDs per region will be loaded once at startup time
     private async getAvailabilityDomains(compartmentId: string, region: string): Promise<string[]> {
-        this.identityClient.regionId = region;
         const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse =
-            await this.identityClient.listAvailabilityDomains({
+            await this.getIdentityClient(region).listAvailabilityDomains({
                 compartmentId: compartmentId,
             });
         return availabilityDomainsResponse.items.map((adResponse) => {
@@ -247,12 +266,12 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         region: string,
         availabilityDomain: string,
     ): Promise<string[]> {
-        this.identityClient.regionId = region;
-        const faultDomainsResponse: identity.responses.ListFaultDomainsResponse =
-            await this.identityClient.listFaultDomains({
-                compartmentId: compartmentId,
-                availabilityDomain: availabilityDomain,
-            });
+        const faultDomainsResponse: identity.responses.ListFaultDomainsResponse = await this.getIdentityClient(
+            region,
+        ).listFaultDomains({
+            compartmentId: compartmentId,
+            availabilityDomain: availabilityDomain,
+        });
         return faultDomainsResponse.items.map((fdResponse) => {
             return fdResponse.name;
         });

@@ -17,6 +17,9 @@ export class ASAPPubKeyFetcher {
     }
 
     async secretCallback(req: Request, token: jwt.Jwt): Promise<jwt.Secret> {
+        if (!token || !token.header) {
+            throw new UnauthorizedError('credentials_bad_format', new Error('token could not be decoded'));
+        }
         if (!token.header.kid) {
             throw new UnauthorizedError('credentials_bad_format', new Error('kid is required in the header'));
         }

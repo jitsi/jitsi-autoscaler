@@ -6,10 +6,25 @@ import http from 'node:http';
 import test, { afterEach, beforeEach, describe, mock } from 'node:test';
 import sha256 from 'sha256';
 
+import Module from 'node:module';
+
 // asap.ts reads `req.context`, which is declared as a global Express augmentation in context.ts but
-// never imported there. Load context.ts first so the type checker sees the augmentation.
-import '../context';
-import { ASAPPubKeyFetcher } from '../asap';
+// never imported there, so context.ts must be compiled before asap.ts for the type checker to see it.
+// context.ts in turn imports config.ts, whose envalid validation exits the process when the autoscaler
+// env vars are absent (as in CI). Stub config in the require cache first (context only reads LogLevel),
+// then load context and asap at runtime rather than via hoisted imports.
+function stubModule(request, exports) {
+    const filename = require.resolve(request);
+    const stub = new Module(filename, module);
+    stub.filename = filename;
+    stub.loaded = true;
+    stub.exports = exports;
+    require.cache[filename] = stub;
+}
+stubModule('../config', { __esModule: true, default: { LogLevel: 'error' } });
+require('../context');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { ASAPPubKeyFetcher } = require('../asap');
 
 // asap.ts is compiled with esModuleInterop, so every key fetch goes through `require('got').default`.
 // That property is a plain writable slot on the got module object, so replacing it intercepts the

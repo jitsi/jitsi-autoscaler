@@ -25,6 +25,23 @@ export class AutoscalerApiClient {
         this.timeoutMs = timeoutMs;
     }
 
+    // Per-request deadline. Uses an explicit, ref'd timer rather than AbortSignal.timeout(): that helper's
+    // timer is unref'd, so when nothing else keeps the event loop alive (e.g. the node:test runner on Node 22
+    // awaiting a hung request) the process can drain before the deadline fires and the request never settles.
+    // The abort reason mirrors AbortSignal.timeout() so callers still see err.name === 'TimeoutError'.
+    private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+        const controller = new AbortController();
+        const timer = setTimeout(
+            () => controller.abort(new DOMException(`request timed out after ${this.timeoutMs}ms`, 'TimeoutError')),
+            this.timeoutMs,
+        );
+        try {
+            return await fetch(url, { ...init, signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
     private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
         const url = `${this.baseUrl}${path}`;
         const headers: Record<string, string> = {
@@ -32,11 +49,10 @@ export class AutoscalerApiClient {
             'Content-Type': 'application/json',
         };
 
-        const response = await fetch(url, {
+        const response = await this.fetchWithTimeout(url, {
             method,
             headers,
             body: body ? JSON.stringify(body) : undefined,
-            signal: AbortSignal.timeout(this.timeoutMs),
         });
 
         if (!response.ok) {
@@ -58,7 +74,7 @@ export class AutoscalerApiClient {
             'Content-Type': 'application/json',
         };
 
-        const response = await fetch(url, { method, headers, signal: AbortSignal.timeout(this.timeoutMs) });
+        const response = await this.fetchWithTimeout(url, { method, headers });
 
         if (response.status === 404) {
             return null;

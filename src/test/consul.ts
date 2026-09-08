@@ -401,3 +401,52 @@ describe('ConsulStore data operations (in-memory client)', () => {
         assert.strictEqual(await store.ping(ctx), false);
     });
 });
+
+// C8: existsAtLeastOneGroup must reflect group *definitions* only. Per-group data (states, shutdown
+// flags, reservations) lives in separate trees after C2 and must never count as a group.
+describe('ConsulStore existsAtLeastOneGroup (C8)', () => {
+    let mockConsul: MockConsulClient;
+    let store: ConsulClient;
+
+    beforeEach(() => {
+        mockConsul = new MockConsulClient();
+        store = new ConsulClient({ client: mockConsul, idleTTL: 60, provisioningTTL: 60, shutdownStatusTTL: 60 });
+    });
+
+    afterEach(() => {
+        mockConsul.clearAll();
+    });
+
+    test('returns false when no groups exist', async () => {
+        assert.strictEqual(await store.existsAtLeastOneGroup(ctx), false);
+    });
+
+    test('returns false when only per-group data exists without a definition', async () => {
+        await store.saveInstanceStatus(ctx, 'ghost', {
+            instanceId: 'i-1',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now(),
+            metadata: { group: 'ghost' },
+        });
+        await store.setShutdownStatus(
+            ctx,
+            [{ instanceId: 'i-1', instanceType: 'test', group: 'ghost' }],
+            'shutdown',
+            60,
+        );
+        await store.saveReservation(ctx, { id: 'r-1', groupName: 'ghost', expiresAt: Date.now() + 60000 });
+        assert.strictEqual(await store.existsAtLeastOneGroup(ctx), false, 'per-group data must not count as a group');
+    });
+
+    test('returns true once a group definition is upserted', async () => {
+        await store.upsertInstanceGroup(ctx, { name: 'real', type: 'test', region: 'r', environment: 'e', tags: {} });
+        assert.strictEqual(await store.existsAtLeastOneGroup(ctx), true);
+    });
+
+    test('returns false again after the only group is deleted', async () => {
+        await store.upsertInstanceGroup(ctx, { name: 'real', type: 'test', region: 'r', environment: 'e', tags: {} });
+        await store.deleteInstanceGroup(ctx, 'real');
+        assert.strictEqual(await store.existsAtLeastOneGroup(ctx), false);
+    });
+});

@@ -1,6 +1,20 @@
 import { Context } from './context';
 import InstanceStore, { InstanceGroup, InstanceGroupTags } from './instance_store';
 
+// The exact (case-sensitive) group types the autoscaler knows how to handle. These are the
+// strings switched on in the autoscaler, launcher, tracker and report generator.
+export const SUPPORTED_INSTANCE_TYPES: readonly string[] = [
+    'jibri',
+    'sip-jibri',
+    'availability',
+    'jigasi',
+    'nomad',
+    'JVB',
+    'whisper',
+    'stress',
+    'selenium-grid',
+];
+
 export interface InstanceGroupManagerOptions {
     instanceStore: InstanceStore;
     initialGroupList: InstanceGroup[];

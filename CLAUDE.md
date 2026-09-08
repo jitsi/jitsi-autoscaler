@@ -102,6 +102,11 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json` or project `.cla
 | `update_scheduled_scaling` | Update scaling overrides of an existing scheduled period |
 | `remove_scheduled_scaling_period` | Remove a scheduled scaling period by name |
 | `delete_group` | Delete an instance group |
+| `create_reservation` | Reserve grid capacity for a job on a selenium-grid group (active if it fits under maxDesired, otherwise pending/queued) |
+| `list_reservations` | List reservations for a selenium-grid group, optionally filtered by status; pending ones include place in line |
+| `get_reservation` | Get a single reservation by id, including status and (if pending) place in line |
+| `extend_reservation` | Extend a non-terminal reservation by setting a new TTL from now |
+| `cancel_reservation` | Cancel (release) a reservation, freeing its grid capacity |
 
 ### Available Prompts
 

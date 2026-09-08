@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient, ReservationWithQueue } from '../api_client';
 import { Reservation, ReservationStatus } from '../../reservation';
+import { DESTRUCTIVE, NON_IDEMPOTENT_WRITE, READ_ONLY } from './annotations';
 
 function formatReservation(r: Reservation | ReservationWithQueue): string {
     const lines = [
@@ -29,8 +30,6 @@ export function registerCreateReservation(server: McpServer, client: AutoscalerA
         'create_reservation',
         'Reserve grid capacity for a job on a selenium-grid group. The reservation becomes "active" if it fits under maxDesired, otherwise "pending" (queued). Returns the reservation id used to poll, extend, or cancel it.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the selenium-grid instance group'),
             nodeCount: z.number().int().min(1).describe('Number of grid nodes to reserve'),
             ttlSeconds: z
@@ -40,11 +39,10 @@ export function registerCreateReservation(server: McpServer, client: AutoscalerA
                 .optional()
                 .describe('Time-to-live for the reservation in seconds (defaults to the server-configured TTL)'),
         },
-        async ({ base_url, auth_token, name, nodeCount, ttlSeconds }) => {
+        NON_IDEMPOTENT_WRITE,
+        async ({ name, nodeCount, ttlSeconds }) => {
             try {
-                const reservation = await client
-                    .withOverrides(base_url, auth_token)
-                    .createReservation(name, nodeCount, ttlSeconds);
+                const reservation = await client.createReservation(name, nodeCount, ttlSeconds);
                 return {
                     content: [
                         {
@@ -70,17 +68,16 @@ export function registerListReservations(server: McpServer, client: AutoscalerAp
         'list_reservations',
         'List reservations for a selenium-grid group, optionally filtered by status. Pending reservations include their place in line.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the selenium-grid instance group'),
             status: z
                 .array(z.nativeEnum(ReservationStatus))
                 .optional()
                 .describe('Filter by one or more statuses (pending, active, fulfilled, expired, cancelled)'),
         },
-        async ({ base_url, auth_token, name, status }) => {
+        READ_ONLY,
+        async ({ name, status }) => {
             try {
-                const reservations = await client.withOverrides(base_url, auth_token).listReservations(name, status);
+                const reservations = await client.listReservations(name, status);
                 if (reservations.length === 0) {
                     return {
                         content: [
@@ -119,14 +116,13 @@ export function registerGetReservation(server: McpServer, client: AutoscalerApiC
         'get_reservation',
         'Get a single reservation by id, including its current status and (for pending reservations) place in line.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the selenium-grid instance group'),
             id: z.string().describe('Reservation id'),
         },
-        async ({ base_url, auth_token, name, id }) => {
+        READ_ONLY,
+        async ({ name, id }) => {
             try {
-                const reservation = await client.withOverrides(base_url, auth_token).getReservation(name, id);
+                const reservation = await client.getReservation(name, id);
                 if (!reservation) {
                     return {
                         content: [{ type: 'text', text: `Reservation '${id}' not found on '${name}'.` }],
@@ -153,17 +149,14 @@ export function registerExtendReservation(server: McpServer, client: AutoscalerA
         'extend_reservation',
         'Extend a non-terminal reservation by setting a new TTL from now. Use this to keep grid capacity reserved for a long-running job.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the selenium-grid instance group'),
             id: z.string().describe('Reservation id'),
             ttlSeconds: z.number().int().min(1).describe('New time-to-live in seconds, measured from now'),
         },
-        async ({ base_url, auth_token, name, id, ttlSeconds }) => {
+        NON_IDEMPOTENT_WRITE,
+        async ({ name, id, ttlSeconds }) => {
             try {
-                const reservation = await client
-                    .withOverrides(base_url, auth_token)
-                    .extendReservation(name, id, ttlSeconds);
+                const reservation = await client.extendReservation(name, id, ttlSeconds);
                 return {
                     content: [
                         {
@@ -189,14 +182,13 @@ export function registerCancelReservation(server: McpServer, client: AutoscalerA
         'cancel_reservation',
         'Cancel (release) a reservation, freeing its grid capacity. Call this when a job finishes so the grid can scale down or promote queued reservations.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the selenium-grid instance group'),
             id: z.string().describe('Reservation id'),
         },
-        async ({ base_url, auth_token, name, id }) => {
+        DESTRUCTIVE,
+        async ({ name, id }) => {
             try {
-                const reservation = await client.withOverrides(base_url, auth_token).cancelReservation(name, id);
+                const reservation = await client.cancelReservation(name, id);
                 return {
                     content: [
                         {

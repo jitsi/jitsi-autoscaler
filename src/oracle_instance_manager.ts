@@ -1,29 +1,141 @@
 import core = require('oci-core');
 import common = require('oci-common');
 import identity = require('oci-identity');
+// declared in oci-common's waiter module but not re-exported from its index
+import { ExponentialBackoffDelayStrategyWithJitter } from 'oci-common/lib/waiter';
 import { Context } from './context';
 import { ResourceSearchClient } from 'oci-resourcesearch';
 import * as resourceSearch from 'oci-resourcesearch';
 import { CloudRetryStrategy } from './cloud_manager';
-import { AbstractCloudInstanceManager, CloudInstanceManager, CloudInstance } from './cloud_instance_manager';
+import {
+    AbstractCloudInstanceManager,
+    CloudInstanceManager,
+    CloudInstance,
+    DEFAULT_CLOUD_PROVIDER_REQUEST_TIMEOUT_MS,
+} from './cloud_instance_manager';
 import { InstanceGroup } from './instance_store';
 
 // disable circuit breaker
 common.CircuitBreaker.EnableGlobalCircuitBreaker = false;
 
-interface FaultDomainMap {
+export interface FaultDomainMap {
     [key: string]: string[];
+}
+
+export interface PlacementTarget {
+    availabilityDomain: string;
+    faultDomain: string;
 }
 
 export interface OracleInstanceManagerOptions {
     isDryRun: boolean;
     ociConfigurationFilePath: string;
     ociConfigurationProfile: string;
+    // per-request HTTP timeout applied to every OCI client (identity, compute, resource search)
+    cloudProviderRequestTimeoutMs?: number;
+}
+
+// maximum page size accepted by the OCI resource search API
+const OCI_SEARCH_PAGE_LIMIT = 1000;
+// hard stop for pagination, in case the API keeps handing back a next page token
+const OCI_SEARCH_MAX_PAGES = 100;
+
+/**
+ * Escape a value for interpolation inside a single-quoted literal of an OCI structured
+ * search query. Backslashes and single quotes are the only characters that can terminate
+ * or alter the literal.
+ */
+export function escapeOciQueryLiteral(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/**
+ * Availability domains that have at least one known fault domain, in their original order.
+ */
+export function usableAvailabilityDomains(availabilityDomains: string[], faultDomainsByAD: FaultDomainMap): string[] {
+    return availabilityDomains.filter((availabilityDomain) => {
+        const faultDomains = faultDomainsByAD[availabilityDomain];
+        return Array.isArray(faultDomains) && faultDomains.length > 0;
+    });
+}
+
+/**
+ * Flatten the (AD, FD) pairs in a stable order: ADs in the given order, each AD's fault
+ * domains in the order returned by OCI. ADs without known fault domains are skipped.
+ */
+export function buildPlacementTargets(
+    availabilityDomains: string[],
+    faultDomainsByAD: FaultDomainMap,
+): PlacementTarget[] {
+    const targets: PlacementTarget[] = [];
+    for (const availabilityDomain of usableAvailabilityDomains(availabilityDomains, faultDomainsByAD)) {
+        for (const faultDomain of faultDomainsByAD[availabilityDomain]) {
+            targets.push({ availabilityDomain, faultDomain });
+        }
+    }
+    return targets;
+}
+
+export function selectAvailabilityDomain(
+    index: number,
+    groupCurrentCount: number,
+    availabilityDomains: string[],
+): string | undefined {
+    if (availabilityDomains.length === 0) {
+        return undefined;
+    }
+    const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
+    return availabilityDomains[adIndex];
+}
+
+export function selectFaultDomain(
+    index: number,
+    groupCurrentCount: number,
+    availabilityDomain: string,
+    faultDomainsByAD: FaultDomainMap,
+): string | undefined {
+    //TODO get instance count per ADs, so that FD can be distributed evenly
+    const faultDomains = faultDomainsByAD[availabilityDomain];
+    if (!Array.isArray(faultDomains) || faultDomains.length === 0) {
+        return undefined;
+    }
+    const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
+    return faultDomains[fdIndex];
+}
+
+/**
+ * Pick the placement for the `retries`-th attempt at launching instance `index`.
+ *
+ * Attempt 0 uses the round-robin AD/FD selection. Every subsequent retry moves to the next
+ * (AD, FD) pair in the flattened placement list, so retries cycle through every fault
+ * domain of the selected AD before moving on to the next AD, wrapping around at the end.
+ * Returns undefined when no AD has a known fault domain.
+ */
+export function selectPlacement(
+    index: number,
+    groupCurrentCount: number,
+    retries: number,
+    availabilityDomains: string[],
+    faultDomainsByAD: FaultDomainMap,
+): PlacementTarget | undefined {
+    const targets = buildPlacementTargets(availabilityDomains, faultDomainsByAD);
+    if (targets.length === 0) {
+        return undefined;
+    }
+    const usableADs = usableAvailabilityDomains(availabilityDomains, faultDomainsByAD);
+    const availabilityDomain = selectAvailabilityDomain(index, groupCurrentCount, usableADs);
+    const faultDomain = selectFaultDomain(index, groupCurrentCount, availabilityDomain, faultDomainsByAD);
+    const base = Math.max(
+        0,
+        targets.findIndex((t) => t.availabilityDomain === availabilityDomain && t.faultDomain === faultDomain),
+    );
+    return targets[(base + retries) % targets.length];
 }
 
 export default class OracleInstanceManager implements CloudInstanceManager {
     private isDryRun: boolean;
     private provider: common.ConfigFileAuthenticationDetailsProvider;
+    private requestTimeoutMs: number;
     // Clients are region-scoped and cached per region rather than shared as a single mutable
     // instance. The OCI SDK clients carry region as instance state (`.regionId`); mutating a
     // shared client from concurrent launches/lookups for different regions is a race, since
@@ -34,6 +146,7 @@ export default class OracleInstanceManager implements CloudInstanceManager {
 
     constructor(options: OracleInstanceManagerOptions) {
         this.isDryRun = options.isDryRun;
+        this.requestTimeoutMs = options.cloudProviderRequestTimeoutMs ?? DEFAULT_CLOUD_PROVIDER_REQUEST_TIMEOUT_MS;
         this.provider = new common.ConfigFileAuthenticationDetailsProvider(
             options.ociConfigurationFilePath,
             options.ociConfigurationProfile,
@@ -44,10 +157,28 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         this.getFaultDomains = this.getFaultDomains.bind(this);
     }
 
+    /**
+     * Client configuration shared by all OCI clients. `httpOptions` is handed verbatim to
+     * fetch (node-fetch 2 under isomorphic-fetch), which honours `timeout` in ms, so a hung
+     * OCI endpoint cannot stall a job past the configured request timeout.
+     */
+    private clientConfiguration(retryConfiguration?: common.RetryConfiguration): common.ClientConfiguration {
+        const configuration: common.ClientConfiguration = {
+            httpOptions: { timeout: this.requestTimeoutMs },
+        };
+        if (retryConfiguration) {
+            configuration.retryConfiguration = retryConfiguration;
+        }
+        return configuration;
+    }
+
     private getIdentityClient(region: string): identity.IdentityClient {
         let client = this.identityClientsByRegion.get(region);
         if (!client) {
-            client = new identity.IdentityClient({ authenticationDetailsProvider: this.provider });
+            client = new identity.IdentityClient(
+                { authenticationDetailsProvider: this.provider },
+                this.clientConfiguration(),
+            );
             client.regionId = region;
             this.identityClientsByRegion.set(region, client);
         }
@@ -57,13 +188,21 @@ export default class OracleInstanceManager implements CloudInstanceManager {
     private getComputeManagementClient(region: string): core.ComputeManagementClient {
         let client = this.computeManagementClientsByRegion.get(region);
         if (!client) {
-            client = new core.ComputeManagementClient({ authenticationDetailsProvider: this.provider });
+            client = new core.ComputeManagementClient(
+                { authenticationDetailsProvider: this.provider },
+                this.clientConfiguration(),
+            );
             client.regionId = region;
             this.computeManagementClientsByRegion.set(region, client);
         }
         return client;
     }
 
+    /**
+     * Launches `quantity` instances. Never rejects: every entry of the result is either the
+     * launched instance id, `true` (dry run) or `false` (failed), so a single failure can
+     * not lose the ids of sibling launches.
+     */
     async launchInstances(
         ctx: Context,
         group: InstanceGroup,
@@ -72,89 +211,123 @@ export default class OracleInstanceManager implements CloudInstanceManager {
     ): Promise<Array<string | boolean>> {
         ctx.logger.info(`[oracle] Launching a batch of ${quantity} instances in group ${group.name}`);
 
-        const availabilityDomains: string[] = await this.getAvailabilityDomains(group.compartmentId, group.region);
+        const failedBatch = (): Array<string | boolean> => new Array<string | boolean>(quantity).fill(false);
 
-        const faultDomainsByAD = await this.getFaultDomainsByAD(group.compartmentId, group.region, availabilityDomains);
+        let availabilityDomains: string[];
+        let faultDomainsByAD: FaultDomainMap;
+        try {
+            availabilityDomains = await this.getAvailabilityDomains(group.compartmentId, group.region);
+            faultDomainsByAD = await this.getFaultDomainsByAD(
+                ctx,
+                group.compartmentId,
+                group.region,
+                availabilityDomains,
+            );
+        } catch (err) {
+            ctx.logger.error(
+                `[oracle] Failed listing availability/fault domains for group ${group.name}, no instances launched: ${err}`,
+                { err },
+            );
+            return failedBatch();
+        }
+
+        const usableADs = usableAvailabilityDomains(availabilityDomains, faultDomainsByAD);
+        if (usableADs.length === 0) {
+            ctx.logger.error(
+                `[oracle] No availability domain with known fault domains for group ${group.name}, no instances launched`,
+                { availabilityDomains },
+            );
+            return failedBatch();
+        }
+        if (usableADs.length < availabilityDomains.length) {
+            ctx.logger.warn(`[oracle] Launching in group ${group.name} with a reduced set of availability domains`, {
+                availabilityDomains,
+                usableAvailabilityDomains: usableADs,
+            });
+        }
 
         const indexes = <number[]>[];
         for (let i = 0; i < quantity; i++) {
             indexes.push(i);
         }
 
-        const result = await Promise.all(
+        const settled = await Promise.allSettled(
             indexes.map(async (index) => {
                 ctx.logger.info(
                     `[oracle] Gathering properties for launching instance number ${index + 1} in group ${group.name}`,
                 );
 
-                return this.launchOracleInstance(
-                    ctx,
-                    index,
-                    group,
-                    groupCurrentCount,
-                    availabilityDomains,
-                    faultDomainsByAD,
-                );
+                return this.launchOracleInstance(ctx, index, group, groupCurrentCount, usableADs, faultDomainsByAD);
             }),
         );
-        ctx.logger.info(`Finished launching all the instances in group ${group.name}`);
+
+        const result = settled.map((outcome, index): string | boolean => {
+            if (outcome.status === 'fulfilled') {
+                return outcome.value;
+            }
+            ctx.logger.error(
+                `[oracle] Unexpected rejection launching instance number ${index + 1} in group ${group.name}: ${
+                    outcome.reason
+                }`,
+                { err: outcome.reason },
+            );
+            return false;
+        });
+        const succeeded = result.filter((r) => r !== false).length;
+        ctx.logger.info(
+            `[oracle] Finished launching batch in group ${group.name}: ${succeeded} of ${quantity} launches succeeded`,
+        );
 
         return result;
     }
 
+    /**
+     * Fault domains keyed by availability domain. ADs whose fault domain lookup failed or
+     * returned nothing are left out of the map, so callers must only place instances in
+     * ADs present as keys.
+     */
     async getFaultDomainsByAD(
+        ctx: Context,
         compartmentId: string,
         region: string,
         availabilityDomains: string[],
     ): Promise<FaultDomainMap> {
         const faultDomainsByAD: FaultDomainMap = {};
-        await Promise.allSettled(
-            availabilityDomains.map(async (availabilityDomain) => {
-                faultDomainsByAD[availabilityDomain] = await this.getFaultDomains(
-                    compartmentId,
-                    region,
-                    availabilityDomain,
-                );
-                return true;
-            }),
+        const outcomes = await Promise.allSettled(
+            availabilityDomains.map((availabilityDomain) =>
+                this.getFaultDomains(compartmentId, region, availabilityDomain),
+            ),
         );
+        outcomes.forEach((outcome, i) => {
+            const availabilityDomain = availabilityDomains[i];
+            if (outcome.status === 'rejected') {
+                ctx.logger.error(
+                    `[oracle] Failed listing fault domains for availability domain ${availabilityDomain}, excluding it from placement: ${outcome.reason}`,
+                    { err: outcome.reason, availabilityDomain },
+                );
+                return;
+            }
+            if (!outcome.value || outcome.value.length === 0) {
+                ctx.logger.warn(
+                    `[oracle] No fault domains returned for availability domain ${availabilityDomain}, excluding it from placement`,
+                );
+                return;
+            }
+            faultDomainsByAD[availabilityDomain] = outcome.value;
+        });
 
         return faultDomainsByAD;
     }
 
-    selectAvailabilityDomain(index: number, groupCurrentCount: number, availabilityDomains: string[]): string {
-        const adIndex: number = (groupCurrentCount + index + 1) % availabilityDomains.length;
-        const availabilityDomain = availabilityDomains[adIndex];
-
-        return availabilityDomain;
-    }
-
-    selectFaultDomain(
-        index: number,
-        groupCurrentCount: number,
-        availabilityDomain: string,
-        faultDomainsByAD: FaultDomainMap,
-    ): string {
-        //TODO get instance count per ADs, so that FD can be distributed evenly
-        const faultDomains = faultDomainsByAD[availabilityDomain];
-        const fdIndex: number = (groupCurrentCount + index + 1) % faultDomains.length;
-        const faultDomain = faultDomains[fdIndex];
-
-        return faultDomain;
-    }
-
     // count total number of fault domains
-    calcMaxRetries(faultDomains: FaultDomainMap) {
-        return Object.keys(faultDomains).reduce((acc, cur) => {
-            return (
-                acc +
-                faultDomains[cur].reduce((acc, _fd) => {
-                    return acc + 1;
-                }, 0)
-            );
-        }, 0);
+    calcMaxRetries(faultDomains: FaultDomainMap): number {
+        return Object.keys(faultDomains).reduce((acc, cur) => acc + (faultDomains[cur] || []).length, 0);
     }
 
+    /**
+     * Launches a single instance, retrying in the next fault/availability domain while OCI
+     * reports it is out of host capacity. Never rejects: any error resolves to `false`.
+     */
     async launchOracleInstance(
         ctx: Context,
         index: number,
@@ -162,89 +335,94 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         groupCurrentCount: number,
         availabilityDomains: string[],
         faultDomains: FaultDomainMap,
-        retries = 0,
     ): Promise<string | boolean> {
-        // allow one retry per AD/FD
-        const maxRetries = this.calcMaxRetries(faultDomains);
         const groupName = group.name;
-        const groupInstanceConfigurationId = group.instanceConfigurationId;
+        try {
+            // allow one retry per AD/FD
+            const maxRetries = this.calcMaxRetries(faultDomains);
+            const groupInstanceConfigurationId = group.instanceConfigurationId;
 
-        const displayName = groupName + '-' + AbstractCloudInstanceManager.makeRandomString(5);
-        const freeformTags = {
-            group: groupName,
-        };
-
-        // for each retry, attempt to launch in the next AD/FD
-        const adRetryIndex = Math.floor(retries / availabilityDomains.length);
-        // should loop through the fds in the AD
-        const fdRetryIndex = retries % availabilityDomains.length;
-
-        const availabilityDomain = this.selectAvailabilityDomain(
-            index + adRetryIndex,
-            groupCurrentCount,
-            availabilityDomains,
-        );
-        const faultDomain = this.selectFaultDomain(
-            index + fdRetryIndex,
-            groupCurrentCount,
-            availabilityDomain,
-            faultDomains,
-        );
-
-        const overwriteLaunchDetails: core.models.InstanceConfigurationLaunchInstanceDetails = {
-                availabilityDomain: availabilityDomain,
-                displayName: displayName,
-                freeformTags: freeformTags,
-            },
-            overwriteComputeInstanceDetails: core.models.ComputeInstanceDetails = {
-                launchDetails: overwriteLaunchDetails,
-                instanceType: 'compute',
+            const displayName = groupName + '-' + AbstractCloudInstanceManager.makeRandomString(5);
+            const freeformTags = {
+                group: groupName,
             };
 
-        ctx.logger.info(`[oracle] Launching instance number ${index + 1} in group ${groupName} with properties`, {
-            groupName,
-            availabilityDomain,
-            adRetryIndex,
-            faultDomain,
-            fdRetryIndex,
-            displayName,
-            groupInstanceConfigurationId,
-            overwriteComputeInstanceDetails,
-        });
-
-        if (this.isDryRun) {
-            ctx.logger.info(`[oracle] Dry run enabled, skipping the instance number ${index + 1} launch`);
-            return true;
-        }
-        try {
-            const launchResponse = await this.getComputeManagementClient(group.region).launchInstanceConfiguration({
-                instanceConfigurationId: groupInstanceConfigurationId,
-                instanceConfiguration: overwriteComputeInstanceDetails,
-            });
-            ctx.logger.info(
-                `[oracle] Got launch response for instance number ${index + 1} in group ${groupName}`,
-                launchResponse,
-            );
-
-            return launchResponse.instance.id;
-        } catch (err) {
-            if (err.toString().includes('Out of host capacity')) {
-                if (retries < maxRetries) {
-                    // if we have retries left try again
-                    return this.launchOracleInstance(
-                        ctx,
-                        index,
-                        group,
-                        groupCurrentCount,
-                        availabilityDomains,
-                        faultDomains,
-                        retries + 1,
+            for (let retries = 0; ; retries++) {
+                // for each retry, attempt to launch in the next FD, then the next AD
+                const placement = selectPlacement(index, groupCurrentCount, retries, availabilityDomains, faultDomains);
+                if (!placement) {
+                    ctx.logger.error(
+                        `[oracle] No availability/fault domain available for instance number ${
+                            index + 1
+                        } in group ${groupName}`,
+                        { availabilityDomains, faultDomains },
                     );
+                    return false;
+                }
+                const { availabilityDomain, faultDomain } = placement;
+
+                const overwriteLaunchDetails: core.models.InstanceConfigurationLaunchInstanceDetails = {
+                        availabilityDomain: availabilityDomain,
+                        displayName: displayName,
+                        freeformTags: freeformTags,
+                    },
+                    overwriteComputeInstanceDetails: core.models.ComputeInstanceDetails = {
+                        launchDetails: overwriteLaunchDetails,
+                        instanceType: 'compute',
+                    };
+
+                ctx.logger.info(
+                    `[oracle] Launching instance number ${index + 1} in group ${groupName} with properties`,
+                    {
+                        groupName,
+                        availabilityDomain,
+                        faultDomain,
+                        retries,
+                        displayName,
+                        groupInstanceConfigurationId,
+                        overwriteComputeInstanceDetails,
+                    },
+                );
+
+                if (this.isDryRun) {
+                    ctx.logger.info(`[oracle] Dry run enabled, skipping the instance number ${index + 1} launch`);
+                    return true;
+                }
+                try {
+                    const launchResponse = await this.getComputeManagementClient(
+                        group.region,
+                    ).launchInstanceConfiguration({
+                        instanceConfigurationId: groupInstanceConfigurationId,
+                        instanceConfiguration: overwriteComputeInstanceDetails,
+                    });
+                    ctx.logger.info(
+                        `[oracle] Got launch response for instance number ${index + 1} in group ${groupName}`,
+                        launchResponse,
+                    );
+
+                    return launchResponse.instance.id;
+                } catch (err) {
+                    if (String(err).includes('Out of host capacity') && retries < maxRetries) {
+                        ctx.logger.warn(
+                            `[oracle] Out of host capacity in ${availabilityDomain}/${faultDomain} for instance number ${
+                                index + 1
+                            } in group ${groupName}, retrying in the next domain (retry ${
+                                retries + 1
+                            } of ${maxRetries})`,
+                        );
+                        continue;
+                    }
+                    ctx.logger.error(
+                        `[oracle] Failed launching instance number ${index + 1} in group ${groupName} with err ${err}`,
+                        { err, availabilityDomain, faultDomain },
+                    );
+                    return false;
                 }
             }
+        } catch (err) {
             ctx.logger.error(
-                `[oracle] Failed launching instance number ${index + 1} in group ${groupName} with err ${err}`,
-                { err, availabilityDomain, faultDomain },
+                `[oracle] Unexpected error launching instance number ${index + 1} in group ${groupName}: ${err}`,
+                { err },
             );
             return false;
         }
@@ -288,44 +466,53 @@ export default class OracleInstanceManager implements CloudInstanceManager {
             {
                 authenticationDetailsProvider: this.provider,
             },
-            {
-                retryConfiguration: {
-                    terminationStrategy: new common.MaxTimeTerminationStrategy(cloudRetryStrategy.maxTimeInSeconds),
-                    delayStrategy: new common.ExponentialBackoffDelayStrategy(cloudRetryStrategy.maxDelayInSeconds),
-                    retryCondition: (response) => {
-                        return (
-                            cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
-                                return response.statusCode === retryableStatusCode;
-                            }).length > 0
-                        );
-                    },
+            this.clientConfiguration({
+                terminationStrategy: new common.MaxTimeTerminationStrategy(cloudRetryStrategy.maxTimeInSeconds),
+                delayStrategy: new ExponentialBackoffDelayStrategyWithJitter(cloudRetryStrategy.maxDelayInSeconds),
+                retryCondition: (response) => {
+                    return (
+                        cloudRetryStrategy.retryableStatusCodes.filter((retryableStatusCode) => {
+                            return response.statusCode === retryableStatusCode;
+                        }).length > 0
+                    );
                 },
-            },
+            }),
         );
         resourceSearchClient.regionId = group.region;
 
         const structuredSearch: resourceSearch.models.StructuredSearchDetails = {
-            query: `query instance resources where (freeformTags.key = 'group' && freeformTags.value = '${group.name}')`,
+            query: `query instance resources where (freeformTags.key = 'group' && freeformTags.value = '${escapeOciQueryLiteral(
+                group.name,
+            )}')`,
             type: 'Structured',
             matchingContextType: resourceSearch.models.SearchDetails.MatchingContextType.None,
         };
 
-        const structuredSearchRequest: resourceSearch.requests.SearchResourcesRequest = {
-            searchDetails: structuredSearch,
-        };
-        const searchResourcesResponse: resourceSearch.responses.SearchResourcesResponse =
-            await resourceSearchClient.searchResources(structuredSearchRequest);
-        if (
-            searchResourcesResponse.resourceSummaryCollection &&
-            searchResourcesResponse.resourceSummaryCollection.items
-        ) {
-            for (let i = 0; i < searchResourcesResponse.resourceSummaryCollection.items.length; i++) {
-                const resourceSummary: resourceSearch.models.ResourceSummary =
-                    searchResourcesResponse.resourceSummaryCollection.items[i];
+        // the search API pages results; keep following opcNextPage until it is exhausted
+        let page: string | undefined = undefined;
+        let pages = 0;
+        do {
+            const structuredSearchRequest: resourceSearch.requests.SearchResourcesRequest = {
+                searchDetails: structuredSearch,
+                limit: OCI_SEARCH_PAGE_LIMIT,
+                page,
+            };
+            const searchResourcesResponse: resourceSearch.responses.SearchResourcesResponse =
+                await resourceSearchClient.searchResources(structuredSearchRequest);
+            pages++;
+            const items = searchResourcesResponse.resourceSummaryCollection?.items ?? [];
+            for (const resourceSummary of items) {
                 ctx.logger.debug('Found instance in oracle', { resourceSummary });
                 instances.push(resourceSummary);
             }
-        }
+            page = searchResourcesResponse.opcNextPage || undefined;
+            if (page && pages >= OCI_SEARCH_MAX_PAGES) {
+                ctx.logger.warn(
+                    `[oracle] Stopped paging instance search for group ${group.name} after ${pages} pages, results may be incomplete`,
+                );
+                page = undefined;
+            }
+        } while (page);
 
         return instances.map((resourceSummary) => {
             return {

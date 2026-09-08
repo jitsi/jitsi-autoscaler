@@ -11,8 +11,10 @@ import * as promClient from 'prom-client';
 import CloudManager from './cloud_manager';
 import { InstanceDetails, InstanceGroup, InstanceGroupTags, ScheduledScalingConfig } from './instance_store';
 import ScheduledScalingProcessor from './scheduled_scaling_processor';
-import ReservationManager from './reservation_manager';
+import ReservationManager, { ReservationNotExtendableError } from './reservation_manager';
 import { CreateReservationRequest, ExtendReservationRequest, ReservationStatus } from './reservation';
+import Validator from './validator';
+import { Context } from './context';
 
 const statsErrors = new promClient.Counter({
     name: 'autoscaler_stats_errors',
@@ -35,6 +37,7 @@ interface InstanceGroupScalingActivitiesRequest {
     enableScheduler?: boolean;
     enableUntrackedThrottle?: boolean;
     enableReconfiguration?: boolean;
+    enableCloudGuard?: boolean;
 }
 
 export interface InstanceGroupDesiredValuesRequest {
@@ -112,6 +115,7 @@ interface HandlersOptions {
     scalingManager: ScalingManager;
     defaultTimezone: string;
     reservationManager?: ReservationManager;
+    validator?: Validator;
 }
 
 class Handlers {
@@ -126,6 +130,7 @@ class Handlers {
     private scalingManager: ScalingManager;
     private defaultTimezone: string;
     private reservationManager?: ReservationManager;
+    private validator?: Validator;
 
     constructor(options: HandlersOptions) {
         this.sidecarPoll = this.sidecarPoll.bind(this);
@@ -141,12 +146,43 @@ class Handlers {
         this.scalingManager = options.scalingManager;
         this.defaultTimezone = options.defaultTimezone;
         this.reservationManager = options.reservationManager;
+        this.validator = options.validator;
+    }
+
+    /**
+     * Shared validation for sidecar requests: the instance must identify itself and its
+     * group with non-empty strings (400 otherwise), and the group must exist (404 otherwise).
+     * Returns true when the request may proceed; a response has already been sent when false.
+     */
+    private async validateSidecarInstance(
+        ctx: Context,
+        res: Response,
+        details: InstanceDetails | undefined,
+    ): Promise<boolean> {
+        const instanceId = details?.instanceId;
+        const group = details?.group;
+        if (typeof instanceId !== 'string' || instanceId === '' || typeof group !== 'string' || group === '') {
+            res.status(400);
+            res.send({ errors: ['instanceId and group are required'] });
+            return false;
+        }
+        const instanceGroup = await this.instanceGroupManager.getInstanceGroup(ctx, group);
+        if (!instanceGroup) {
+            ctx.logger.warn('Sidecar request for unknown group', { group, instanceId });
+            res.status(404);
+            res.send({ errors: [`Group ${group} not found`] });
+            return false;
+        }
+        return true;
     }
 
     async sidecarPoll(req: Request, res: Response): Promise<void> {
         const details: InstanceDetails = req.body;
         statsCounter.inc();
         try {
+            if (!(await this.validateSidecarInstance(req.context, res, details))) {
+                return;
+            }
             const [shutdownStatus, reconfigureDate] = await Promise.all([
                 this.shutdownManager.getShutdownStatus(req.context, details.group, details.instanceId),
                 this.reconfigureManager.getReconfigureDate(req.context, details.group, details.instanceId),
@@ -173,6 +209,9 @@ class Handlers {
         req.context.logger.info('Received shutdown confirmation', { details });
         statsCounter.inc();
         try {
+            if (!(await this.validateSidecarInstance(req.context, res, details))) {
+                return;
+            }
             await this.cloudManager.shutdownInstance(req.context, details);
 
             const sendResponse = {
@@ -193,6 +232,9 @@ class Handlers {
         const report: StatsReport = req.body;
         statsCounter.inc();
         try {
+            if (!(await this.validateSidecarInstance(req.context, res, report?.instance))) {
+                return;
+            }
             const [shutdownStatus, reconfigureDate] = await Promise.all([
                 this.shutdownManager.getShutdownStatus(req.context, report.instance.group, report.instance.instanceId),
                 this.reconfigureManager.getReconfigureDate(
@@ -221,6 +263,9 @@ class Handlers {
         const report: StatsReport = req.body;
         statsCounter.inc();
         try {
+            if (!(await this.validateSidecarInstance(req.context, res, report?.instance))) {
+                return;
+            }
             const [shutdownStatus, reconfigureDate] = await Promise.all([
                 this.shutdownManager.getShutdownStatus(req.context, report.instance.group, report.instance.instanceId),
                 this.reconfigureManager.getReconfigureDate(
@@ -306,6 +351,9 @@ class Handlers {
 
                 if (scalingActivitiesRequest.enableReconfiguration != null) {
                     instanceGroup.enableReconfiguration = scalingActivitiesRequest.enableReconfiguration;
+                }
+                if (scalingActivitiesRequest.enableCloudGuard != null) {
+                    instanceGroup.enableCloudGuard = scalingActivitiesRequest.enableCloudGuard;
                 }
                 await this.instanceGroupManager.upsertInstanceGroup(req.context, instanceGroup);
                 res.status(200);
@@ -424,6 +472,13 @@ class Handlers {
     async deleteInstanceGroup(req: Request, res: Response): Promise<void> {
         const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
         try {
+            // Re-check under the lock: instances may have been launched or reported in between the
+            // route-level pre-check and acquiring the group lock.
+            if (this.validator && (await this.validator.groupHasActiveInstances(req.context, req.params.name))) {
+                res.status(409);
+                res.send({ errors: ['This group has active instances'] });
+                return;
+            }
             const instanceGroups = await this.instanceGroupManager.deleteInstanceGroup(req.context, req.params.name);
 
             res.status(200);
@@ -505,52 +560,69 @@ class Handlers {
         const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, groupName);
         try {
             const requestBody = req.body;
-            const scaleDownProtectedTTL = requestBody.protectedTTLSec;
+            const count: number = requestBody.count;
+
+            const group = await this.instanceGroupManager.getInstanceGroup(req.context, groupName);
+            if (!group) {
+                res.sendStatus(404);
+                return;
+            }
+
+            // Re-check capacity under the lock; the route-level validator ran before the lock was held.
+            const newMaxDesired: number =
+                requestBody.maxDesired != null ? requestBody.maxDesired : group.scalingOptions.maxDesired;
+            if (group.scalingOptions.desiredCount + count > newMaxDesired) {
+                res.status(400);
+                res.send({
+                    errors: [`Max desired value must be increased first if you want to launch ${count} new instances.`],
+                });
+                return;
+            }
+
+            const scaleDownProtectedTTL: number =
+                requestBody.protectedTTLSec != null ? requestBody.protectedTTLSec : group.protectedTTLSec;
+            if (!Number.isInteger(scaleDownProtectedTTL) || scaleDownProtectedTTL < 1) {
+                res.status(400);
+                res.send({ errors: ['protectedTTLSec must be a positive integer'] });
+                return;
+            }
             req.context.logger.info('Protecting instances from scaling down', {
                 groupName,
                 scaleDownProtectedTTL,
             });
 
-            const group = await this.instanceGroupManager.getInstanceGroup(req.context, groupName);
-            if (group) {
-                if (requestBody.instanceConfigurationId != null) {
-                    group.instanceConfigurationId = requestBody.instanceConfigurationId;
-                }
-                if (requestBody.tags && requestBody.tags.length > 0) {
-                    Object.entries(requestBody.tags).forEach(([tag, value]) => {
-                        group.tags[tag] = <string>value;
-                    });
-                }
-                if (requestBody.maxDesired != null) {
-                    group.scalingOptions.maxDesired = requestBody.maxDesired;
-                }
-                if (requestBody.tags != null) {
-                    req.context.logger.debug('Updating group tags', {
-                        groupName,
-                        tags: requestBody.tags,
-                    });
-                    if (!group.tags) group.tags = <InstanceGroupTags>{};
-                    for (const key in requestBody.tags) {
-                        group.tags[key] = requestBody.tags[key];
-                    }
-                }
-
-                group.scalingOptions.desiredCount = group.scalingOptions.desiredCount + requestBody.count;
-                group.protectedTTLSec = scaleDownProtectedTTL;
-
-                await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
-                await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, group);
-                await this.instanceGroupManager.setScaleDownProtected(req.context, group);
-
-                req.context.logger.info(
-                    `Newly launched instances in group ${groupName} will be protected for ${scaleDownProtectedTTL} seconds`,
-                );
-
-                res.status(200);
-                res.send({ launch: 'OK' });
-            } else {
-                res.sendStatus(404);
+            if (requestBody.instanceConfigurationId != null) {
+                group.instanceConfigurationId = requestBody.instanceConfigurationId;
             }
+            if (requestBody.maxDesired != null) {
+                group.scalingOptions.maxDesired = requestBody.maxDesired;
+            }
+            if (requestBody.tags != null) {
+                req.context.logger.debug('Updating group tags', {
+                    groupName,
+                    tags: requestBody.tags,
+                });
+                if (!group.tags) group.tags = <InstanceGroupTags>{};
+                for (const key in requestBody.tags) {
+                    group.tags[key] = requestBody.tags[key];
+                }
+            }
+
+            group.scalingOptions.desiredCount = group.scalingOptions.desiredCount + count;
+            group.protectedTTLSec = scaleDownProtectedTTL;
+
+            // Mark the group protected before the new desired count is visible to the launcher, so
+            // instances launched from it can never be scaled down before protection is in place.
+            await this.instanceGroupManager.setScaleDownProtected(req.context, group);
+            await this.instanceGroupManager.upsertInstanceGroup(req.context, group);
+            await this.instanceGroupManager.setAutoScaleGracePeriod(req.context, group);
+
+            req.context.logger.info(
+                `Newly launched instances in group ${groupName} will be protected for ${scaleDownProtectedTTL} seconds`,
+            );
+
+            res.status(200);
+            res.send({ launch: 'OK' });
         } finally {
             await lock.release(req.context);
         }
@@ -641,6 +713,11 @@ class Handlers {
                 }
             }
 
+            // Capture what was in effect before this change: restoring the baseline needs the
+            // period definition from the *previous* config, not the newly submitted one.
+            const previousConfig = instanceGroup.scheduledScaling;
+            const previousActivePeriod = instanceGroup.scheduledScalingActivePeriod;
+
             instanceGroup.scheduledScaling = scheduledScalingConfig;
 
             if (scheduledScalingConfig.enabled) {
@@ -674,6 +751,15 @@ class Handlers {
                         );
                     }
                     instanceGroup.scheduledScalingActivePeriod = activePeriod.name;
+                } else if (instanceGroup.scheduledScalingBaseOptions) {
+                    // No active period under the new config but we were mid-period under the old
+                    // one: restore the baseline (keeping live desiredCount unless the exiting
+                    // period explicitly set it) and clear tracking.
+                    instanceGroup.scalingOptions = ScheduledScalingProcessor.restoreBaseline(
+                        instanceGroup,
+                        previousActivePeriod,
+                        previousConfig,
+                    );
                 } else {
                     // No active period right now; clear tracking, processor handles transitions
                     delete instanceGroup.scheduledScalingActivePeriod;
@@ -682,7 +768,11 @@ class Handlers {
             } else {
                 // Disabling scheduled scaling — restore baseline if present
                 if (instanceGroup.scheduledScalingBaseOptions) {
-                    instanceGroup.scalingOptions = { ...instanceGroup.scheduledScalingBaseOptions };
+                    instanceGroup.scalingOptions = ScheduledScalingProcessor.restoreBaseline(
+                        instanceGroup,
+                        previousActivePeriod,
+                        previousConfig,
+                    );
                 }
                 delete instanceGroup.scheduledScalingActivePeriod;
                 delete instanceGroup.scheduledScalingBaseOptions;
@@ -912,18 +1002,36 @@ class Handlers {
         if (!group) return;
 
         const request: ExtendReservationRequest = req.body;
-        const reservation = await this.reservationManager.extendReservation(
-            req.context,
-            req.params.id,
-            request.ttlSeconds,
-        );
-        if (!reservation || reservation.groupName !== group.name) {
-            res.status(409);
-            res.send({ error: 'Reservation not found or already expired/cancelled' });
-            return;
+        // Held under the group lock so a concurrent cancel/expire (also under the lock) cannot be
+        // overwritten by this read-modify-write and resurrect a terminal reservation.
+        const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, req.params.name);
+        try {
+            let reservation;
+            try {
+                reservation = await this.reservationManager.extendReservation(
+                    req.context,
+                    req.params.name,
+                    req.params.id,
+                    request.ttlSeconds,
+                );
+            } catch (err) {
+                if (err instanceof ReservationNotExtendableError) {
+                    res.status(409);
+                    res.send({ error: 'Reservation is already expired or cancelled', reservation: err.reservation });
+                    return;
+                }
+                throw err;
+            }
+            if (!reservation) {
+                res.status(404);
+                res.send({ error: 'Reservation not found or belongs to another group' });
+                return;
+            }
+            res.status(200);
+            res.send({ reservation });
+        } finally {
+            await lock.release(req.context);
         }
-        res.status(200);
-        res.send({ reservation });
     }
 
     async deleteReservation(req: Request, res: Response): Promise<void> {

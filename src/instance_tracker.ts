@@ -114,10 +114,19 @@ export class InstanceTracker {
                 case 'selenium-grid':
                     instanceState.status.stats = <StressStatus>report.stats;
                     break;
-                case 'nomad':
-                    instanceState.status.stats = <StressStatus>(
-                        this.nomadStatusFromStats(<NomadReportStats>report.stats)
-                    );
+                case 'nomad': {
+                    const nomadStatus = this.nomadStatusFromStats(<NomadReportStats>report.stats);
+                    if (nomadStatus) {
+                        instanceState.status.stats = <StressStatus>nomadStatus;
+                    } else {
+                        ctx.logger.warn('Nomad stats report has no usable gauges, ignoring stats', { report });
+                    }
+                    break;
+                }
+                default:
+                    ctx.logger.warn('Unknown instance type in stats report, ignoring stats', {
+                        instanceType: report.instance.instanceType,
+                    });
                     break;
             }
         }
@@ -136,17 +145,31 @@ export class InstanceTracker {
     }
 
     private nomadLabelsFromReportGauges(gauges: NomadGauge[]): NomadLabels {
-        return gauges[0].Labels;
+        return gauges[0].Labels ?? <NomadLabels>{};
     }
 
-    private nomadStatusFromStats(stats: NomadReportStats): NomadStatus {
+    /**
+     * Derive a NomadStatus from a raw Nomad metrics report. Returns undefined when the report
+     * carries no gauges (e.g. the sidecar polled the agent before metrics were available) or when
+     * the CPU gauges are missing/non-numeric, so callers never see a NaN stress_level.
+     */
+    nomadStatusFromStats(stats: NomadReportStats): NomadStatus | undefined {
+        if (!stats || !Array.isArray(stats.Gauges) || stats.Gauges.length === 0) {
+            return undefined;
+        }
         const nomadStats = this.nomadStatsFromReportGauges(stats.Gauges);
         const nomadLabels = this.nomadLabelsFromReportGauges(stats.Gauges);
-        const totalCPU = nomadStats['nomad.client.allocated.cpu'] + nomadStats['nomad.client.unallocated.cpu'];
+        const allocatedCPU = nomadStats['nomad.client.allocated.cpu'];
+        const unallocatedCPU = nomadStats['nomad.client.unallocated.cpu'];
+        if (!Number.isFinite(allocatedCPU) || !Number.isFinite(unallocatedCPU)) {
+            return undefined;
+        }
+        const totalCPU = allocatedCPU + unallocatedCPU;
+        const stressLevel = totalCPU > 0 ? allocatedCPU / totalCPU : 0;
 
         return <NomadStatus>{
             totalCPU,
-            stress_level: nomadStats['nomad.client.allocated.cpu'] / totalCPU,
+            stress_level: stressLevel,
             graceful_shutdown: nomadLabels['node_scheduling_eligibility'] != 'eligible',
             eligibleForScheduling: nomadLabels['node_scheduling_eligibility'] == 'eligible',
             allocatedCPU: nomadStats['nomad.client.allocated.cpu'],
@@ -169,8 +192,9 @@ export class InstanceTracker {
             state.timestamp = Date.now();
         }
 
-        // Store latest instance status
-        this.instanceStore.saveInstanceStatus(ctx, group, state);
+        // Store latest instance status. Awaited so a persistence failure surfaces to the caller
+        // (and the sidecar) instead of silently making the instance look dead later.
+        await this.instanceStore.saveInstanceStatus(ctx, group, state);
 
         const isInstanceShuttingDown = state.isShuttingDown || shutdownStatus;
         // Store metric, but only for running instances
@@ -180,6 +204,7 @@ export class InstanceTracker {
             switch (state.instanceType) {
                 case 'jibri':
                 case 'sip-jibri':
+                case 'availability':
                     if (state.status.jibriStatus && state.status.jibriStatus.busyStatus == JibriStatusState.Idle) {
                         metricValue = 1;
                     }
@@ -192,11 +217,21 @@ export class InstanceTracker {
                 case 'stress':
                 case 'selenium-grid':
                     // If node is not up or is in graceful shutdown, we should not use it to compute average stress level across the group
-                    if (!state.status.stats || state.status.stats.stress_level == undefined) {
+                    // NaN/Infinity stress levels are also ignored so they cannot poison the group average
+                    if (!state.status.stats || !Number.isFinite(state.status.stats.stress_level)) {
                         trackMetric = false;
                     } else {
                         metricValue = state.status.stats.stress_level;
                     }
+                    break;
+                default:
+                    // Unknown instance types fail safe: no metric is written, so the autoscaler
+                    // sees "no metrics" rather than a permanently-zero value
+                    ctx.logger.warn('Unknown instance type, not tracking metric', {
+                        instanceType: state.instanceType,
+                        instanceId: state.instanceId,
+                    });
+                    trackMetric = false;
                     break;
             }
 
@@ -397,7 +432,10 @@ export class InstanceTracker {
                 return fullSum;
             }
         } else {
-            return 0;
+            // No data points at all for this period: return NaN so callers can distinguish
+            // "no metrics" from a genuine metric value of 0 (which would otherwise drive
+            // stress groups to minDesired and availability groups to maxDesired)
+            return NaN;
         }
     }
 

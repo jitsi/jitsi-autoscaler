@@ -1,15 +1,20 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { NON_IDEMPOTENT_WRITE } from './annotations';
 
 export function registerAddScheduledScalingPeriod(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-expect-error - MCP SDK zod type inference may exceed TypeScript recursion limit
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'add_scheduled_scaling_period',
-        'Add a new scheduled scaling period to a group. Creates the scheduled scaling config if the group does not have one yet.',
+        [
+            'Add a new scheduled scaling period to a group. Creates the scheduled scaling config if the group does not have one yet.',
+            'Note: when a new config is created with enabled=true (the default), scheduled scaling takes over for the group:',
+            'the legacy enableScheduler flag is turned off, and if the new period is active right now its scaling overrides',
+            'are applied to the group immediately.',
+        ].join(' '),
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the instance group'),
             period_name: z.string().describe('Name for the new scheduled scaling period'),
             dayOfWeek: z
@@ -27,13 +32,40 @@ export function registerAddScheduledScalingPeriod(server: McpServer, client: Aut
                 .describe(
                     'Timezone for the schedule (e.g. UTC, America/New_York). Only used when creating a new config.',
                 ),
-            minDesired: z.number().optional().describe('Override minimum desired count during this period'),
-            maxDesired: z.number().optional().describe('Override maximum desired count during this period'),
-            desiredCount: z.number().optional().describe('Override desired count during this period'),
+            enabled: z
+                .boolean()
+                .optional()
+                .default(true)
+                .describe(
+                    'Whether scheduled scaling is enabled on a newly created config (default true). Only used when creating a new config; use update_scheduled_scaling to toggle an existing one.',
+                ),
+            minDesired: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe('Override minimum desired count during this period'),
+            maxDesired: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe('Override maximum desired count during this period'),
+            desiredCount: z.number().int().min(0).optional().describe('Override desired count during this period'),
             scaleUpThreshold: z.number().optional().describe('Override scale up threshold during this period'),
             scaleDownThreshold: z.number().optional().describe('Override scale down threshold during this period'),
-            scaleUpQuantity: z.number().optional().describe('Override scale up quantity during this period'),
-            scaleDownQuantity: z.number().optional().describe('Override scale down quantity during this period'),
+            scaleUpQuantity: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe('Override scale up quantity during this period'),
+            scaleDownQuantity: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe('Override scale down quantity during this period'),
             reservationScaleUpThreshold: z
                 .number()
                 .int()
@@ -43,14 +75,15 @@ export function registerAddScheduledScalingPeriod(server: McpServer, client: Aut
                     'selenium-grid only: override the waiting-reserved-nodes threshold for scale-up during this period',
                 ),
         },
+        NON_IDEMPOTENT_WRITE,
         async (params) => {
             try {
-                const c = client.withOverrides(params.base_url, params.auth_token);
-                let config = await c.getScheduledScaling(params.name);
+                let config = await client.getScheduledScaling(params.name);
+                const created = !config;
 
                 if (!config) {
                     config = {
-                        enabled: true,
+                        enabled: params.enabled,
                         timezone: params.timezone || 'UTC',
                         periods: [],
                     };
@@ -93,7 +126,7 @@ export function registerAddScheduledScalingPeriod(server: McpServer, client: Aut
                     ...(params.inhibitScaleDown !== undefined && { inhibitScaleDown: params.inhibitScaleDown }),
                 });
 
-                await c.updateScheduledScaling(params.name, config);
+                await client.updateScheduledScaling(params.name, config);
 
                 const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
                 const days = params.dayOfWeek.map((d) => dayNames[d]).join(', ');
@@ -116,6 +149,9 @@ export function registerAddScheduledScalingPeriod(server: McpServer, client: Aut
                                 }:${String(endMin).padStart(2, '0')}`,
                                 `  Priority: ${params.priority ?? 1}`,
                                 optParts.length > 0 ? `  Scaling overrides: ${optParts.join(', ')}` : '',
+                                created
+                                    ? `  Created new scheduled scaling config (enabled=${config.enabled}, timezone=${config.timezone})`
+                                    : '',
                             ]
                                 .filter(Boolean)
                                 .join('\n'),

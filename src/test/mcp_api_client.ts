@@ -2,7 +2,7 @@
 // @ts-nocheck
 import assert from 'node:assert';
 import test, { afterEach, beforeEach, describe, mock } from 'node:test';
-import { AutoscalerApiClient } from '../mcp/api_client';
+import { AutoscalerApiClient, DEFAULT_REQUEST_TIMEOUT_MS } from '../mcp/api_client';
 import type { InstanceGroup, ScheduledScalingConfig } from '../instance_store';
 
 // Mock fetch globally
@@ -24,6 +24,16 @@ function mockFetchResponse(
             json: () => Promise.resolve(body),
             text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
         }),
+    );
+}
+
+/** A fetch that never resolves on its own, but rejects with the signal's reason once aborted. */
+function mockHangingFetch(): ReturnType<typeof mock.fn> {
+    return mock.fn(
+        (_url: string, opts: { signal?: AbortSignal }) =>
+            new Promise((_resolve, reject) => {
+                opts.signal?.addEventListener('abort', () => reject(opts.signal.reason));
+            }),
     );
 }
 
@@ -281,51 +291,58 @@ describe('AutoscalerApiClient', () => {
         });
     });
 
-    describe('withOverrides', () => {
-        test('returns same client when both are undefined', () => {
-            const same = client.withOverrides(undefined, undefined);
-            assert.strictEqual(same, client);
+    describe('request timeouts', () => {
+        test('default timeout is 30s', () => {
+            assert.strictEqual(DEFAULT_REQUEST_TIMEOUT_MS, 30000);
         });
 
-        test('returns same client when both are empty', () => {
-            const same = client.withOverrides('', '');
-            assert.strictEqual(same, client);
-        });
-
-        test('returns new client with overridden URL', async () => {
-            const overridden = client.withOverrides('http://other-host:4000', undefined);
-            fetchMock = mockFetchResponse(200, { instanceGroups: [] });
+        test('attaches an AbortSignal to body-bearing requests', async () => {
+            fetchMock = mockFetchResponse(200, undefined, 'text/plain');
             global.fetch = fetchMock;
 
-            await overridden.listGroups();
+            await client.updateDesiredCount('g1', { desiredCount: 1 });
 
-            const [url, opts] = fetchMock.mock.calls[0].arguments;
-            assert.strictEqual(url, 'http://other-host:4000/groups');
-            assert.strictEqual(opts.headers.Authorization, 'Bearer test-token');
+            const [, opts] = fetchMock.mock.calls[0].arguments;
+            assert.ok(opts.signal instanceof AbortSignal);
+            assert.strictEqual(opts.signal.aborted, false);
         });
 
-        test('returns new client with overridden token', async () => {
-            const overridden = client.withOverrides(undefined, 'other-token');
-            fetchMock = mockFetchResponse(200, { instanceGroups: [] });
+        test('attaches an AbortSignal to nullable GET requests', async () => {
+            fetchMock = mockFetchResponse(200, { instanceGroup: { name: 'g1' } });
             global.fetch = fetchMock;
 
-            await overridden.listGroups();
+            await client.getGroup('g1');
 
-            const [url, opts] = fetchMock.mock.calls[0].arguments;
-            assert.strictEqual(url, 'http://localhost:3000/groups');
-            assert.strictEqual(opts.headers.Authorization, 'Bearer other-token');
+            const [, opts] = fetchMock.mock.calls[0].arguments;
+            assert.ok(opts.signal instanceof AbortSignal);
         });
 
-        test('returns new client with both overridden', async () => {
-            const overridden = client.withOverrides('http://other:5000', 'new-token');
-            fetchMock = mockFetchResponse(200, { instanceGroups: [] });
+        test('aborts a hanging request after the configured timeout', async () => {
+            const fast = new AutoscalerApiClient('http://localhost:3000', 'token', 20);
+            fetchMock = mockHangingFetch();
             global.fetch = fetchMock;
 
-            await overridden.listGroups();
+            await assert.rejects(
+                () => fast.listGroups(),
+                (err: Error) => err.name === 'TimeoutError',
+            );
+        });
 
-            const [url, opts] = fetchMock.mock.calls[0].arguments;
-            assert.strictEqual(url, 'http://other:5000/groups');
-            assert.strictEqual(opts.headers.Authorization, 'Bearer new-token');
+        test('aborts a hanging nullable GET after the configured timeout', async () => {
+            const fast = new AutoscalerApiClient('http://localhost:3000', 'token', 20);
+            fetchMock = mockHangingFetch();
+            global.fetch = fetchMock;
+
+            await assert.rejects(
+                () => fast.getGroup('g1'),
+                (err: Error) => err.name === 'TimeoutError',
+            );
+        });
+    });
+
+    describe('configuration is env-only', () => {
+        test('client has no per-request override hook', () => {
+            assert.strictEqual((client as unknown as Record<string, unknown>).withOverrides, undefined);
         });
     });
 });

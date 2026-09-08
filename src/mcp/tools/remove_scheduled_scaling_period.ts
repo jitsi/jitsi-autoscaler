@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { NON_IDEMPOTENT_WRITE } from './annotations';
 
 export function registerRemoveScheduledScalingPeriod(server: McpServer, client: AutoscalerApiClient): void {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -9,15 +10,13 @@ export function registerRemoveScheduledScalingPeriod(server: McpServer, client: 
         'remove_scheduled_scaling_period',
         'Remove a scheduled scaling period from a group by name. If the last period is removed, the scheduled scaling config is preserved but will have no active periods.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the instance group'),
             period_name: z.string().describe('Name of the scheduled scaling period to remove'),
         },
+        NON_IDEMPOTENT_WRITE,
         async (params) => {
             try {
-                const c = client.withOverrides(params.base_url, params.auth_token);
-                const config = await c.getScheduledScaling(params.name);
+                const config = await client.getScheduledScaling(params.name);
 
                 if (!config) {
                     return {
@@ -48,7 +47,7 @@ export function registerRemoveScheduledScalingPeriod(server: McpServer, client: 
                 }
 
                 config.periods.splice(index, 1);
-                await c.updateScheduledScaling(params.name, config);
+                await client.updateScheduledScaling(params.name, config);
 
                 const remaining = config.periods.map((p) => p.name).join(', ');
                 return {

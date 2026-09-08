@@ -3,7 +3,12 @@ import { Context } from './context';
 import InstanceStore, { InstanceDetails, InstanceGroup, InstanceState } from './instance_store';
 import MetricsStore, { InstanceMetric } from './metrics_store';
 import { Reservation } from './reservation';
-import { ReservationStore } from './reservation_store';
+import {
+    DEFAULT_TERMINAL_RESERVATION_RETENTION_SEC,
+    ReservationStore,
+    isTerminalReservationStatus,
+    terminalReservationTTLSec,
+} from './reservation_store';
 import { partitionExpiredStates } from './instance_state_expiry';
 import Redis, { ChainableCommander } from 'ioredis';
 
@@ -18,6 +23,8 @@ export interface RedisMetricsOptions {
     shutdownStatusTTL: number;
     groupRelatedDataTTL: number;
     serviceLevelMetricsTTL: number;
+    // Seconds a terminal (expired/cancelled) reservation is retained past its expiresAt. Optional.
+    terminalReservationRetentionSec?: number;
 }
 
 export default class RedisStore implements MetricsStore, InstanceStore, ReservationStore {
@@ -30,6 +37,7 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
     private readonly metricTTL: number;
     private readonly serviceLevelMetricsTTL: number;
     private readonly groupRelatedDataTTL: number;
+    private readonly terminalReservationRetentionSec: number;
 
     constructor(options: RedisMetricsOptions) {
         this.redisClient = options.redisClient;
@@ -40,6 +48,8 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         this.groupRelatedDataTTL = options.groupRelatedDataTTL;
         this.serviceLevelMetricsTTL = options.serviceLevelMetricsTTL;
         this.redisScanCount = options.redisScanCount;
+        this.terminalReservationRetentionSec =
+            options.terminalReservationRetentionSec ?? DEFAULT_TERMINAL_RESERVATION_RETENTION_SEC;
     }
 
     async fetchInstanceMetrics(
@@ -179,12 +189,15 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
     }
 
     async saveInstanceStatus(ctx: Context, group: string, state: InstanceState): Promise<boolean> {
-        await this.redisClient.hset(
-            this.getGroupInstancesStatesKey(group),
-            `${state.instanceId}`,
-            JSON.stringify(state),
-        );
-
+        // Sidecars can report for a group the autoscaler never processes (typo'd/unknown group), so the
+        // hash would never get a TTL via fetchInstanceStates and would live forever. Always (re)arm the
+        // group-data TTL alongside the write; the read path extends it further for live groups.
+        const key = this.getGroupInstancesStatesKey(group);
+        const pipeline = this.redisClient
+            .pipeline()
+            .hset(key, `${state.instanceId}`, JSON.stringify(state))
+            .expire(key, this.groupRelatedDataTTL);
+        await this.execPipelineOrThrow(ctx, pipeline, 'saveInstanceStatus', { group, instanceId: state.instanceId });
         return true;
     }
 
@@ -225,12 +238,14 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
     }
 
     async writeInstanceMetric(ctx: Context, group: string, metricObject: InstanceMetric): Promise<boolean> {
-        await this.redisClient.zadd(
-            this.getGroupMetricsKey(group),
-            metricObject.timestamp,
-            JSON.stringify(metricObject),
-        );
-
+        // See saveInstanceStatus: arm the group-data TTL on every sidecar write so reports for unknown
+        // groups cannot create immortal keys.
+        const key = this.getGroupMetricsKey(group);
+        const pipeline = this.redisClient
+            .pipeline()
+            .zadd(key, metricObject.timestamp, JSON.stringify(metricObject))
+            .expire(key, this.groupRelatedDataTTL);
+        await this.execPipelineOrThrow(ctx, pipeline, 'writeInstanceMetric', { group });
         return true;
     }
     shutDownKey(instanceId: string): string {
@@ -257,7 +272,7 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             ctx.logger.debug('Writing shutdown status', { key, status });
             pipeline.set(key, status, 'EX', shutdownTTL);
         }
-        await pipeline.exec();
+        await this.execPipelineOrThrow(ctx, pipeline, 'setShutdownStatus');
         return true;
     }
 
@@ -306,7 +321,7 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             ctx.logger.debug('Writing shutdown confirmation', { key, status });
             pipeline.set(key, status, 'EX', shutdownTTL);
         }
-        await pipeline.exec();
+        await this.execPipelineOrThrow(ctx, pipeline, 'setShutdownConfirmation');
         return true;
     }
 
@@ -359,7 +374,7 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             ctx.logger.debug('Writing reconfigure date', { key, reconfigureDate });
             pipeline.set(key, reconfigureDate, 'EX', ttl);
         }
-        await pipeline.exec();
+        await this.execPipelineOrThrow(ctx, pipeline, 'setReconfigureDate');
         return true;
     }
 
@@ -507,15 +522,10 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         for (const id of reservationIds) {
             pipeline.del(this.reservationKey(id));
         }
-        const result = await pipeline.exec();
-
-        if (result) {
-            ctx.logger.info(`Group ${groupName} is deleted`, { result });
-        } else {
-            ctx.logger.error('Error deleting group', { groupName });
-        }
-        ctx.logger.info(`Group ${groupName} is deleted from all keys`);
-        return;
+        // A partial delete must surface as an error, not a success log: leftover keys would resurrect
+        // stale state (or stale reservations) if the group is recreated.
+        const result = await this.execPipelineOrThrow(ctx, pipeline, 'deleteInstanceGroup', { groupName });
+        ctx.logger.info(`Group ${groupName} is deleted from all keys`, { result });
     }
 
     async checkValue(_ctx: Context, key: string): Promise<boolean> {
@@ -541,6 +551,14 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         return true;
     }
 
+    async fetchMetricUnTrackedCount(_ctx: Context, groupName: string): Promise<number> {
+        const response = await this.redisClient.get(`service-metrics:${groupName}:untracked-count`);
+        if (response !== null && response.length > 0) {
+            return Number.parseFloat(response) || 0;
+        }
+        return 0;
+    }
+
     async saveCloudInstances(_ctx: Context, groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> {
         await this.redisClient.set(
             `cloud-instances-list:${groupName}`,
@@ -551,17 +569,34 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         return true;
     }
 
-    async ping(ctx: Context): Promise<boolean | string> {
-        return await new Promise((resolve) => {
-            this.redisClient.ping((err, reply) => {
-                if (err) {
-                    ctx.logger.error('Redis ping error', { err });
-                    resolve(false);
-                } else {
-                    resolve(reply);
-                }
+    async fetchCloudInstances(ctx: Context, groupName: string): Promise<CloudInstance[]> {
+        const response = await this.redisClient.get(`cloud-instances-list:${groupName}`);
+        if (response !== null && response.length > 0) {
+            const cloudInstances = <CloudInstance[]>JSON.parse(response);
+            ctx.logger.debug(`Cloud instances: `, { groupName, cloudInstances });
+            return cloudInstances;
+        }
+        return [];
+    }
+
+    // Health probe: true only on a real PONG, false on any error (never throws, never returns a truthy
+    // non-boolean the /health handler could misread as healthy).
+    async ping(ctx: Context): Promise<boolean> {
+        try {
+            return await new Promise<boolean>((resolve) => {
+                this.redisClient.ping((err, reply) => {
+                    if (err) {
+                        ctx.logger.error('Redis ping error', { err });
+                        resolve(false);
+                    } else {
+                        resolve(reply === 'PONG');
+                    }
+                });
             });
-        });
+        } catch (err) {
+            ctx.logger.error('Redis ping error', { err });
+            return false;
+        }
     }
 
     // Reservation store methods
@@ -580,11 +615,26 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
 
     async saveReservation(ctx: Context, reservation: Reservation): Promise<void> {
         const key = this.reservationKey(reservation.id);
-        const ttl = Math.max(Math.ceil((reservation.expiresAt - Date.now()) / 1000) + 3600, 3600);
-        await this.redisClient.set(key, JSON.stringify(reservation), 'EX', ttl);
-        await this.redisClient.sadd(this.reservationGroupSetKey(reservation.groupName), reservation.id);
-        await this.extendTTLForKey(this.reservationGroupSetKey(reservation.groupName), this.groupRelatedDataTTL);
-        ctx.logger.debug('Saved reservation', { reservationId: reservation.id });
+        const value = JSON.stringify(reservation);
+        const pipeline = this.redisClient.pipeline();
+        if (isTerminalReservationStatus(reservation.status)) {
+            // Terminal: retain briefly so the final status stays readable, then let Redis drop it.
+            const ttl = terminalReservationTTLSec(reservation, this.terminalReservationRetentionSec);
+            pipeline.set(key, value, 'EX', ttl);
+        } else {
+            // Non-terminal: no TTL (a plain SET also clears any TTL from a prior terminal save). Expiry is
+            // a status transition owned by ReservationManager, which must observe it to set the scale-down
+            // grace; a held ("take and hold") reservation is never re-saved and must not be evicted.
+            pipeline.set(key, value);
+        }
+        pipeline
+            .sadd(this.reservationGroupSetKey(reservation.groupName), reservation.id)
+            .expire(this.reservationGroupSetKey(reservation.groupName), this.groupRelatedDataTTL);
+        await this.execPipelineOrThrow(ctx, pipeline, 'saveReservation', {
+            reservationId: reservation.id,
+            groupName: reservation.groupName,
+        });
+        ctx.logger.debug('Saved reservation', { reservationId: reservation.id, status: reservation.status });
     }
 
     async getReservation(_ctx: Context, id: string): Promise<Reservation | null> {
@@ -604,17 +654,18 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
         for (const id of ids) {
             pipeline.get(this.reservationKey(id));
         }
-        const results = await pipeline.exec();
+        // Fail closed: a per-command error must throw, not be read as "reservation gone" and SREM'd
+        // from the group set (which would silently drop a live reservation).
+        const results = await this.execPipelineOrThrow(ctx, pipeline, 'listReservations', { groupName });
         const reservations: Reservation[] = [];
         const expiredIds: string[] = [];
-        if (results) {
-            for (let i = 0; i < results.length; i++) {
-                const value = results[i][1];
-                if (value) {
-                    reservations.push(JSON.parse(value as string));
-                } else {
-                    expiredIds.push(ids[i]);
-                }
+        for (let i = 0; i < results.length; i++) {
+            const value = results[i][1];
+            if (value === null) {
+                // Only a genuine nil reply means the key expired / was deleted.
+                expiredIds.push(ids[i]);
+            } else {
+                reservations.push(JSON.parse(value as string));
             }
         }
         if (expiredIds.length > 0) {

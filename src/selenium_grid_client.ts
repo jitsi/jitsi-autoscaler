@@ -1,7 +1,8 @@
 import { Context } from './context';
 
 export interface SeleniumGridStatus {
-    sessionQueueSize: number;
+    /** Number of queued new-session requests; undefined when the grid response does not report a queue */
+    sessionQueueSize?: number;
     activeSessions: number;
     maxSessions: number;
     nodeCount: number;
@@ -70,8 +71,10 @@ export default class SeleniumGridClient {
         }
 
         // sessionQueueRequests may be an array of queued requests
+        // If the response does not carry a queue at all, leave the size undefined so callers
+        // treat it as "unknown" rather than "no load"
         const sessionQueue = value.sessionQueueRequests as unknown[] | undefined;
-        const sessionQueueSize = sessionQueue ? sessionQueue.length : 0;
+        const sessionQueueSize = Array.isArray(sessionQueue) ? sessionQueue.length : undefined;
 
         return {
             sessionQueueSize,

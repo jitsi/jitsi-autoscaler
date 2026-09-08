@@ -47,6 +47,13 @@ describe('RedisStore with Mock Redis Client', () => {
         context = initContext();
     });
 
+    test('untracked count round-trips through the metrics store and defaults to 0', async () => {
+        assert.strictEqual(await redisStore.fetchMetricUnTrackedCount(context, 'g'), 0);
+        await redisStore.saveMetricUnTrackedCount(context, 'g', 4);
+        assert.strictEqual(await redisStore.fetchMetricUnTrackedCount(context, 'g'), 4);
+        assert.strictEqual(await redisStore.fetchMetricUnTrackedCount(context, 'g-2'), 0);
+    });
+
     test('redisStore checks for at least one group, finds none', async () => {
         const res = await redisStore.existsAtLeastOneGroup(context);
         assert.equal(res, false, 'expect no groups');
@@ -174,7 +181,38 @@ describe('RedisStore with Mock Redis Client', () => {
 
     test('redisStore can ping Redis server', async () => {
         const result = await redisStore.ping(context);
-        assert.equal(result, 'PONG', 'expect PONG response');
+        assert.strictEqual(result, true, 'expect a boolean true on PONG');
+    });
+
+    test('ping resolves false (not an error, not a truthy non-boolean) when redis errors', async () => {
+        mockRedisClient.ping = (cb) => cb(new Error('EXPECTED ERROR: redis down'), undefined);
+        assert.strictEqual(await redisStore.ping(context), false);
+        mockRedisClient.ping = (cb) => cb(null, 'not-pong');
+        assert.strictEqual(await redisStore.ping(context), false, 'anything but PONG is unhealthy');
+    });
+
+    // Sidecar-written keys must carry a TTL: a sidecar reporting for an unknown group would otherwise
+    // create instances:status:<group> / gmetric:instance:<group> keys that live forever.
+    test('saveInstanceStatus arms a TTL on the group states hash', async () => {
+        const group = 'unknown-group';
+        await redisStore.saveInstanceStatus(context, group, {
+            instanceId: 'i-1',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now(),
+            metadata: { group },
+        });
+        assert.notEqual(await mockRedisClient.hget(`instances:status:${group}`, 'i-1'), null, 'state is stored');
+        const ttl = await mockRedisClient.ttl(`instances:status:${group}`);
+        assert.ok(ttl > 0 && ttl <= 60, `expect a TTL of at most groupRelatedDataTTL (60s), got ${ttl}`);
+    });
+
+    test('writeInstanceMetric arms a TTL on the group metrics sorted set', async () => {
+        const group = 'unknown-group';
+        await redisStore.writeInstanceMetric(context, group, { instanceId: 'i-1', timestamp: Date.now(), value: 1 });
+        assert.strictEqual((await mockRedisClient.zrange(`gmetric:instance:${group}`, 0, -1)).length, 1);
+        const ttl = await mockRedisClient.ttl(`gmetric:instance:${group}`);
+        assert.ok(ttl > 0 && ttl <= 60, `expect a TTL of at most groupRelatedDataTTL (60s), got ${ttl}`);
     });
 
     test('pipeline operations execute in sequence', async () => {
@@ -307,6 +345,70 @@ describe('RedisStore with Mock Redis Client', () => {
             () => store.getShutdownStatuses(context, 'group', ['i-1']),
             'expect getShutdownStatuses to throw on a pipeline command error',
         );
+    });
+
+    function storeWithFakeClient(fakeClient) {
+        return new RedisStore({
+            redisClient: fakeClient as unknown as Redis,
+            redisScanCount: 100,
+            idleTTL: 60,
+            metricTTL: 60,
+            provisioningTTL: 60,
+            shutdownStatusTTL: 60,
+            groupRelatedDataTTL: 60,
+            serviceLevelMetricsTTL: 60,
+        });
+    }
+
+    // listReservations must fail closed: a per-command error must not be read as "reservation expired"
+    // and cause the id to be SREM'd from the group set (silently dropping a live reservation).
+    test('listReservations throws on a pipeline command error and does not prune the group set', async () => {
+        const srem = mock.fn(async () => 1);
+        const store = storeWithFakeClient({
+            smembers: async () => ['res-1'],
+            srem,
+            pipeline() {
+                return {
+                    get() {
+                        return this;
+                    },
+                    async exec() {
+                        return [[new Error('EXPECTED ERROR: command failed'), null]];
+                    },
+                };
+            },
+        });
+        await assert.rejects(() => store.listReservations(context, 'group'));
+        assert.strictEqual(srem.mock.callCount(), 0, 'a failed read must never prune reservation ids');
+    });
+
+    test('listReservations throws when pipeline.exec() returns null', async () => {
+        const store = storeWithFakeClient({
+            smembers: async () => ['res-1'],
+            srem: async () => 1,
+            pipeline() {
+                return {
+                    get() {
+                        return this;
+                    },
+                    async exec() {
+                        return null;
+                    },
+                };
+            },
+        });
+        await assert.rejects(() => store.listReservations(context, 'group'));
+    });
+
+    test('listReservations prunes only ids whose key is genuinely gone (nil reply)', async () => {
+        const live = { id: 'res-live', groupName: 'group', expiresAt: Date.now() + 60000 };
+        await redisStore.saveReservation(context, live);
+        // an id left in the set whose key has been deleted (TTL lapsed)
+        await mockRedisClient.sadd('reservations:group:group', 'res-gone');
+
+        const listed = await redisStore.listReservations(context, 'group');
+        assert.deepStrictEqual(listed, [live]);
+        assert.deepStrictEqual(await mockRedisClient.smembers('reservations:group:group'), ['res-live']);
     });
 
     // R5: deleting a group must remove reservation keys too

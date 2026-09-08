@@ -2,6 +2,9 @@ import { Context } from './context';
 import { CloudRetryStrategy } from './cloud_manager';
 import { InstanceGroup } from './instance_store';
 
+// default per-request HTTP timeout for cloud provider API calls (CLOUD_PROVIDER_REQUEST_TIMEOUT_MS)
+export const DEFAULT_CLOUD_PROVIDER_REQUEST_TIMEOUT_MS = 30000;
+
 export interface CloudInstance {
     instanceId: string;
     displayName: string;

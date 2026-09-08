@@ -21,8 +21,25 @@ export class MockRedisClient {
         this.data.set(key, value);
         if (expiryMode === 'EX' && time) {
             this.ttls.set(key, Date.now() + time * 1000);
+        } else {
+            // Redis semantics: a plain SET discards any TTL previously associated with the key.
+            this.ttls.delete(key);
         }
         return 'OK';
+    }
+
+    // Redis TTL semantics: -2 when the key does not exist, -1 when it exists without an expiry,
+    // otherwise the remaining time to live in (rounded-up) seconds.
+    async ttl(key: string): Promise<number> {
+        this.checkTTL(key);
+        const exists = this.data.has(key) || this.hashes.has(key) || this.sets.has(key) || this.sortedSets.has(key);
+        if (!exists) {
+            return -2;
+        }
+        if (!this.ttls.has(key)) {
+            return -1;
+        }
+        return Math.max(0, Math.ceil((this.ttls.get(key)! - Date.now()) / 1000));
     }
 
     async del(key: string): Promise<number> {
@@ -353,6 +370,24 @@ export class MockRedisPipeline {
         return this.addCommand('hdel', [hash, field]);
     }
 
+    expire(key: string, seconds: number): this {
+        return this.addCommand('expire', [key, seconds]);
+    }
+
+    // Set operations
+    sadd(key: string, ...members: string[]): this {
+        return this.addCommand('sadd', [key, ...members]);
+    }
+
+    srem(key: string, ...members: string[]): this {
+        return this.addCommand('srem', [key, ...members]);
+    }
+
+    // Sorted set operations
+    zadd(key: string, score: number, member: string): this {
+        return this.addCommand('zadd', [key, score, member]);
+    }
+
     // Execute all commands in the pipeline
     async exec(): Promise<Array<[Error | null, any]>> {
         const results: Array<[Error | null, any]> = [];
@@ -378,6 +413,18 @@ export class MockRedisPipeline {
                         break;
                     case 'hdel':
                         result = await this.redisClient.hdel(cmd.args[0], cmd.args[1]);
+                        break;
+                    case 'expire':
+                        result = await this.redisClient.expire(cmd.args[0], cmd.args[1]);
+                        break;
+                    case 'sadd':
+                        result = await this.redisClient.sadd(cmd.args[0], ...cmd.args.slice(1));
+                        break;
+                    case 'srem':
+                        result = await this.redisClient.srem(cmd.args[0], ...cmd.args.slice(1));
+                        break;
+                    case 'zadd':
+                        result = await this.redisClient.zadd(cmd.args[0], cmd.args[1], cmd.args[2]);
                         break;
                     default:
                         throw new Error(`Unsupported command: ${cmd.command}`);

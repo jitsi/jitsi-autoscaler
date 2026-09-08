@@ -1,5 +1,6 @@
 import got from 'got';
 import { Context } from './context';
+import { DEFAULT_CLOUD_PROVIDER_REQUEST_TIMEOUT_MS } from './cloud_instance_manager';
 
 export interface NomadJobPayload {
     [key: string]: string;
@@ -57,7 +58,22 @@ export interface NomadJob {
     JobModifyIndex: number;
 }
 
+export interface NomadClientOptions {
+    // per-request HTTP timeout for calls to the nomad API
+    requestTimeoutMs?: number;
+}
+
 export class NomadClient {
+    private requestTimeoutMs: number;
+
+    constructor(options: NomadClientOptions = {}) {
+        this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_CLOUD_PROVIDER_REQUEST_TIMEOUT_MS;
+    }
+
+    private requestOptions() {
+        return { timeout: { request: this.requestTimeoutMs } };
+    }
+
     // list nomad jobs
     async listJobs(ctx: Context, server: string, prefix: string): Promise<NomadJob[]> {
         let url = `${server}/v1/jobs`;
@@ -66,7 +82,7 @@ export class NomadClient {
         }
         ctx.logger.debug('Listing nomad jobs', { url });
 
-        const jobs = <NomadJob[]>await got.get(url).json();
+        const jobs = <NomadJob[]>await got.get(url, this.requestOptions()).json();
         ctx.logger.debug('Received job listing', { jobs });
 
         return jobs;
@@ -87,7 +103,9 @@ export class NomadClient {
         ctx.logger.debug('Dispatching nomad job', { url, data });
 
         try {
-            const result = <NomadJobDispatchResults>await got.post(url, { json: data }).json();
+            const result = <NomadJobDispatchResults>(
+                await got.post(url, { json: data, ...this.requestOptions() }).json()
+            );
 
             ctx.logger.debug('Dispatch results', { result });
 

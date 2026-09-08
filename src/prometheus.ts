@@ -195,6 +195,20 @@ export default class PrometheusClient implements MetricsStore {
         return this.pushMetric(ctx, metrics, labels);
     }
 
+    // Instant query for the most recent untracked count pushed by the sanity loop. Query errors
+    // propagate (a Prometheus outage must not silently read as "no untracked instances").
+    async fetchMetricUnTrackedCount(ctx: Context, groupName: string): Promise<number> {
+        const query = `autoscaler_untracked_instance_count{group="${escapeLabelValue(groupName)}"}`;
+        const res = await this.promDriver.instantQuery(query);
+        const values = res.result.map((item) => Number(item.value?.value)).filter((value) => Number.isFinite(value));
+        if (values.length === 0) {
+            ctx.logger.debug('No untracked count metric found in prometheus', { groupName });
+            return 0;
+        }
+        // several series (e.g. from different pushers) are summed; normally there is exactly one
+        return values.reduce((sum, value) => sum + value, 0);
+    }
+
     async cleanInstanceMetrics(_ctx: Context, _group: string): Promise<boolean> {
         return true;
     }

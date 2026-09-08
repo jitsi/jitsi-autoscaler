@@ -147,6 +147,102 @@ describe('ConsulLockManager acquire behavior', () => {
     });
 });
 
+// Consul locks are backed by a session the manager renews forever, so unlike a Redlock lock (which lapses
+// at its TTL) a hung job would hold a Consul group lock indefinitely. The manager must bound the hold.
+describe('ConsulLockManager bounded lock hold', () => {
+    function releaseCalls(client) {
+        return client.kv.set.mock.calls.filter((c) => c.arguments[0].release !== undefined);
+    }
+
+    test('a lock held longer than groupLockTTLMs is force-released with an error log', async () => {
+        const client = makeConsulClient();
+        const logger = { error: mock.fn(), warn: mock.fn(), info: mock.fn(), debug: mock.fn() };
+        const lm = new ConsulLockManager({
+            consulClient: client,
+            groupLockTTLMs: 10000,
+            jobCreationLockTTL: 30000,
+            logger,
+        });
+        const locker = await lm.lockGroup(ctx, 'g');
+
+        // within the TTL: nothing happens
+        assert.deepStrictEqual(await lm.releaseOverheldLocks(Date.now() + 5000), []);
+        assert.strictEqual(releaseCalls(client).length, 0);
+
+        // past the TTL: exactly this lock is released under the acquiring session
+        const released = await lm.releaseOverheldLocks(Date.now() + 10001);
+        assert.deepStrictEqual(released, [locker.key]);
+        const rel = releaseCalls(client);
+        assert.strictEqual(rel.length, 1);
+        assert.deepStrictEqual(rel[0].arguments[0], { key: locker.key, value: 'false', release: locker.session });
+        assert.strictEqual(logger.error.mock.callCount(), 1, 'an overheld lock is an error condition');
+
+        // idempotent: a second sweep finds nothing to release
+        assert.deepStrictEqual(await lm.releaseOverheldLocks(Date.now() + 20000), []);
+        await lm.shutdown();
+    });
+
+    test('a released lock is untracked and never force-released', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 10000, jobCreationLockTTL: 30000 });
+        const locker = await lm.lockGroup(ctx, 'g');
+        await locker.release(ctx);
+        assert.strictEqual(releaseCalls(client).length, 1, 'the normal release');
+
+        assert.deepStrictEqual(await lm.releaseOverheldLocks(Date.now() + 60000), []);
+        assert.strictEqual(releaseCalls(client).length, 1, 'no force-release after a normal release');
+        await lm.shutdown();
+    });
+
+    test('job-creation locks are bounded by jobCreationLockTTL, group locks by groupLockTTLMs', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client, groupLockTTLMs: 60000, jobCreationLockTTL: 10000 });
+        await lm.lockJobCreation(ctx);
+        await lm.lockGroup(ctx, 'g');
+
+        const released = await lm.releaseOverheldLocks(Date.now() + 10001);
+        assert.strictEqual(released.length, 1);
+        assert.ok(released[0].endsWith('/jobCreation'), 'only the job-creation lock has exceeded its TTL');
+        await lm.shutdown();
+    });
+
+    test('the session renewal tick force-releases overheld locks', async () => {
+        mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+        try {
+            const client = makeConsulClient();
+            const lm = new ConsulLockManager({
+                consulClient: client,
+                groupLockTTLMs: 10000,
+                jobCreationLockTTL: 30000,
+            });
+            const locker = await lm.lockGroup(ctx, 'g');
+
+            // one renew tick while the lock is still within its TTL
+            mock.timers.tick(5000);
+            assert.strictEqual(await lm.renewConsulSession(), true);
+            assert.strictEqual(releaseCalls(client).length, 0);
+
+            // the next tick finds the lock overheld
+            mock.timers.tick(6000);
+            assert.strictEqual(await lm.renewConsulSession(), true);
+            const rel = releaseCalls(client);
+            assert.strictEqual(rel.length, 1);
+            assert.strictEqual(rel[0].arguments[0].key, locker.key);
+            await lm.shutdown();
+        } finally {
+            mock.timers.reset();
+        }
+    });
+
+    test('locks are unbounded when no TTLs are configured', async () => {
+        const client = makeConsulClient();
+        const lm = new ConsulLockManager({ consulClient: client });
+        await lm.lockGroup(ctx, 'g');
+        assert.deepStrictEqual(await lm.releaseOverheldLocks(Date.now() + 365 * 24 * 3600 * 1000), []);
+        await lm.shutdown();
+    });
+});
+
 describe('ConsulLockManager session renewal', () => {
     test('a transient renew failure retains the session and reschedules', async () => {
         const client = makeConsulClient();

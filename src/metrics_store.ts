@@ -19,6 +19,9 @@ interface MetricsStore {
     };
     cleanInstanceMetrics: { (ctx: Context, group: string): Promise<boolean> };
     saveMetricUnTrackedCount: { (ctx: Context, groupName: string, count: number): Promise<boolean> };
+    // Reads back the last untracked count written by the sanity loop (0 when none was recorded), so the
+    // launcher's untracked-instance protections work with every metrics provider, not just Redis.
+    fetchMetricUnTrackedCount: { (ctx: Context, groupName: string): Promise<number> };
 }
 
 export default MetricsStore;

@@ -18,6 +18,7 @@ export const mockStore = {
     cleanInstanceMetrics: mock.fn(() => true),
     writeInstanceMetric: mock.fn(() => true),
     saveMetricUnTrackedCount: mock.fn(() => true),
+    fetchMetricUnTrackedCount: mock.fn(() => 0),
 
     // instance states
     fetchInstanceStates: mock.fn(() => []),
@@ -64,5 +65,6 @@ export const mockStore = {
 
     // sanity + health
     saveCloudInstances: mock.fn(() => true),
+    fetchCloudInstances: mock.fn(() => []),
     ping: mock.fn(() => true),
 };

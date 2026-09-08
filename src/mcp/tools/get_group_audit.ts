@@ -1,15 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { READ_ONLY } from './annotations';
 
 export function registerGetGroupAudit(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-expect-error - MCP SDK zod type inference may exceed TypeScript recursion limit
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'get_group_audit',
         'Get recent scaling decisions and launch history for an instance group. Optionally includes per-instance audit details.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('The name of the instance group'),
             include_instance_audit: z
                 .boolean()
@@ -17,13 +17,23 @@ export function registerGetGroupAudit(server: McpServer, client: AutoscalerApiCl
                 .default(false)
                 .describe('Also include per-instance audit details'),
         },
-        async ({ base_url, auth_token, name, include_instance_audit }) => {
+        READ_ONLY,
+        async ({ name, include_instance_audit }) => {
             try {
-                const c = client.withOverrides(base_url, auth_token);
-                const audit = await c.getGroupAudit(name);
-                if (!audit) {
+                // The audit endpoint returns 200 with empty data for unknown groups,
+                // so verify the group exists first to give a useful error.
+                const group = await client.getGroup(name);
+                if (!group) {
                     return {
                         content: [{ type: 'text', text: `Group '${name}' not found.` }],
+                        isError: true,
+                    };
+                }
+
+                const audit = await client.getGroupAudit(name);
+                if (!audit) {
+                    return {
+                        content: [{ type: 'text', text: `No audit data available for group '${name}'.` }],
                         isError: true,
                     };
                 }
@@ -91,7 +101,7 @@ export function registerGetGroupAudit(server: McpServer, client: AutoscalerApiCl
                 }
 
                 if (include_instance_audit) {
-                    const instanceAudit = await c.getInstanceAudit(name);
+                    const instanceAudit = await client.getInstanceAudit(name);
                     if (instanceAudit && instanceAudit.length > 0) {
                         lines.push('', '## Instance Audit', '');
                         for (const inst of instanceAudit) {

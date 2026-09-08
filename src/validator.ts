@@ -1,7 +1,7 @@
 import { InstanceTracker } from './instance_tracker';
 import { Context } from './context';
 import { Request } from 'express';
-import InstanceGroupManager from './instance_group';
+import InstanceGroupManager, { SUPPORTED_INSTANCE_TYPES } from './instance_group';
 import { InstanceGroupDesiredValuesRequest } from './handlers';
 import MetricsLoop from './metrics_loop';
 import ShutdownManager from './shutdown_manager';
@@ -68,6 +68,10 @@ export default class Validator {
         request: InstanceGroupDesiredValuesRequest,
     ): Promise<boolean> {
         const instanceGroup: InstanceGroup = await this.instanceGroupManager.getInstanceGroup(ctx, name);
+        if (!instanceGroup) {
+            ctx.logger.warn(`Cannot validate desired values: group ${name} not found`);
+            return false;
+        }
 
         const minDesired = request.minDesired != null ? request.minDesired : instanceGroup.scalingOptions.minDesired;
         const maxDesired = request.maxDesired != null ? request.maxDesired : instanceGroup.scalingOptions.maxDesired;
@@ -82,6 +86,10 @@ export default class Validator {
             req.context,
             req.params.name,
         );
+        if (!instanceGroup) {
+            req.context.logger.warn(`Cannot validate launch count: group ${req.params.name} not found`);
+            return false;
+        }
         // take new maximum into consideration, if set
         let max;
         if (req.body.maxDesired != null) {
@@ -93,18 +101,9 @@ export default class Validator {
         return count + instanceGroup.scalingOptions.desiredCount <= max;
     }
 
+    // Case-sensitive: group types must exactly match the strings the processing loops switch on.
     async supportedInstanceType(instanceType: string): Promise<boolean> {
-        return (
-            instanceType !== null &&
-            instanceType !== '' &&
-            (instanceType.toLowerCase() == 'jibri' ||
-                instanceType.toLowerCase() == 'sip-jibri' ||
-                instanceType.toLowerCase() == 'jigasi' ||
-                instanceType.toLowerCase() == 'nomad' ||
-                instanceType.toLowerCase() == 'whisper' ||
-                instanceType.toLowerCase() == 'jvb' ||
-                instanceType.toLowerCase() == 'selenium-grid')
-        );
+        return typeof instanceType === 'string' && SUPPORTED_INSTANCE_TYPES.includes(instanceType);
     }
 
     async supportedScalingDirection(direction: string): Promise<boolean> {

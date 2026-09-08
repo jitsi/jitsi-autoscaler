@@ -1,4 +1,5 @@
 import { InstanceTracker } from './instance_tracker';
+import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import CloudManager, { CloudInstance, CloudRetryStrategy } from './cloud_manager';
 import InstanceGroupManager from './instance_group';
 import { Context } from './context';
@@ -40,6 +41,7 @@ const launcherCloudSidecarDiscrepancyGauge = new promClient.Gauge({
 
 export interface InstanceLauncherOptions {
     maxThrottleThreshold?: number;
+    lockManager: AutoscalerLockManager;
     instanceTracker: InstanceTracker;
     cloudManager: CloudManager;
     instanceGroupManager: InstanceGroupManager;
@@ -53,6 +55,7 @@ export interface InstanceLauncherOptions {
 
 export default class InstanceLauncher {
     private maxThrottleThreshold = 40;
+    private lockManager: AutoscalerLockManager;
     private instanceTracker: InstanceTracker;
     private instanceGroupManager: InstanceGroupManager;
     private cloudManager: CloudManager;
@@ -64,6 +67,7 @@ export default class InstanceLauncher {
     private cloudGuardEnabled: boolean;
 
     constructor(options: InstanceLauncherOptions) {
+        this.lockManager = options.lockManager;
         this.instanceTracker = options.instanceTracker;
         this.cloudManager = options.cloudManager;
         this.instanceGroupManager = options.instanceGroupManager;
@@ -85,6 +89,26 @@ export default class InstanceLauncher {
     }
 
     async launchOrShutdownInstancesByGroup(ctx: Context, groupName: string): Promise<boolean> {
+        // Hold the group lock for the whole launch/shutdown decision, exactly like the autoscaler and
+        // scheduled-scaling processors do. LAUNCH jobs are created every cycle and the job timeout does
+        // not cancel a running handler, so without the lock a slow provider call can overlap the next
+        // cycle and both runs launch the same delta (double-launch).
+        let lock: AutoscalerLock = undefined;
+        try {
+            lock = await this.lockManager.lockGroup(ctx, groupName);
+        } catch (err) {
+            ctx.logger.warn(`[Launcher] Error obtaining lock for processing group ${groupName}`, { err });
+            return false;
+        }
+
+        try {
+            return await this.launchOrShutdownInstancesByGroupLocked(ctx, groupName);
+        } finally {
+            await lock.release(ctx);
+        }
+    }
+
+    private async launchOrShutdownInstancesByGroupLocked(ctx: Context, groupName: string): Promise<boolean> {
         const group = await this.instanceGroupManager.getInstanceGroup(ctx, groupName);
         if (!group) {
             throw new Error(`Group ${groupName} not found, failed to make launch decisions.`);
@@ -400,6 +424,11 @@ export default class InstanceLauncher {
                     group,
                     unprotectedInstances,
                     desiredScaleDownQuantity,
+                );
+                break;
+            default:
+                ctx.logger.error(
+                    `[Launcher] Unknown group type ${group.type} for group ${group.name}, cannot select instances for scale down`,
                 );
                 break;
         }

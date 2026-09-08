@@ -91,8 +91,14 @@ describe('InstanceLauncher', () => {
         getCloudInstances: mock.fn(() => []),
     };
 
+    const lock = { release: mock.fn() };
+    const lockManager = {
+        lockGroup: mock.fn(() => lock),
+    };
+
     // now we can create an instance of the class
     const instanceLauncher = new InstanceLauncher({
+        lockManager,
         instanceTracker,
         instanceGroupManager,
         cloudManager,
@@ -115,7 +121,39 @@ describe('InstanceLauncher', () => {
         cloudManager.getInstances.mock.resetCalls();
         metricsLoop.getUnTrackedCount.mock.resetCalls();
         metricsLoop.getCloudInstances.mock.resetCalls();
+        lockManager.lockGroup.mock.resetCalls();
+        lock.release.mock.resetCalls();
         context = initContext();
+    });
+
+    describe('instanceLauncher group lock tests', () => {
+        test('acquires and releases the group lock around a launch cycle', async () => {
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => groupDetails);
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.strictEqual(result, true);
+            assert.strictEqual(lockManager.lockGroup.mock.calls.length, 1);
+            assert.strictEqual(lockManager.lockGroup.mock.calls[0].arguments[1], groupName);
+            assert.strictEqual(lock.release.mock.calls.length, 1);
+        });
+
+        test('does nothing and returns false when the group lock cannot be acquired', async () => {
+            const error = new Error('lock error');
+            lockManager.lockGroup.mock.mockImplementationOnce(() => {
+                throw error;
+            });
+            const result = await instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName);
+            assert.strictEqual(result, false);
+            assert.strictEqual(instanceTracker.trimCurrent.mock.calls.length, 0);
+            assert.strictEqual(cloudManager.scaleUp.mock.calls.length, 0);
+            assert.strictEqual(cloudManager.scaleDown.mock.calls.length, 0);
+            assert.strictEqual(lock.release.mock.calls.length, 0);
+        });
+
+        test('releases the lock even when the launch cycle throws', async () => {
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => undefined);
+            await assert.rejects(() => instanceLauncher.launchOrShutdownInstancesByGroup(context, groupName));
+            assert.strictEqual(lock.release.mock.calls.length, 1);
+        });
     });
 
     describe('instanceLauncher basic tests', () => {

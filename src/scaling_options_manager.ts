@@ -104,8 +104,16 @@ export default class ScalingManager {
                 await this.instanceGroupManager.upsertInstanceGroup(ctx, instanceGroup);
                 await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, instanceGroup);
             } else {
+                ctx.logger.warn(`[ScalingOptionsManager] Group ${group.name} no longer exists, skipping update`);
                 success = false;
             }
+        } catch (err) {
+            // A failure for one group must not abort the bulk update of its siblings; report it
+            // as a failed group so the caller gets an accurate groupsUpdated count (206 response)
+            ctx.logger.error(`[ScalingOptionsManager] Error updating scaling options for group ${group.name}`, {
+                err,
+            });
+            success = false;
         } finally {
             await lock.release(ctx);
         }

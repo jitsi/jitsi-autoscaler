@@ -131,8 +131,21 @@ describe('ConsulClient', () => {
         });
 
         test('will upsert a test group', async () => {
+            mockClient.kv.set.mock.mockImplementationOnce(() => true);
             const res = await client.upsertInstanceGroup(ctx, group);
             assert.strictEqual(res, true);
+        });
+
+        test('upsert rejects when consul declines the write', async () => {
+            mockClient.kv.set.mock.mockImplementationOnce(() => false);
+            await assert.rejects(() => client.upsertInstanceGroup(ctx, group), /Failed to write to consul/);
+        });
+
+        test('upsert rejects when the consul write throws', async () => {
+            mockClient.kv.set.mock.mockImplementationOnce(() => {
+                throw new Error('EXPECTED ERROR: consul down');
+            });
+            await assert.rejects(() => client.upsertInstanceGroup(ctx, group), /EXPECTED ERROR/);
         });
 
         test('will find upserted group when listing all instance groups', async () => {
@@ -326,5 +339,65 @@ describe('ConsulStore data operations (in-memory client)', () => {
             !mockConsul.keys().includes(`autoscaler/reservations/${group.name}/res-1`),
             'expect expired reservation key to be deleted',
         );
+    });
+
+    // Prefix isolation: `.../reservations/g` must not also match `.../reservations/g-2/...`.
+    test('listReservations does not leak reservations from a group with a longer, prefix-sharing name', async () => {
+        const rG = { id: 'res-g', groupName: 'g', expiresAt: Date.now() + 60 * 1000 };
+        const rG2 = { id: 'res-g2', groupName: 'g-2', expiresAt: Date.now() + 60 * 1000 };
+        await store.saveReservation(ctx, rG);
+        await store.saveReservation(ctx, rG2);
+
+        assert.deepStrictEqual(await store.listReservations(ctx, 'g'), [rG]);
+        assert.deepStrictEqual(await store.listReservations(ctx, 'g-2'), [rG2]);
+    });
+
+    // fetchRecursiveTTLValues normalizes the trailing slash so short keys are stripped correctly either way.
+    test('fetchRecursiveTTLValues strips the prefix identically with and without a trailing slash', async () => {
+        const prefix = 'autoscaler/group-data/testgroup/shutdown';
+        await store.writeTTLValue(ctx, `${prefix}/i-1`, 'shutdown', 60);
+        await store.writeTTLValue(ctx, `${prefix}-other/i-2`, 'shutdown', 60);
+
+        const withoutSlash = await store.fetchRecursiveTTLValues(ctx, prefix);
+        const withSlash = await store.fetchRecursiveTTLValues(ctx, `${prefix}/`);
+        assert.deepStrictEqual(Object.keys(withoutSlash), ['i-1']);
+        assert.deepStrictEqual(Object.keys(withSlash), ['i-1']);
+    });
+
+    // A never-expiring TTLValue (expires: 0) must survive the clean pass and read as present.
+    test('TTLValues with expires=0 never expire', async () => {
+        await store.writePersistentValue(ctx, 'autoscaler/group-data/testgroup/protected/i-1', 'isScaleDownProtected');
+        assert.deepStrictEqual(await store.areScaleDownProtected(ctx, 'testgroup', ['i-1']), [true]);
+        assert.ok(mockConsul.keys().includes('autoscaler/group-data/testgroup/protected/i-1'), 'not cleaned up');
+    });
+
+    // Consul write path must fail closed for the batched per-instance writes too.
+    test('setShutdownStatus rejects when any write fails', async () => {
+        const original = mockConsul.kv.set;
+        let calls = 0;
+        mockConsul.kv.set = async (...args) => {
+            if (++calls === 2) {
+                throw new Error('EXPECTED ERROR: consul down');
+            }
+            return original(...args);
+        };
+        await assert.rejects(() =>
+            store.setShutdownStatus(
+                ctx,
+                [
+                    { instanceId: 'i-1', group: group.name },
+                    { instanceId: 'i-2', group: group.name },
+                ],
+                'shutdown',
+                60,
+            ),
+        );
+    });
+
+    test('ping returns false (never the error) when consul is unreachable', async () => {
+        mockConsul.status.leader = async () => {
+            throw new Error('EXPECTED ERROR: consul down');
+        };
+        assert.strictEqual(await store.ping(ctx), false);
     });
 });

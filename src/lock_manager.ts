@@ -20,20 +20,31 @@ export interface ConsulLockManagerOptions {
     logger?: Logger;
 }
 
+// Bookkeeping for a lock this node currently holds, so the manager can bound how long it is held.
+interface HeldConsulLock {
+    key: string;
+    session: string;
+    acquiredAt: number;
+    maxHoldMs: number;
+}
+
 export class ConsulLocker implements AutoscalerLock {
     private client: Consul;
     public session: string;
     public key: string;
+    private onRelease?: () => void;
 
-    constructor(client: Consul, session: string, key: string) {
+    constructor(client: Consul, session: string, key: string, onRelease?: () => void) {
         this.client = client;
         this.session = session;
         this.key = key;
+        this.onRelease = onRelease;
     }
 
     // release() is called from finally blocks, so it must never throw or it would mask the original error.
     async release(ctx: Context): Promise<void> {
         ctx.logger.debug(`Releasing consul lock ${this.key}`, { key: this.key, session: this.session });
+        this.onRelease?.();
         try {
             const res = await this.client.kv.set({ key: this.key, value: 'false', release: this.session });
             if (!res) {
@@ -83,6 +94,12 @@ export class ConsulLockManager implements AutoscalerLockManager {
     private creationToken = 0;
     // Set once shutdown() runs so no new session is created (or committed) afterwards.
     private shuttingDown = false;
+    // Maximum hold per lock kind (ms), the Redlock-equivalent lock TTL. Infinity when not configured.
+    private groupLockMaxHoldMs: number;
+    private jobCreationLockMaxHoldMs: number;
+    // Locks currently held by this node, keyed by lock key. Consul locks are backed by the renewed
+    // session and would otherwise be held forever by a hung job; see releaseOverheldLocks.
+    private heldLocks = new Map<string, HeldConsulLock>();
 
     private static readonly ACQUIRE_RETRY_COUNT = 3;
     private static readonly ACQUIRE_RETRY_DELAY_MS = 200;
@@ -93,6 +110,8 @@ export class ConsulLockManager implements AutoscalerLockManager {
         if (options.consulKeyPrefix) {
             this.consulKeyPrefix = options.consulKeyPrefix;
         }
+        this.groupLockMaxHoldMs = options.groupLockTTLMs > 0 ? options.groupLockTTLMs : Infinity;
+        this.jobCreationLockMaxHoldMs = options.jobCreationLockTTL > 0 ? options.jobCreationLockTTL : Infinity;
         // Derive the shared Consul session TTL from the configured lock TTLs. The session backs every
         // lock, so a crashed node holds its locks until the session TTL lapses; bounding it to the
         // configured lock TTL keeps crash-stall in the same ballpark as the Redis TTLs. Consul enforces
@@ -204,8 +223,54 @@ export class ConsulLockManager implements AutoscalerLockManager {
             return true; // rotated while in flight; this timer is stale, don't reschedule
         }
         this.renewFailureCount = 0;
+        // Renewing the session keeps every lock under it alive indefinitely, so this is the point where a
+        // lock that outlived its TTL (a hung or overrunning job) must be force-released. Redlock locks
+        // simply lapse at their TTL; without this, a Consul-backed group lock would never lapse at all.
+        await this.releaseOverheldLocks();
         this.scheduleRenew();
         return true;
+    }
+
+    // Force-release every held lock whose hold time exceeds its TTL-equivalent, logging an error for each.
+    // Only the overheld lock is released (not the whole session), so other in-flight jobs keep their locks.
+    // Returns the keys released. `now` is injectable for tests.
+    async releaseOverheldLocks(now = Date.now()): Promise<string[]> {
+        const released: string[] = [];
+        for (const held of Array.from(this.heldLocks.values())) {
+            const heldForMs = now - held.acquiredAt;
+            if (heldForMs <= held.maxHoldMs) {
+                continue;
+            }
+            this.logger?.error(`Consul lock ${held.key} held longer than its TTL, force-releasing it`, {
+                key: held.key,
+                session: held.session,
+                heldForMs,
+                maxHoldMs: held.maxHoldMs,
+            });
+            this.heldLocks.delete(held.key);
+            try {
+                const res = await this.consulClient.kv.set({ key: held.key, value: 'false', release: held.session });
+                if (!res) {
+                    this.logger?.warn(`Failed to force-release overheld consul lock ${held.key}`, { key: held.key });
+                }
+            } catch (err) {
+                this.logger?.warn(`Error force-releasing overheld consul lock ${held.key}`, { key: held.key, err });
+            }
+            released.push(held.key);
+        }
+        return released;
+    }
+
+    private trackHeldLock(key: string, session: string, maxHoldMs: number): ConsulLocker {
+        const held: HeldConsulLock = { key, session, acquiredAt: Date.now(), maxHoldMs };
+        this.heldLocks.set(key, held);
+        // Only drop this exact entry: if the lock was force-released and re-acquired by this node in the
+        // meantime, the stale locker's release() must not untrack the new holder.
+        return new ConsulLocker(this.consulClient, session, key, () => {
+            if (this.heldLocks.get(key) === held) {
+                this.heldLocks.delete(key);
+            }
+        });
     }
 
     private clearSession(): void {
@@ -263,22 +328,28 @@ export class ConsulLockManager implements AutoscalerLockManager {
         this.shuttingDown = true;
         const session = this.consulSession;
         this.clearSession();
+        this.heldLocks.clear();
         await this.destroySessionBestEffort(session);
     }
 
     async lockGroup(ctx: Context, group: string): Promise<AutoscalerLock> {
         // Group locks are also taken by HTTP handlers; retry on contention (parity with the Redis/Redlock
         // backend) so a routine collision with a job doesn't surface as a 500 to the API caller.
-        return this.lockKey(ctx, `${this.consulKeyPrefix}/group/${group}`, true);
+        return this.lockKey(ctx, `${this.consulKeyPrefix}/group/${group}`, true, this.groupLockMaxHoldMs);
     }
 
     async lockJobCreation(ctx: Context): Promise<AutoscalerLock> {
         // Job creation must have exactly one winner per cycle: retrying could let a second node acquire
         // after the winner releases and create a duplicate set of jobs. So fail fast on contention.
-        return this.lockKey(ctx, `${this.consulKeyPrefix}/jobCreation`, false);
+        return this.lockKey(ctx, `${this.consulKeyPrefix}/jobCreation`, false, this.jobCreationLockMaxHoldMs);
     }
 
-    async lockKey(ctx: Context, key: string, retryOnContention = true): Promise<AutoscalerLock> {
+    async lockKey(
+        ctx: Context,
+        key: string,
+        retryOnContention = true,
+        maxHoldMs = this.groupLockMaxHoldMs,
+    ): Promise<AutoscalerLock> {
         let rotated = false;
         let contentionAttempts = 0;
         for (;;) {
@@ -308,7 +379,7 @@ export class ConsulLockManager implements AutoscalerLockManager {
             }
             if (lock) {
                 ctx.logger.debug(`Lock obtained for consul ${key}`, { key, session });
-                return new ConsulLocker(this.consulClient, session, key);
+                return this.trackHeldLock(key, session, maxHoldMs);
             }
             // Lock held by another holder. Consul's lockdelay only blocks re-acquisition after a session is
             // invalidated, not after a clean release, so a brief retry often succeeds once the holder finishes.

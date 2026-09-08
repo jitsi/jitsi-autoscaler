@@ -9,6 +9,7 @@ import { NomadClient } from '../nomad';
 
 describe('NomadClient', () => {
     const nomadClient = new NomadClient();
+    const defaultRequestOptions = { timeout: { request: 30000 } };
     const context = { logger: { debug: mock.fn() } };
 
     afterEach(() => {
@@ -22,13 +23,22 @@ describe('NomadClient', () => {
             mock.method(got, 'get', () => ({ json: () => jobs }));
         });
 
-        test('will call the correct endpoint', async () => {
+        test('will call the correct endpoint with the default request timeout', async () => {
             const server = 'https://nomad.example.com:4646';
             const prefix = 'prefix';
 
             await nomadClient.listJobs(context, server, prefix);
 
             assert.strictEqual(got.get.mock.calls[0].arguments[0], `${server}/v1/jobs?prefix=${prefix}`);
+            assert.deepEqual(got.get.mock.calls[0].arguments[1], defaultRequestOptions);
+        });
+
+        test('will honour a configured request timeout', async () => {
+            const client = new NomadClient({ requestTimeoutMs: 1234 });
+
+            await client.listJobs(context, 'https://nomad.example.com:4646', '');
+
+            assert.deepEqual(got.get.mock.calls[0].arguments[1], { timeout: { request: 1234 } });
         });
 
         test('will perform a GET and return the list of jobs', async () => {
@@ -56,12 +66,13 @@ describe('NomadClient', () => {
             mock.method(got, 'post', () => ({ json: () => dispatchResult }));
         });
 
-        test('will call the correct endpoint and with the correct payload', async () => {
+        test('will call the correct endpoint and with the correct payload and timeout', async () => {
             await nomadClient.dispatchJob(context, server, job, payload, meta);
 
             assert.strictEqual(got.post.mock.calls[0].arguments[0], `${server}/v1/job/${job}/dispatch`);
             assert.deepEqual(got.post.mock.calls[0].arguments[1], {
                 json: { Meta: meta, Payload: Buffer.from(JSON.stringify(payload)).toString('base64') },
+                ...defaultRequestOptions,
             });
         });
 

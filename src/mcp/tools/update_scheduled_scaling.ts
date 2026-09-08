@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { IDEMPOTENT_WRITE } from './annotations';
 
 export function registerUpdateScheduledScaling(server: McpServer, client: AutoscalerApiClient): void {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -9,8 +10,6 @@ export function registerUpdateScheduledScaling(server: McpServer, client: Autosc
         'update_scheduled_scaling',
         "Update scheduled scaling config for a group. Without period_name, updates only top-level settings (enabled, timezone). With period_name, also updates that period's scaling overrides.",
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the instance group'),
             period_name: z
                 .string()
@@ -21,13 +20,33 @@ export function registerUpdateScheduledScaling(server: McpServer, client: Autosc
                 .optional()
                 .describe('Enable or disable scheduled scaling for the group (top-level toggle)'),
             timezone: z.string().optional().describe('Timezone for the schedule (e.g. UTC, America/New_York)'),
-            minDesired: z.number().optional().describe('Override minimum desired count during this period'),
-            maxDesired: z.number().optional().describe('Override maximum desired count during this period'),
-            desiredCount: z.number().optional().describe('Override desired count during this period'),
+            minDesired: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe('Override minimum desired count during this period'),
+            maxDesired: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe('Override maximum desired count during this period'),
+            desiredCount: z.number().int().min(0).optional().describe('Override desired count during this period'),
             scaleUpThreshold: z.number().optional().describe('Override scale up threshold during this period'),
             scaleDownThreshold: z.number().optional().describe('Override scale down threshold during this period'),
-            scaleUpQuantity: z.number().optional().describe('Override scale up quantity during this period'),
-            scaleDownQuantity: z.number().optional().describe('Override scale down quantity during this period'),
+            scaleUpQuantity: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe('Override scale up quantity during this period'),
+            scaleDownQuantity: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .describe('Override scale down quantity during this period'),
             reservationScaleUpThreshold: z
                 .number()
                 .int()
@@ -37,10 +56,10 @@ export function registerUpdateScheduledScaling(server: McpServer, client: Autosc
                     'selenium-grid only: override the waiting-reserved-nodes threshold for scale-up during this period',
                 ),
         },
+        IDEMPOTENT_WRITE,
         async (params) => {
             try {
-                const c = client.withOverrides(params.base_url, params.auth_token);
-                const config = await c.getScheduledScaling(params.name);
+                const config = await client.getScheduledScaling(params.name);
                 if (!config) {
                     return {
                         content: [
@@ -87,7 +106,7 @@ export function registerUpdateScheduledScaling(server: McpServer, client: Autosc
                         so.reservationScaleUpThreshold = params.reservationScaleUpThreshold;
                 }
 
-                await c.updateScheduledScaling(params.name, config);
+                await client.updateScheduledScaling(params.name, config);
 
                 // Build response
                 const parts: string[] = [];

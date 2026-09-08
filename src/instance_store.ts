@@ -223,11 +223,15 @@ export interface InstanceStore {
     checkValue: { (ctx: Context, key: string): Promise<boolean> };
     setValue: { (ctx: Context, key: string, value: string, ttl: number): Promise<boolean> };
 
-    // sanity related
+    // sanity related: the sanity loop persists the cloud provider's view of the group, and the
+    // autoscaler / launcher / group report read it back through the same store so every provider
+    // combination (Redis, Consul) sees the data rather than only a Redis-backed deployment.
     saveCloudInstances: { (ctx: Context, groupName: string, cloudInstances: CloudInstance[]): Promise<boolean> };
+    fetchCloudInstances: { (ctx: Context, groupName: string): Promise<CloudInstance[]> };
 
-    // health
-    ping: { (ctx: Context): Promise<boolean | string> };
+    // health: resolves true only when the backing store answered; false (never a thrown error or a
+    // truthy non-boolean such as an Error object) on any failure, so /health cannot misreport.
+    ping: { (ctx: Context): Promise<boolean> };
 }
 
 export default InstanceStore;

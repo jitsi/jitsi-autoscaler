@@ -12,22 +12,17 @@ export interface ReservationWithQueue extends Reservation {
     aheadNodeCount?: number | null;
 }
 
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+
 export class AutoscalerApiClient {
     private baseUrl: string;
     private authToken: string;
+    private timeoutMs: number;
 
-    constructor(baseUrl: string, authToken: string) {
+    constructor(baseUrl: string, authToken: string, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS) {
         this.baseUrl = baseUrl.replace(/\/+$/, '');
         this.authToken = authToken;
-    }
-
-    /**
-     * Returns a new client with overridden base URL and/or auth token.
-     * If neither override is provided, returns this client unchanged.
-     */
-    withOverrides(baseUrl: string | undefined, authToken: string | undefined): AutoscalerApiClient {
-        if (!baseUrl && !authToken) return this;
-        return new AutoscalerApiClient(baseUrl || this.baseUrl, authToken || this.authToken);
+        this.timeoutMs = timeoutMs;
     }
 
     private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -41,6 +36,7 @@ export class AutoscalerApiClient {
             method,
             headers,
             body: body ? JSON.stringify(body) : undefined,
+            signal: AbortSignal.timeout(this.timeoutMs),
         });
 
         if (!response.ok) {
@@ -62,7 +58,7 @@ export class AutoscalerApiClient {
             'Content-Type': 'application/json',
         };
 
-        const response = await fetch(url, { method, headers });
+        const response = await fetch(url, { method, headers, signal: AbortSignal.timeout(this.timeoutMs) });
 
         if (response.status === 404) {
             return null;

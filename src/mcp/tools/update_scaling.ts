@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { IDEMPOTENT_WRITE } from './annotations';
 
 export function registerUpdateScalingOptions(server: McpServer, client: AutoscalerApiClient): void {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -9,16 +10,24 @@ export function registerUpdateScalingOptions(server: McpServer, client: Autoscal
         'update_scaling_options',
         'Update scaling thresholds and quantities for an instance group without changing other group settings.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the instance group'),
-            scaleUpQuantity: z.number().optional().describe('Instances to add when scaling up'),
-            scaleDownQuantity: z.number().optional().describe('Instances to remove when scaling down'),
+            scaleUpQuantity: z.number().int().min(0).optional().describe('Instances to add when scaling up'),
+            scaleDownQuantity: z.number().int().min(0).optional().describe('Instances to remove when scaling down'),
             scaleUpThreshold: z.number().optional().describe('Stress threshold to trigger scale up'),
             scaleDownThreshold: z.number().optional().describe('Stress threshold to trigger scale down'),
-            scalePeriod: z.number().optional().describe('Measurement period in seconds'),
-            scaleUpPeriodsCount: z.number().optional().describe('Consecutive periods above threshold to scale up'),
-            scaleDownPeriodsCount: z.number().optional().describe('Consecutive periods below threshold to scale down'),
+            scalePeriod: z.number().int().min(1).optional().describe('Measurement period in seconds'),
+            scaleUpPeriodsCount: z
+                .number()
+                .int()
+                .min(1)
+                .optional()
+                .describe('Consecutive periods above threshold to scale up'),
+            scaleDownPeriodsCount: z
+                .number()
+                .int()
+                .min(1)
+                .optional()
+                .describe('Consecutive periods below threshold to scale down'),
             reservationScaleUpThreshold: z
                 .number()
                 .int()
@@ -28,9 +37,10 @@ export function registerUpdateScalingOptions(server: McpServer, client: Autoscal
                     'selenium-grid only: minimum number of waiting reserved nodes before reservations raise the desired count',
                 ),
         },
-        async ({ base_url, auth_token, name, ...options }) => {
+        IDEMPOTENT_WRITE,
+        async ({ name, ...options }) => {
             try {
-                await client.withOverrides(base_url, auth_token).updateScalingOptions(name, options);
+                await client.updateScalingOptions(name, options);
                 const changed = Object.entries(options)
                     .filter(([, v]) => v !== undefined)
                     .map(([k, v]) => `${k}=${v}`)
@@ -60,16 +70,15 @@ export function registerUpdateDesiredCount(server: McpServer, client: Autoscaler
         'update_desired_count',
         'Update the min, max, and/or desired instance count for a group.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the instance group'),
-            minDesired: z.number().optional().describe('Minimum desired instance count'),
-            maxDesired: z.number().optional().describe('Maximum desired instance count'),
-            desiredCount: z.number().optional().describe('Current desired instance count'),
+            minDesired: z.number().int().min(0).optional().describe('Minimum desired instance count'),
+            maxDesired: z.number().int().min(0).optional().describe('Maximum desired instance count'),
+            desiredCount: z.number().int().min(0).optional().describe('Current desired instance count'),
         },
-        async ({ base_url, auth_token, name, ...values }) => {
+        IDEMPOTENT_WRITE,
+        async ({ name, ...values }) => {
             try {
-                await client.withOverrides(base_url, auth_token).updateDesiredCount(name, values);
+                await client.updateDesiredCount(name, values);
                 const changed = Object.entries(values)
                     .filter(([, v]) => v !== undefined)
                     .map(([k, v]) => `${k}=${v}`)
@@ -99,8 +108,6 @@ export function registerUpdateScalingActivities(server: McpServer, client: Autos
         'update_scaling_activities',
         'Toggle scaling features (autoscale, launch, scheduler, etc.) for an instance group.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the instance group'),
             enableAutoScale: z.boolean().optional().describe('Enable or disable autoscaling'),
             enableLaunch: z.boolean().optional().describe('Enable or disable instance launching'),
@@ -108,9 +115,10 @@ export function registerUpdateScalingActivities(server: McpServer, client: Autos
             enableUntrackedThrottle: z.boolean().optional().describe('Enable or disable untracked instance throttle'),
             enableReconfiguration: z.boolean().optional().describe('Enable or disable instance reconfiguration'),
         },
-        async ({ base_url, auth_token, name, ...activities }) => {
+        IDEMPOTENT_WRITE,
+        async ({ name, ...activities }) => {
             try {
-                await client.withOverrides(base_url, auth_token).updateScalingActivities(name, activities);
+                await client.updateScalingActivities(name, activities);
                 const changed = Object.entries(activities)
                     .filter(([, v]) => v !== undefined)
                     .map(([k, v]) => `${k}=${v}`)

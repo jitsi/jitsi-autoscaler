@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { READ_ONLY } from './annotations';
 
 export function registerGetGroupReport(server: McpServer, client: AutoscalerApiClient): void {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -9,13 +10,12 @@ export function registerGetGroupReport(server: McpServer, client: AutoscalerApiC
         'get_group_report',
         'Get a live status report for an instance group, including instance counts by status and per-instance details.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('The name of the instance group'),
         },
-        async ({ base_url, auth_token, name }) => {
+        READ_ONLY,
+        async ({ name }) => {
             try {
-                const report = await client.withOverrides(base_url, auth_token).getGroupReport(name);
+                const report = await client.getGroupReport(name);
                 if (!report) {
                     return {
                         content: [{ type: 'text', text: `Group '${name}' not found.` }],

@@ -82,6 +82,32 @@ describe('PrometheusClient', () => {
         });
     });
 
+    describe('testFetchMetricUnTrackedCount', () => {
+        test('reads the latest untracked count from an instant query', async () => {
+            driver.instantQuery = mock.fn(async () => ({
+                result: [{ metric: { labels: { group: 'test' } }, value: { time: new Date(), value: 3 } }],
+            }));
+            const res = await client.fetchMetricUnTrackedCount(ctx, 'test');
+            assert.strictEqual(res, 3);
+            assert.match(
+                driver.instantQuery.mock.calls[0].arguments[0],
+                /autoscaler_untracked_instance_count\{group="test"\}/,
+            );
+        });
+
+        test('returns 0 when no series exists', async () => {
+            driver.instantQuery = mock.fn(async () => ({ result: [] }));
+            assert.strictEqual(await client.fetchMetricUnTrackedCount(ctx, 'test'), 0);
+        });
+
+        test('propagates query errors instead of reading as 0', async () => {
+            driver.instantQuery = mock.fn(async () => {
+                throw new Error('EXPECTED ERROR: DISREGARD');
+            });
+            await assert.rejects(() => client.fetchMetricUnTrackedCount(ctx, 'test'));
+        });
+    });
+
     describe('testFetchInstanceMetrics', () => {
         const group = 'test';
 

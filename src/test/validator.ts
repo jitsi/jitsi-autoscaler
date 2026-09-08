@@ -107,6 +107,34 @@ describe('Validator', () => {
             assert.strictEqual(result, true);
         });
 
+        test('supportedInstanceType accepts the exact supported type strings', async () => {
+            assert.strictEqual(await validator.supportedInstanceType('availability'), true);
+            assert.strictEqual(await validator.supportedInstanceType('stress'), true);
+            assert.strictEqual(await validator.supportedInstanceType('JVB'), true);
+            assert.strictEqual(await validator.supportedInstanceType('selenium-grid'), true);
+        });
+
+        test('supportedInstanceType is case-sensitive and rejects unknown types', async () => {
+            assert.strictEqual(await validator.supportedInstanceType('jvb'), false);
+            assert.strictEqual(await validator.supportedInstanceType('foo'), false);
+            assert.strictEqual(await validator.supportedInstanceType(''), false);
+            assert.strictEqual(await validator.supportedInstanceType(null), false);
+            assert.strictEqual(await validator.supportedInstanceType(undefined), false);
+        });
+
+        test('groupHasValidDesiredInput returns false for a nonexistent group', async () => {
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => null);
+            const result = await validator.groupHasValidDesiredInput(context, 'missing', { desiredCount: 1 });
+            assert.strictEqual(result, false);
+        });
+
+        test('canLaunchInstances returns false for a nonexistent group', async () => {
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => null);
+            const req = { context, params: { name: 'missing' }, body: {} };
+            const result = await validator.canLaunchInstances(req, 1);
+            assert.strictEqual(result, false);
+        });
+
         test('should return false for a group with cloud status shutdown', async () => {
             instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{ instanceId: '1' }]);
             metricsLoop.getCloudInstances.mock.mockImplementationOnce(() => [

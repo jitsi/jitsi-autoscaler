@@ -208,7 +208,11 @@ export default class AutoscaleProcessor {
             metricInventoryPerPeriod,
             Math.max(group.scalingOptions.scaleUpPeriodsCount, group.scalingOptions.scaleDownPeriodsCount),
         );
-        if (scaleMetrics && scaleMetrics.length > 0) {
+        // A NaN period means no metrics were recorded for that period (see InstanceTracker.computeSummaryMetric).
+        // Treat that as "no metrics available" and skip the cycle rather than acting on an implicit 0,
+        // which would otherwise drain stress groups to minDesired or push availability groups to maxDesired.
+        const hasMissingPeriods = scaleMetrics?.some((value) => !Number.isFinite(value)) ?? false;
+        if (scaleMetrics && scaleMetrics.length > 0 && !hasMissingPeriods) {
             // check if we should scale up the group
             if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'up')) {
                 desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
@@ -267,6 +271,7 @@ export default class AutoscaleProcessor {
         } else {
             ctx.logger.warn(
                 `[AutoScaler] No metrics available, no desired count adjustments possible for group ${group.name} with ${count} instances`,
+                { scaleMetrics },
             );
         }
 
@@ -376,12 +381,20 @@ export default class AutoscaleProcessor {
             reservationFloor = Math.max(baseFloor, Math.min(reservedNodeCount, group.scalingOptions.desiredCount));
         }
 
-        // Step 4: Fetch grid queue size for organic scaling signal
-        let queueSize = 0;
+        // Step 4: Fetch grid queue size for organic scaling signal.
+        // queueSize stays undefined when the grid is unreachable or does not report a queue size,
+        // in which case organic scaling is skipped entirely (hold current desired) rather than
+        // treating the unknown as "no load" and scaling down.
+        let queueSize: number | undefined = undefined;
         if (group.seleniumGridUrl) {
             try {
                 const gridStatus = await this.seleniumGridClient.getGridStatus(ctx, group.seleniumGridUrl);
                 queueSize = gridStatus.sessionQueueSize;
+                if (queueSize === undefined) {
+                    ctx.logger.warn(
+                        `[AutoScaler] Selenium Grid status for ${group.name} has no session queue size, using reservation floor only`,
+                    );
+                }
                 ctx.logger.info(`[AutoScaler] Selenium Grid status for ${group.name}`, {
                     queueSize: gridStatus.sessionQueueSize,
                     activeSessions: gridStatus.activeSessions,
@@ -398,8 +411,8 @@ export default class AutoscaleProcessor {
 
         // Step 5: Compute organic desired (queue-based, secondary to reservations)
         let organicDesired = group.scalingOptions.desiredCount;
-        if (group.scalingOptions.desiredCount === count) {
-            // Only adjust if launcher has caught up
+        if (queueSize !== undefined && group.scalingOptions.desiredCount === count) {
+            // Only adjust if launcher has caught up and the queue size is actually known
             if (queueSize > group.scalingOptions.scaleUpThreshold && count < group.scalingOptions.maxDesired) {
                 organicDesired = Math.min(
                     count + group.scalingOptions.scaleUpQuantity,
@@ -481,16 +494,35 @@ export default class AutoscaleProcessor {
             { scaleMetrics, sliceSize },
         );
 
+        // A zero/invalid periods count can never satisfy "all periods meet the criteria"
+        if (!sliceSize || sliceSize < 1) {
+            ctx.logger.warn(`[AutoScaler] Invalid ${direction} periods count for group ${group.name}, not scaling`, {
+                sliceSize,
+            });
+            return false;
+        }
+
+        const periodMetrics = scaleMetrics.slice(0, sliceSize);
+        if (periodMetrics.length < sliceSize) {
+            ctx.logger.warn(
+                `[AutoScaler] Not enough metric periods to evaluate scale ${direction} for group ${group.name}`,
+                {
+                    available: periodMetrics.length,
+                    required: sliceSize,
+                },
+            );
+            return false;
+        }
+
         // slice metrics by size, evaluate each period
         // reduce boolean results with && to ensure all periods fulfills autoscaling criteria
-        return scaleMetrics
-            .slice(0, sliceSize)
+        return periodMetrics
             .map((value) => {
                 // boolean indicating whether individual metric fulfills autoscaling criteria
                 return scaleChoiceFunction(group, count, value);
             })
             .reduce((previousValue, currentValue) => {
                 return previousValue && currentValue;
-            });
+            }, true);
     }
 }

@@ -36,7 +36,7 @@ Every finding below was re-verified against the current code before being acted 
 | Medium: Consul locks renew forever | Valid | Fixed: overheld locks are released after `groupLockTTLMs` |
 | Medium: OCI query escaping, FD retry modulo, custom provider gaps, scaleDown naming, bulk full-scaling | Valid | Fixed (names validated and escaped; retries cycle fault domains; optional list script; log text; per-group failure accounting) |
 | MCP medium items | Valid | Fixed: existence check on create, field-wise updates, timeouts, annotations, int schemas, audit 404, side-effect docs, 18 tools documented |
-| Build/deploy | Valid | Fixed: polyfill compiled into dist, CI matrix 22/24, `.nvmrc`, non-root Dockerfile, `--omit=dev` |
+| Build/deploy | Valid | Fixed: polyfill compiled into dist, CI matrix 22/24/26, Node 26 image and `.nvmrc`, non-root Dockerfile, `--omit=dev` |
 | Dependencies (redlock beta, dual redis, got 11) | Valid, not changed | No safe drop-in upgrade; left as is |
 
 ---

@@ -7,6 +7,40 @@
 
 ---
 
+## Status (2026-09-08)
+
+Every finding below was re-verified against the current code before being acted on. Outcome per item:
+
+| Finding | Verdict | Outcome |
+|---|---|---|
+| 1 `availability` metric case | Valid | Fixed: `availability` tracked like jibri, unknown types no longer write a metric |
+| 2 MCP `base_url`/`auth_token` overrides | Valid | Fixed: overrides removed from all 18 tools; env-only configuration |
+| 3 Launcher has no group lock / no provider timeouts | Valid | Fixed: launcher holds the group lock; OCI, Nomad and DigitalOcean calls have `CLOUD_PROVIDER_REQUEST_TIMEOUT_MS`; jobs are de-duplicated by id |
+| 4 "No metrics" read as 0 | Valid | Fixed: empty periods summarise to NaN and the autoscale cycle is skipped |
+| 5 Scheduled scaling edit strands baseline | Valid | Fixed: shared `restoreBaseline` used by handler and processor; processor self-heals disabled/missing-baseline states |
+| 6 OCI shared client region mutation | Already fixed | Landed in #190 |
+| 7 Partial launch failure loses IDs | Valid | Fixed: per-instance launches never reject; `scaleUp` records every success |
+| 8 Unpaginated instance listing | Valid | Fixed: OCI and DigitalOcean paginate; `off`/unknown droplet states no longer read as terminated |
+| 9 Consul write path fail-open | Valid | Fixed: Consul writes rethrow; Redis write pipelines fail closed; contract tests cover both |
+| 10 Error handler registered before routes | Valid | Fixed: moved after routes; body-parse errors map to 400 |
+| 11 Health checks lie during outages | Valid | Fixed: Consul ping returns false, deep check has a timeout, shallow check reflects Redis state |
+| 12 Reservation TTL evicts held reservations | Valid | Fixed: TTL only applied once a reservation is terminal |
+| 13 Fulfilled before capacity exists | Valid | Fixed: fulfilled reservations count toward cumulative demand |
+| Medium: API validation gaps | Valid | Fixed: scaling-activities/options/launch-protected/type/name validation, 404 for unknown groups, sidecar group checks |
+| Medium: auth robustness | Valid | Fixed: ASAP fetch timeout, negative cache, in-flight coalescing, issuer trim; optional `ASAP_JWT_SIDECAR_ISS` route scoping |
+| Medium: metrics loop provider split-brain | Valid | Fixed: reads go through `InstanceStore.fetchCloudInstances` / `MetricsStore.fetchMetricUnTrackedCount` |
+| Medium: grid status failure scales down | Valid | Fixed: unknown queue size holds current desired |
+| Medium: `reservationScaleUpThreshold > 1` starvation | Invalid | Intentional and covered by tests |
+| Medium: lazy expiry skips grace, lockless extend, Consul prefix leak, Redis listReservations | Valid | Fixed |
+| Medium: fire-and-forget status save, NaN stress, Nomad empty gauges | Valid | Fixed |
+| Medium: Consul locks renew forever | Valid | Fixed: overheld locks are released after `groupLockTTLMs` |
+| Medium: OCI query escaping, FD retry modulo, custom provider gaps, scaleDown naming, bulk full-scaling | Valid | Fixed (names validated and escaped; retries cycle fault domains; optional list script; log text; per-group failure accounting) |
+| MCP medium items | Valid | Fixed: existence check on create, field-wise updates, timeouts, annotations, int schemas, audit 404, side-effect docs, 18 tools documented |
+| Build/deploy | Valid | Fixed: polyfill compiled into dist, CI matrix 22/24, `.nvmrc`, non-root Dockerfile, `--omit=dev` |
+| Dependencies (redlock beta, dual redis, got 11) | Valid, not changed | No safe drop-in upgrade; left as is |
+
+---
+
 ## Critical
 
 ### 1. `availability` groups autoscale on a permanently-zero metric — runaway scale-up to maxDesired

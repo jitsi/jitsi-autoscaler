@@ -386,7 +386,14 @@ export default class JobManager {
                 const newJob = jobQueue.createJob(jobData).setId(`${jobType}:${instanceGroupName}`);
                 try {
                     const job = await newJob.timeout(processingTimeoutMillis).retries(0).save();
-                    ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
+                    if (job.id) {
+                        ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
+                    } else {
+                        // bee-queue resolves with a null id when a job with this id is still queued/running
+                        ctx.logger.info(
+                            `[JobManager] ${jobType} job for group ${jobData.groupName} is still pending from a previous cycle, not enqueuing a duplicate`,
+                        );
+                    }
                 } catch (error) {
                     ctx.logger.info(
                         `[JobManager] Error while creating ${jobType} job for group ${instanceGroupName}: ${error}`,

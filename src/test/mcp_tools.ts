@@ -2,7 +2,7 @@
 // @ts-nocheck
 
 import assert from 'node:assert';
-import test, { describe, mock, beforeEach } from 'node:test';
+import test, { afterEach, describe, mock, beforeEach } from 'node:test';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AutoscalerApiClient } from '../mcp/api_client';
 import { registerAllTools } from '../mcp/tools';
@@ -579,6 +579,495 @@ describe('MCP Tools', () => {
             assert.ok(result.isError);
             assert.ok(result.content[0].text.includes('already exists'));
             assert.strictEqual(clientMock.updateScheduledScaling.mock.calls.length, 0);
+        });
+    });
+
+    describe('remove_scheduled_scaling_period', () => {
+        const period = (name) => ({
+            name,
+            dayOfWeek: [1],
+            startHour: 0,
+            endHour: 1,
+            priority: 1,
+            scalingOptions: { desiredCount: 2 },
+        });
+        const config = () => ({ enabled: true, timezone: 'UTC', periods: [period('night'), period('weekend')] });
+
+        beforeEach(() => {
+            clientMock.updateScheduledScaling.mock.mockImplementation(() => Promise.resolve());
+        });
+
+        test('removes the named period and PUTs the remaining config', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(config()));
+
+            const tool = getTool(server, 'remove_scheduled_scaling_period');
+            const result = await tool.handler({ name: 'g1', period_name: 'night' }, {});
+
+            assert.ok(!result.isError);
+            assert.strictEqual(clientMock.updateScheduledScaling.mock.calls.length, 1);
+            const [name, updated] = clientMock.updateScheduledScaling.mock.calls[0].arguments;
+            assert.strictEqual(name, 'g1');
+            assert.deepStrictEqual(updated.periods, [period('weekend')]);
+            assert.strictEqual(updated.enabled, true);
+            assert.strictEqual(updated.timezone, 'UTC');
+            assert.ok(result.content[0].text.includes("Removed period 'night' from 'g1'. Remaining periods: weekend"));
+        });
+
+        test('removing the last period keeps the config with no periods', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() =>
+                Promise.resolve({ enabled: true, timezone: 'UTC', periods: [period('night')] }),
+            );
+
+            const tool = getTool(server, 'remove_scheduled_scaling_period');
+            const result = await tool.handler({ name: 'g1', period_name: 'night' }, {});
+
+            assert.ok(!result.isError);
+            const [, updated] = clientMock.updateScheduledScaling.mock.calls[0].arguments;
+            assert.deepStrictEqual(updated.periods, []);
+            assert.strictEqual(updated.enabled, true);
+            assert.ok(result.content[0].text.includes('Remaining periods: none'));
+        });
+
+        test('unknown period name returns a clear error and does not PUT', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(config()));
+
+            const tool = getTool(server, 'remove_scheduled_scaling_period');
+            const result = await tool.handler({ name: 'g1', period_name: 'day' }, {});
+
+            assert.ok(result.isError);
+            assert.ok(result.content[0].text.includes("Period 'day' not found. Available periods: night, weekend"));
+            assert.strictEqual(clientMock.updateScheduledScaling.mock.calls.length, 0);
+        });
+
+        test('group without scheduled scaling returns a clear error and does not PUT', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(null));
+
+            const tool = getTool(server, 'remove_scheduled_scaling_period');
+            const result = await tool.handler({ name: 'g1', period_name: 'night' }, {});
+
+            assert.ok(result.isError);
+            assert.ok(result.content[0].text.includes("Group 'g1' has no scheduled scaling configuration."));
+            assert.strictEqual(clientMock.updateScheduledScaling.mock.calls.length, 0);
+        });
+
+        test('surfaces an API failure of the PUT as a tool error', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(config()));
+            clientMock.updateScheduledScaling.mock.mockImplementation(() =>
+                Promise.reject(new Error('PUT /groups/g1/scheduled-scaling failed (500): boom')),
+            );
+
+            const tool = getTool(server, 'remove_scheduled_scaling_period');
+            const result = await tool.handler({ name: 'g1', period_name: 'night' }, {});
+
+            assert.ok(result.isError);
+            assert.ok(result.content[0].text.includes('Error removing scheduled scaling period:'));
+            assert.ok(result.content[0].text.includes('failed (500): boom'));
+        });
+    });
+
+    describe('update_scheduled_scaling', () => {
+        const config = () => ({
+            enabled: true,
+            timezone: 'UTC',
+            periods: [
+                {
+                    name: 'night',
+                    dayOfWeek: [1, 2],
+                    startHour: 22,
+                    endHour: 6,
+                    priority: 1,
+                    scalingOptions: { minDesired: 1, maxDesired: 4, desiredCount: 2 },
+                },
+                {
+                    name: 'weekend',
+                    dayOfWeek: [6, 0],
+                    startHour: 0,
+                    endHour: 23,
+                    priority: 2,
+                    scalingOptions: { desiredCount: 1 },
+                },
+            ],
+        });
+
+        beforeEach(() => {
+            clientMock.updateScheduledScaling.mock.mockImplementation(() => Promise.resolve());
+        });
+
+        test('merges overrides into the named period only and preserves the others', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(config()));
+
+            const tool = getTool(server, 'update_scheduled_scaling');
+            const result = await tool.handler(
+                { name: 'g1', period_name: 'night', desiredCount: 3, scaleUpThreshold: 0.9 },
+                {},
+            );
+
+            assert.ok(!result.isError);
+            assert.strictEqual(clientMock.updateScheduledScaling.mock.calls.length, 1);
+            const [name, updated] = clientMock.updateScheduledScaling.mock.calls[0].arguments;
+            assert.strictEqual(name, 'g1');
+            assert.deepStrictEqual(updated.periods[0].scalingOptions, {
+                minDesired: 1,
+                maxDesired: 4,
+                desiredCount: 3,
+                scaleUpThreshold: 0.9,
+            });
+            // schedule fields of the period and the other period are untouched
+            assert.deepStrictEqual(updated.periods[0].dayOfWeek, [1, 2]);
+            assert.deepStrictEqual(updated.periods[1], config().periods[1]);
+            assert.strictEqual(updated.enabled, true);
+            assert.strictEqual(updated.timezone, 'UTC');
+            assert.ok(result.content[0].text.includes("Period 'night': min=1, max=4, desired=3, upThreshold=0.9"));
+        });
+
+        test('enabled:false disables the schedule without touching the periods', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(config()));
+
+            const tool = getTool(server, 'update_scheduled_scaling');
+            const result = await tool.handler({ name: 'g1', enabled: false }, {});
+
+            assert.ok(!result.isError);
+            const [, updated] = clientMock.updateScheduledScaling.mock.calls[0].arguments;
+            assert.strictEqual(updated.enabled, false);
+            assert.deepStrictEqual(updated.periods, config().periods);
+            assert.ok(result.content[0].text.includes('enabled=false, timezone=UTC'));
+            assert.ok(!result.content[0].text.includes('Period'));
+        });
+
+        test('changes the timezone and a period in one call', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(config()));
+
+            const tool = getTool(server, 'update_scheduled_scaling');
+            const result = await tool.handler(
+                { name: 'g1', period_name: 'weekend', timezone: 'Europe/Berlin', maxDesired: 6 },
+                {},
+            );
+
+            assert.ok(!result.isError);
+            const [, updated] = clientMock.updateScheduledScaling.mock.calls[0].arguments;
+            assert.strictEqual(updated.timezone, 'Europe/Berlin');
+            assert.deepStrictEqual(updated.periods[1].scalingOptions, { desiredCount: 1, maxDesired: 6 });
+            assert.deepStrictEqual(updated.periods[0], config().periods[0]);
+        });
+
+        test('unknown period name returns a clear error and does not PUT, even with top-level changes', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(config()));
+
+            const tool = getTool(server, 'update_scheduled_scaling');
+            const result = await tool.handler({ name: 'g1', period_name: 'day', enabled: false, desiredCount: 9 }, {});
+
+            assert.ok(result.isError);
+            assert.ok(result.content[0].text.includes("Period 'day' not found. Available periods: night, weekend"));
+            assert.strictEqual(clientMock.updateScheduledScaling.mock.calls.length, 0);
+        });
+
+        test('group without scheduled scaling returns a clear error and does not PUT', async () => {
+            clientMock.getScheduledScaling.mock.mockImplementation(() => Promise.resolve(null));
+
+            const tool = getTool(server, 'update_scheduled_scaling');
+            const result = await tool.handler({ name: 'g1', enabled: false }, {});
+
+            assert.ok(result.isError);
+            assert.ok(result.content[0].text.includes("Group 'g1' has no scheduled scaling configuration."));
+            assert.strictEqual(clientMock.updateScheduledScaling.mock.calls.length, 0);
+        });
+    });
+
+    describe('reservation tools', () => {
+        const reservation = (overrides = {}) => ({
+            id: 'res-1',
+            groupName: 'grid',
+            nodeCount: 4,
+            status: 'active',
+            createdAt: 1704067200000,
+            expiresAt: 1704070800000,
+            ...overrides,
+        });
+
+        describe('through the api client stub', () => {
+            test('create_reservation passes name, nodeCount and ttlSeconds and formats the result', async () => {
+                clientMock.createReservation.mock.mockImplementation(() => Promise.resolve(reservation()));
+
+                const tool = getTool(server, 'create_reservation');
+                const result = await tool.handler({ name: 'grid', nodeCount: 4, ttlSeconds: 600 }, {});
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(clientMock.createReservation.mock.calls[0].arguments, ['grid', 4, 600]);
+                const text = result.content[0].text;
+                assert.ok(text.includes("Reservation created on 'grid'"));
+                assert.ok(text.includes('**ID:** res-1'));
+                assert.ok(text.includes('**Node Count:** 4'));
+                assert.ok(text.includes('**Status:** active'));
+                assert.ok(text.includes('**Created:** 2024-01-01T00:00:00.000Z'));
+                assert.ok(text.includes('**Expires:** 2024-01-01T01:00:00.000Z'));
+                assert.ok(!text.includes('Fulfilled'));
+                assert.ok(!text.includes('Place in line'));
+            });
+
+            test('create_reservation leaves ttlSeconds undefined when not given', async () => {
+                clientMock.createReservation.mock.mockImplementation(() => Promise.resolve(reservation()));
+
+                const tool = getTool(server, 'create_reservation');
+                await tool.handler({ name: 'grid', nodeCount: 2 }, {});
+
+                assert.deepStrictEqual(clientMock.createReservation.mock.calls[0].arguments, ['grid', 2, undefined]);
+            });
+
+            test('list_reservations forwards the status filter and shows the place in line', async () => {
+                clientMock.listReservations.mock.mockImplementation(() =>
+                    Promise.resolve([
+                        reservation({ id: 'res-2', status: 'pending', queuePosition: 2, aheadNodeCount: 6 }),
+                        reservation({ id: 'res-3', status: 'fulfilled', fulfilledAt: 1704067260000 }),
+                    ]),
+                );
+
+                const tool = getTool(server, 'list_reservations');
+                const result = await tool.handler({ name: 'grid', status: ['pending', 'fulfilled'] }, {});
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(clientMock.listReservations.mock.calls[0].arguments, [
+                    'grid',
+                    ['pending', 'fulfilled'],
+                ]);
+                const text = result.content[0].text;
+                assert.ok(text.includes("2 reservation(s) for 'grid'"));
+                assert.ok(text.includes('**ID:** res-2'));
+                assert.ok(text.includes('**Place in line:** 2 (6 nodes ahead)'));
+                assert.ok(text.includes('**ID:** res-3'));
+                assert.ok(text.includes('**Fulfilled:** 2024-01-01T00:01:00.000Z'));
+            });
+
+            test('list_reservations reports no matches including the filter', async () => {
+                clientMock.listReservations.mock.mockImplementation(() => Promise.resolve([]));
+
+                const tool = getTool(server, 'list_reservations');
+                const result = await tool.handler({ name: 'grid', status: ['pending', 'active'] }, {});
+
+                assert.ok(!result.isError);
+                assert.ok(
+                    result.content[0].text.includes("No reservations found for 'grid' with status pending, active."),
+                );
+            });
+
+            test('get_reservation formats a found reservation', async () => {
+                clientMock.getReservation.mock.mockImplementation(() =>
+                    Promise.resolve(reservation({ status: 'pending', queuePosition: 1, aheadNodeCount: 0 })),
+                );
+
+                const tool = getTool(server, 'get_reservation');
+                const result = await tool.handler({ name: 'grid', id: 'res-1' }, {});
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(clientMock.getReservation.mock.calls[0].arguments, ['grid', 'res-1']);
+                assert.ok(result.content[0].text.includes('**Place in line:** 1 (0 nodes ahead)'));
+            });
+
+            test('get_reservation returns a clear error when the reservation is missing', async () => {
+                clientMock.getReservation.mock.mockImplementation(() => Promise.resolve(null));
+
+                const tool = getTool(server, 'get_reservation');
+                const result = await tool.handler({ name: 'grid', id: 'res-9' }, {});
+
+                assert.ok(result.isError);
+                assert.strictEqual(result.content[0].text, "Reservation 'res-9' not found on 'grid'.");
+            });
+
+            test('extend_reservation passes the new ttl', async () => {
+                clientMock.extendReservation.mock.mockImplementation(() =>
+                    Promise.resolve(reservation({ expiresAt: 1704074400000 })),
+                );
+
+                const tool = getTool(server, 'extend_reservation');
+                const result = await tool.handler({ name: 'grid', id: 'res-1', ttlSeconds: 1200 }, {});
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(clientMock.extendReservation.mock.calls[0].arguments, ['grid', 'res-1', 1200]);
+                assert.ok(result.content[0].text.includes("Reservation 'res-1' extended:"));
+                assert.ok(result.content[0].text.includes('**Expires:** 2024-01-01T02:00:00.000Z'));
+            });
+
+            test('cancel_reservation passes the id', async () => {
+                clientMock.cancelReservation.mock.mockImplementation(() =>
+                    Promise.resolve(reservation({ status: 'cancelled' })),
+                );
+
+                const tool = getTool(server, 'cancel_reservation');
+                const result = await tool.handler({ name: 'grid', id: 'res-1' }, {});
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(clientMock.cancelReservation.mock.calls[0].arguments, ['grid', 'res-1']);
+                assert.ok(result.content[0].text.includes("Reservation 'res-1' cancelled:"));
+                assert.ok(result.content[0].text.includes('**Status:** cancelled'));
+            });
+
+            test('client errors surface as tool errors with the API message', async () => {
+                clientMock.createReservation.mock.mockImplementation(() =>
+                    Promise.reject(new Error('POST /groups/grid/reservations failed (400): nodeCount must be >= 1')),
+                );
+
+                const tool = getTool(server, 'create_reservation');
+                const result = await tool.handler({ name: 'grid', nodeCount: 0 }, {});
+
+                assert.ok(result.isError);
+                assert.ok(result.content[0].text.includes('Error creating reservation:'));
+                assert.ok(result.content[0].text.includes('nodeCount must be >= 1'));
+            });
+        });
+
+        describe('through the real api client', () => {
+            // exercises REST path, method, body and id encoding end to end against a stubbed fetch
+            const originalFetch = global.fetch;
+            let realServer;
+            let fetchMock;
+
+            function stubFetch(status, body) {
+                fetchMock = mock.fn(() =>
+                    Promise.resolve({
+                        ok: status >= 200 && status < 300,
+                        status,
+                        headers: { get: (name) => (name === 'content-type' ? 'application/json' : null) },
+                        json: () => Promise.resolve(body),
+                        text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
+                    }),
+                );
+                global.fetch = fetchMock;
+            }
+
+            function request() {
+                assert.strictEqual(fetchMock.mock.calls.length, 1);
+                const [url, init] = fetchMock.mock.calls[0].arguments;
+                return { url, method: init.method, body: init.body ? JSON.parse(init.body) : undefined };
+            }
+
+            beforeEach(() => {
+                realServer = new McpServer({ name: 'test-real', version: '1.0.0' });
+                registerAllTools(realServer, new AutoscalerApiClient('http://localhost:3000', 'tok'));
+            });
+
+            afterEach(() => {
+                global.fetch = originalFetch;
+            });
+
+            test('create_reservation POSTs to /groups/:name/reservations with the group name encoded', async () => {
+                stubFetch(201, { reservation: reservation({ groupName: 'grid a' }) });
+
+                const result = await getTool(realServer, 'create_reservation').handler(
+                    { name: 'grid a', nodeCount: 4, ttlSeconds: 600 },
+                    {},
+                );
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(request(), {
+                    url: 'http://localhost:3000/groups/grid%20a/reservations',
+                    method: 'POST',
+                    body: { nodeCount: 4, ttlSeconds: 600 },
+                });
+            });
+
+            test('list_reservations GETs with a comma separated status query', async () => {
+                stubFetch(200, { reservations: [] });
+
+                const result = await getTool(realServer, 'list_reservations').handler(
+                    { name: 'grid', status: ['pending', 'active'] },
+                    {},
+                );
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(request(), {
+                    url: 'http://localhost:3000/groups/grid/reservations?status=pending%2Cactive',
+                    method: 'GET',
+                    body: undefined,
+                });
+            });
+
+            test('get_reservation GETs /reservations/:id with the id encoded', async () => {
+                stubFetch(200, { reservation: reservation({ id: 'res/1 x' }) });
+
+                const result = await getTool(realServer, 'get_reservation').handler(
+                    { name: 'grid', id: 'res/1 x' },
+                    {},
+                );
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(request(), {
+                    url: 'http://localhost:3000/groups/grid/reservations/res%2F1%20x',
+                    method: 'GET',
+                    body: undefined,
+                });
+            });
+
+            test('extend_reservation PUTs the new ttl to /reservations/:id', async () => {
+                stubFetch(200, { reservation: reservation() });
+
+                const result = await getTool(realServer, 'extend_reservation').handler(
+                    { name: 'grid', id: 'res-1', ttlSeconds: 900 },
+                    {},
+                );
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(request(), {
+                    url: 'http://localhost:3000/groups/grid/reservations/res-1',
+                    method: 'PUT',
+                    body: { ttlSeconds: 900 },
+                });
+            });
+
+            test('cancel_reservation DELETEs /reservations/:id', async () => {
+                stubFetch(200, { reservation: reservation({ status: 'cancelled' }) });
+
+                const result = await getTool(realServer, 'cancel_reservation').handler(
+                    { name: 'grid', id: 'res-1' },
+                    {},
+                );
+
+                assert.ok(!result.isError);
+                assert.deepStrictEqual(request(), {
+                    url: 'http://localhost:3000/groups/grid/reservations/res-1',
+                    method: 'DELETE',
+                    body: undefined,
+                });
+            });
+
+            test('a 404 on get_reservation becomes a not-found message', async () => {
+                stubFetch(404, 'reservation not found');
+
+                const result = await getTool(realServer, 'get_reservation').handler({ name: 'grid', id: 'res-9' }, {});
+
+                assert.ok(result.isError);
+                assert.strictEqual(result.content[0].text, "Reservation 'res-9' not found on 'grid'.");
+            });
+
+            test('a 404 on extend_reservation names the failing request', async () => {
+                stubFetch(404, 'reservation not found');
+
+                const result = await getTool(realServer, 'extend_reservation').handler(
+                    { name: 'grid', id: 'res-9', ttlSeconds: 60 },
+                    {},
+                );
+
+                assert.ok(result.isError);
+                assert.ok(
+                    result.content[0].text.includes(
+                        'Error extending reservation: PUT /groups/grid/reservations/res-9 failed (404): reservation not found',
+                    ),
+                );
+            });
+
+            test('a 404 on cancel_reservation names the failing request', async () => {
+                stubFetch(404, 'reservation not found');
+
+                const result = await getTool(realServer, 'cancel_reservation').handler(
+                    { name: 'grid', id: 'res-9' },
+                    {},
+                );
+
+                assert.ok(result.isError);
+                assert.ok(
+                    result.content[0].text.includes(
+                        'Error cancelling reservation: DELETE /groups/grid/reservations/res-9 failed (404): reservation not found',
+                    ),
+                );
+            });
         });
     });
 

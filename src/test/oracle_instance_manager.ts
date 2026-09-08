@@ -2,7 +2,10 @@
 // @ts-nocheck
 
 import assert from 'node:assert';
-import test, { describe, mock } from 'node:test';
+import test, { after, afterEach, before, describe, mock } from 'node:test';
+import fs from 'fs';
+import { ConfigFileAuthenticationDetailsProvider } from 'oci-common';
+import { ResourceSearchClient } from 'oci-resourcesearch';
 
 import OracleInstanceManager, {
     buildPlacementTargets,
@@ -10,6 +13,7 @@ import OracleInstanceManager, {
     selectPlacement,
     usableAvailabilityDomains,
 } from '../oracle_instance_manager';
+import { writeTempOciConfig } from './mock_oci_config';
 
 function initContext() {
     return {
@@ -251,5 +255,110 @@ describe('OracleInstanceManager.getInstances', () => {
             query,
             "query instance resources where (freeformTags.key = 'group' && freeformTags.value = 'grp\\'--')",
         );
+    });
+});
+
+describe('OracleInstanceManager.getInstances pagination', () => {
+    const group = { name: 'g', region: 'us-phoenix-1', compartmentId: 'c', instanceConfigurationId: 'ic' };
+    const retryStrategy = { maxTimeInSeconds: 1, maxDelayInSeconds: 1, retryableStatusCodes: [429] };
+    const summary = (id) => ({ identifier: id, displayName: `name-${id}`, lifecycleState: 'RUNNING' });
+    const pageTokens = (search) => search.mock.calls.map((call) => call.arguments[0].page);
+
+    let ociConfig;
+    let manager;
+
+    before(() => {
+        // getInstances builds a fresh ResourceSearchClient per call from this.provider, so the only
+        // seam is the client prototype. The SDK parses the private key when the client is built,
+        // hence a real (throwaway) key in a temp OCI config rather than a fake provider object.
+        ociConfig = writeTempOciConfig();
+        manager = Object.create(OracleInstanceManager.prototype);
+        manager.provider = new ConfigFileAuthenticationDetailsProvider(ociConfig.configPath, 'DEFAULT');
+        manager.requestTimeoutMs = 1000;
+        manager.isDryRun = false;
+    });
+
+    after(() => {
+        fs.rmSync(ociConfig.dir, { recursive: true, force: true });
+    });
+
+    afterEach(() => {
+        mock.restoreAll();
+    });
+
+    test('follows opcNextPage and returns the items of every page', async () => {
+        const pages = {
+            first: { opcNextPage: 'page-2-token', resourceSummaryCollection: { items: [summary('a'), summary('b')] } },
+            second: { resourceSummaryCollection: { items: [summary('c')] } },
+        };
+        const endpoints = [];
+        const search = mock.method(ResourceSearchClient.prototype, 'searchResources', async function (request) {
+            endpoints.push(this.endpoint);
+            return request.page ? pages.second : pages.first;
+        });
+        const ctx = initContext();
+
+        const result = await manager.getInstances(ctx, group, retryStrategy);
+
+        assert.deepStrictEqual(result, [
+            { instanceId: 'a', displayName: 'name-a', cloudStatus: 'RUNNING' },
+            { instanceId: 'b', displayName: 'name-b', cloudStatus: 'RUNNING' },
+            { instanceId: 'c', displayName: 'name-c', cloudStatus: 'RUNNING' },
+        ]);
+        assert.equal(search.mock.calls.length, 2);
+        // the first request carries no page token, the second carries the token of the first response
+        assert.deepStrictEqual(pageTokens(search), [undefined, 'page-2-token']);
+        for (const call of search.mock.calls) {
+            const request = call.arguments[0];
+            assert.equal(request.limit, 1000, 'maximum page size requested');
+            assert.equal(request.searchDetails.type, 'Structured');
+            assert.ok(request.searchDetails.query.includes("freeformTags.value = 'g'"));
+        }
+        // the client is scoped to the region of the group
+        assert.ok(
+            endpoints.every((endpoint) => endpoint.includes('us-phoenix-1')),
+            `endpoints ${endpoints}`,
+        );
+        assert.equal(ctx.logger.warn.mock.calls.length, 0);
+    });
+
+    test('stops after the page limit with a warning when the API keeps returning a next page token', async () => {
+        const search = mock.method(ResourceSearchClient.prototype, 'searchResources', async () => ({
+            opcNextPage: 'again',
+            resourceSummaryCollection: { items: [summary('x')] },
+        }));
+        const ctx = initContext();
+
+        const result = await manager.getInstances(ctx, group, retryStrategy);
+
+        // OCI_SEARCH_MAX_PAGES
+        assert.equal(search.mock.calls.length, 100);
+        assert.equal(result.length, 100, 'items of every fetched page are still returned');
+        assert.deepStrictEqual(pageTokens(search).slice(0, 2), [undefined, 'again']);
+        assert.equal(ctx.logger.warn.mock.calls.length, 1);
+        assert.match(
+            ctx.logger.warn.mock.calls[0].arguments[0],
+            /\[oracle\] Stopped paging instance search for group g after 100 pages, results may be incomplete/,
+        );
+    });
+
+    test('treats a response without a resource summary collection as an empty page', async () => {
+        const search = mock.method(ResourceSearchClient.prototype, 'searchResources', async () => ({}));
+
+        const result = await manager.getInstances(initContext(), group, retryStrategy);
+
+        assert.deepStrictEqual(result, []);
+        assert.equal(search.mock.calls.length, 1);
+    });
+
+    test('a failing search rejects instead of returning a partial list', async () => {
+        mock.method(ResourceSearchClient.prototype, 'searchResources', async (request) => {
+            if (request.page) {
+                throw new Error('429 TooManyRequests');
+            }
+            return { opcNextPage: 'next', resourceSummaryCollection: { items: [summary('a')] } };
+        });
+
+        await assert.rejects(manager.getInstances(initContext(), group, retryStrategy), /429 TooManyRequests/);
     });
 });

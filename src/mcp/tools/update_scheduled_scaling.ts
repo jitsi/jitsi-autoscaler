@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
-import { IDEMPOTENT_WRITE } from './annotations';
+import { DESTRUCTIVE } from './annotations';
 
 export function registerUpdateScheduledScaling(server: McpServer, client: AutoscalerApiClient): void {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -56,7 +56,9 @@ export function registerUpdateScheduledScaling(server: McpServer, client: Autosc
                     'selenium-grid only: override the waiting-reserved-nodes threshold for scale-up during this period',
                 ),
         },
-        IDEMPOTENT_WRITE,
+        // Idempotent, but `enabled: false` (or changing the active period's overrides) makes the
+        // REST handler restore the baseline and rewrite the group's live scaling immediately.
+        DESTRUCTIVE,
         async (params) => {
             try {
                 const config = await client.getScheduledScaling(params.name);

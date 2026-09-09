@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
-import { NON_IDEMPOTENT_WRITE } from './annotations';
+import { DESTRUCTIVE } from './annotations';
 
 export function registerRemoveScheduledScalingPeriod(server: McpServer, client: AutoscalerApiClient): void {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -13,7 +13,9 @@ export function registerRemoveScheduledScalingPeriod(server: McpServer, client: 
             name: z.string().describe('Name of the instance group'),
             period_name: z.string().describe('Name of the scheduled scaling period to remove'),
         },
-        NON_IDEMPOTENT_WRITE,
+        // Removing the currently active period makes the REST handler restore the baseline scaling
+        // options and rewrite the group's live scaling immediately, so this is destructive.
+        DESTRUCTIVE,
         async (params) => {
             try {
                 const config = await client.getScheduledScaling(params.name);

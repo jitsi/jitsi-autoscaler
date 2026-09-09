@@ -3,6 +3,7 @@ import common = require('oci-common');
 import identity = require('oci-identity');
 // declared in oci-common's waiter module but not re-exported from its index
 import { ExponentialBackoffDelayStrategyWithJitter } from 'oci-common/lib/waiter';
+import { randomUUID } from 'crypto';
 import { Context } from './context';
 import { ResourceSearchClient } from 'oci-resourcesearch';
 import * as resourceSearch from 'oci-resourcesearch';
@@ -158,9 +159,13 @@ export default class OracleInstanceManager implements CloudInstanceManager {
     }
 
     /**
-     * Client configuration shared by all OCI clients. `httpOptions` is handed verbatim to
-     * fetch (node-fetch 2 under isomorphic-fetch), which honours `timeout` in ms, so a hung
-     * OCI endpoint cannot stall a job past the configured request timeout.
+     * Client configuration shared by all OCI clients.
+     *
+     * NOTE: `httpOptions.timeout` is NOT an effective request timeout. oci-common hands
+     * `httpOptions` to the global `fetch`; isomorphic-fetch only installs node-fetch when no
+     * global fetch exists, and Node >= 18 always ships undici's fetch, which ignores a
+     * `timeout` init key. It is kept only as a hint for the (unused) node-fetch path; the
+     * real bound is enforced by `withTimeout` around every SDK call.
      */
     private clientConfiguration(retryConfiguration?: common.RetryConfiguration): common.ClientConfiguration {
         const configuration: common.ClientConfiguration = {
@@ -170,6 +175,36 @@ export default class OracleInstanceManager implements CloudInstanceManager {
             configuration.retryConfiguration = retryConfiguration;
         }
         return configuration;
+    }
+
+    /**
+     * Race an OCI SDK call against a timer so that a hung endpoint cannot stall a job (and the
+     * group lock it holds) forever. Rejects with an Error named `TimeoutError` whose message
+     * names the operation (`what` should name the operation, group and region). The timer is
+     * cleared as soon as the call settles, so a fast response leaves nothing pending.
+     */
+    private withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                const err = new Error(`${what} timed out after ${ms}ms`);
+                err.name = 'TimeoutError';
+                reject(err);
+            }, ms);
+            promise.then(
+                (value) => {
+                    clearTimeout(timer);
+                    resolve(value);
+                },
+                (err) => {
+                    clearTimeout(timer);
+                    reject(err);
+                },
+            );
+        });
+    }
+
+    private static isTimeoutError(err: unknown): boolean {
+        return err instanceof Error && err.name === 'TimeoutError';
     }
 
     private getIdentityClient(region: string): identity.IdentityClient {
@@ -216,13 +251,8 @@ export default class OracleInstanceManager implements CloudInstanceManager {
         let availabilityDomains: string[];
         let faultDomainsByAD: FaultDomainMap;
         try {
-            availabilityDomains = await this.getAvailabilityDomains(group.compartmentId, group.region);
-            faultDomainsByAD = await this.getFaultDomainsByAD(
-                ctx,
-                group.compartmentId,
-                group.region,
-                availabilityDomains,
-            );
+            availabilityDomains = await this.getAvailabilityDomains(group);
+            faultDomainsByAD = await this.getFaultDomainsByAD(ctx, group, availabilityDomains);
         } catch (err) {
             ctx.logger.error(
                 `[oracle] Failed listing availability/fault domains for group ${group.name}, no instances launched: ${err}`,
@@ -288,15 +318,12 @@ export default class OracleInstanceManager implements CloudInstanceManager {
      */
     async getFaultDomainsByAD(
         ctx: Context,
-        compartmentId: string,
-        region: string,
+        group: InstanceGroup,
         availabilityDomains: string[],
     ): Promise<FaultDomainMap> {
         const faultDomainsByAD: FaultDomainMap = {};
         const outcomes = await Promise.allSettled(
-            availabilityDomains.map((availabilityDomain) =>
-                this.getFaultDomains(compartmentId, region, availabilityDomain),
-            ),
+            availabilityDomains.map((availabilityDomain) => this.getFaultDomains(group, availabilityDomain)),
         );
         outcomes.forEach((outcome, i) => {
             const availabilityDomain = availabilityDomains[i];
@@ -389,12 +416,21 @@ export default class OracleInstanceManager implements CloudInstanceManager {
                     return true;
                 }
                 try {
-                    const launchResponse = await this.getComputeManagementClient(
-                        group.region,
-                    ).launchInstanceConfiguration({
-                        instanceConfigurationId: groupInstanceConfigurationId,
-                        instanceConfiguration: overwriteComputeInstanceDetails,
-                    });
+                    // A fresh retry token per attempt: a deliberate re-send of this exact request
+                    // (same placement, same token) is idempotent on the OCI side, while the next
+                    // placement attempt is a distinct request and must carry a distinct token.
+                    const opcRetryToken = randomUUID();
+                    const launchResponse = await this.withTimeout(
+                        this.getComputeManagementClient(group.region).launchInstanceConfiguration({
+                            instanceConfigurationId: groupInstanceConfigurationId,
+                            instanceConfiguration: overwriteComputeInstanceDetails,
+                            opcRetryToken,
+                        }),
+                        this.requestTimeoutMs,
+                        `launchInstanceConfiguration for instance number ${index + 1} in group ${groupName} in region ${
+                            group.region
+                        }`,
+                    );
                     ctx.logger.info(
                         `[oracle] Got launch response for instance number ${index + 1} in group ${groupName}`,
                         launchResponse,
@@ -402,6 +438,20 @@ export default class OracleInstanceManager implements CloudInstanceManager {
 
                     return launchResponse.instance.id;
                 } catch (err) {
+                    if (OracleInstanceManager.isTimeoutError(err)) {
+                        // The request may well have reached OCI and created the instance; we just
+                        // never received its id. Do not retry in another domain: that would create
+                        // a second instance. The instance stays untracked until its sidecar reports.
+                        ctx.logger.error(
+                            `[oracle] Launch of instance number ${
+                                index + 1
+                            } in group ${groupName} (${displayName}) timed out after ${
+                                this.requestTimeoutMs
+                            }ms; the instance may have been created and is untracked until its sidecar reports: ${err}`,
+                            { err, displayName, availabilityDomain, faultDomain },
+                        );
+                        return false;
+                    }
                     if (String(err).includes('Out of host capacity') && retries < maxRetries) {
                         ctx.logger.warn(
                             `[oracle] Out of host capacity in ${availabilityDomain}/${faultDomain} for instance number ${
@@ -429,27 +479,28 @@ export default class OracleInstanceManager implements CloudInstanceManager {
     }
 
     //TODO in the future, the list of ADs/FDs per region will be loaded once at startup time
-    private async getAvailabilityDomains(compartmentId: string, region: string): Promise<string[]> {
-        const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse =
-            await this.getIdentityClient(region).listAvailabilityDomains({
-                compartmentId: compartmentId,
-            });
+    private async getAvailabilityDomains(group: InstanceGroup): Promise<string[]> {
+        const availabilityDomainsResponse: identity.responses.ListAvailabilityDomainsResponse = await this.withTimeout(
+            this.getIdentityClient(group.region).listAvailabilityDomains({
+                compartmentId: group.compartmentId,
+            }),
+            this.requestTimeoutMs,
+            `listAvailabilityDomains for group ${group.name} in region ${group.region}`,
+        );
         return availabilityDomainsResponse.items.map((adResponse) => {
             return adResponse.name;
         });
     }
 
-    private async getFaultDomains(
-        compartmentId: string,
-        region: string,
-        availabilityDomain: string,
-    ): Promise<string[]> {
-        const faultDomainsResponse: identity.responses.ListFaultDomainsResponse = await this.getIdentityClient(
-            region,
-        ).listFaultDomains({
-            compartmentId: compartmentId,
-            availabilityDomain: availabilityDomain,
-        });
+    private async getFaultDomains(group: InstanceGroup, availabilityDomain: string): Promise<string[]> {
+        const faultDomainsResponse: identity.responses.ListFaultDomainsResponse = await this.withTimeout(
+            this.getIdentityClient(group.region).listFaultDomains({
+                compartmentId: group.compartmentId,
+                availabilityDomain: availabilityDomain,
+            }),
+            this.requestTimeoutMs,
+            `listFaultDomains (${availabilityDomain}) for group ${group.name} in region ${group.region}`,
+        );
         return faultDomainsResponse.items.map((fdResponse) => {
             return fdResponse.name;
         });
@@ -488,6 +539,11 @@ export default class OracleInstanceManager implements CloudInstanceManager {
             matchingContextType: resourceSearch.models.SearchDetails.MatchingContextType.None,
         };
 
+        // The SDK retries inside a single searchResources call for up to maxTimeInSeconds, so the
+        // wall-clock bound for one call is that retry window plus one request timeout for the
+        // final attempt. Without it a hung search would stall the sanity job indefinitely.
+        const searchTimeoutMs = cloudRetryStrategy.maxTimeInSeconds * 1000 + this.requestTimeoutMs;
+
         // the search API pages results; keep following opcNextPage until it is exhausted
         let page: string | undefined = undefined;
         let pages = 0;
@@ -497,8 +553,11 @@ export default class OracleInstanceManager implements CloudInstanceManager {
                 limit: OCI_SEARCH_PAGE_LIMIT,
                 page,
             };
-            const searchResourcesResponse: resourceSearch.responses.SearchResourcesResponse =
-                await resourceSearchClient.searchResources(structuredSearchRequest);
+            const searchResourcesResponse: resourceSearch.responses.SearchResourcesResponse = await this.withTimeout(
+                resourceSearchClient.searchResources(structuredSearchRequest),
+                searchTimeoutMs,
+                `searchResources (page ${pages + 1}) for group ${group.name} in region ${group.region}`,
+            );
             pages++;
             const items = searchResourcesResponse.resourceSummaryCollection?.items ?? [];
             for (const resourceSummary of items) {

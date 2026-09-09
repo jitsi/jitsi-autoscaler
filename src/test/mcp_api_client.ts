@@ -2,7 +2,9 @@
 // @ts-nocheck
 import assert from 'node:assert';
 import test, { afterEach, beforeEach, describe, mock } from 'node:test';
+import { cleanEnv } from 'envalid';
 import { AutoscalerApiClient, DEFAULT_REQUEST_TIMEOUT_MS } from '../mcp/api_client';
+import { MIN_REQUEST_TIMEOUT_MS, requestTimeoutMs } from '../mcp/config_validators';
 import type { InstanceGroup, ScheduledScalingConfig } from '../instance_store';
 
 // Mock fetch globally
@@ -344,5 +346,54 @@ describe('AutoscalerApiClient', () => {
         test('client has no per-request override hook', () => {
             assert.strictEqual((client as unknown as Record<string, unknown>).withOverrides, undefined);
         });
+    });
+});
+
+describe('MCP_REQUEST_TIMEOUT_MS validator', () => {
+    // src/mcp/config.ts reads process.env at import time, so exercise the validator through a
+    // cleanEnv call on a synthetic environment instead of importing the config module.
+    const specs = { MCP_REQUEST_TIMEOUT_MS: requestTimeoutMs({ default: 30000 }) };
+    const clean = (env: Record<string, string>) =>
+        cleanEnv(env, specs, {
+            reporter: ({ errors }) => {
+                const names = Object.keys(errors);
+                if (names.length > 0) {
+                    throw new Error(names.map((name) => `${name}: ${errors[name].message}`).join('; '));
+                }
+            },
+        });
+
+    test('minimum is 1000ms', () => {
+        assert.strictEqual(MIN_REQUEST_TIMEOUT_MS, 1000);
+    });
+
+    test('accepts 30000', () => {
+        assert.strictEqual(clean({ MCP_REQUEST_TIMEOUT_MS: '30000' }).MCP_REQUEST_TIMEOUT_MS, 30000);
+        assert.strictEqual(clean({ MCP_REQUEST_TIMEOUT_MS: '1000' }).MCP_REQUEST_TIMEOUT_MS, 1000);
+    });
+
+    test('falls back to the default when unset', () => {
+        assert.strictEqual(clean({}).MCP_REQUEST_TIMEOUT_MS, 30000);
+    });
+
+    test('rejects 0', () => {
+        assert.throws(() => clean({ MCP_REQUEST_TIMEOUT_MS: '0' }), /MCP_REQUEST_TIMEOUT_MS.*>= 1000.*got "0"/);
+    });
+
+    test('rejects -5', () => {
+        assert.throws(() => clean({ MCP_REQUEST_TIMEOUT_MS: '-5' }), /MCP_REQUEST_TIMEOUT_MS.*>= 1000.*got "-5"/);
+    });
+
+    test('rejects values below the minimum, fractions and non-numbers', () => {
+        for (const raw of ['999', '1500.5', 'abc', '']) {
+            assert.throws(() => clean({ MCP_REQUEST_TIMEOUT_MS: raw }), /MCP_REQUEST_TIMEOUT_MS/, `raw "${raw}"`);
+        }
+    });
+
+    test('the validator itself rejects 0 and -5 and accepts 30000', () => {
+        const spec = requestTimeoutMs({});
+        assert.strictEqual(spec._parse('30000'), 30000);
+        assert.throws(() => spec._parse('0'), />= 1000/);
+        assert.throws(() => spec._parse('-5'), />= 1000/);
     });
 });

@@ -1105,11 +1105,28 @@ describe('MCP Tools', () => {
         });
 
         test('destructive tools are annotated as such', () => {
-            for (const name of ['delete_group', 'cancel_reservation', 'create_group']) {
+            for (const name of [
+                'delete_group',
+                'cancel_reservation',
+                'create_group',
+                'remove_scheduled_scaling_period',
+                'update_scheduled_scaling',
+            ]) {
                 const { annotations } = getTool(server, name);
                 assert.ok(annotations, `${name} should have annotations`);
                 assert.strictEqual(annotations.readOnlyHint, false, `${name} readOnlyHint`);
                 assert.strictEqual(annotations.destructiveHint, true, `${name} destructiveHint`);
+            }
+        });
+
+        test('scheduled scaling tools that can rewrite live scaling are destructive but idempotent', () => {
+            // removing the active period, or disabling the schedule, makes the REST handler restore
+            // the baseline scaling options and rewrite the group's live scaling immediately
+            for (const name of ['remove_scheduled_scaling_period', 'update_scheduled_scaling']) {
+                const { annotations } = getTool(server, name);
+                assert.strictEqual(annotations.readOnlyHint, false, `${name} readOnlyHint`);
+                assert.strictEqual(annotations.destructiveHint, true, `${name} destructiveHint`);
+                assert.strictEqual(annotations.idempotentHint, true, `${name} idempotentHint`);
             }
         });
 
@@ -1119,7 +1136,6 @@ describe('MCP Tools', () => {
                 'update_scaling_options',
                 'update_desired_count',
                 'update_scaling_activities',
-                'update_scheduled_scaling',
             ]) {
                 const { annotations } = getTool(server, name);
                 assert.strictEqual(annotations.readOnlyHint, false, `${name} readOnlyHint`);

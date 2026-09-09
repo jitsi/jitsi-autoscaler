@@ -15,6 +15,8 @@ import OracleInstanceManager, {
 } from '../oracle_instance_manager';
 import { writeTempOciConfig } from './mock_oci_config';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 function initContext() {
     return {
         logger: {
@@ -201,6 +203,147 @@ describe('OracleInstanceManager.launchInstances', () => {
         // 3 fault domains in total: one initial attempt plus 3 retries
         assert.equal(launchInstanceConfiguration.mock.calls.length, 4);
         assert.deepEqual(launchInstanceConfiguration.mock.calls.map(launchedAD), ['AD-2', 'AD-3', 'AD-1', 'AD-2']);
+        // every attempt is a distinct request and carries its own idempotency token
+        const tokens = launchInstanceConfiguration.mock.calls.map((call) => call.arguments[0].opcRetryToken);
+        for (const token of tokens) {
+            assert.match(token, UUID_RE, 'opcRetryToken is a UUID');
+        }
+        assert.equal(new Set(tokens).size, 4, 'opcRetryToken is unique per attempt');
+    });
+
+    test('every launch request in a batch carries a unique opcRetryToken', async () => {
+        const launchInstanceConfiguration = mock.fn(async (request) => ({
+            instance: { id: `ocid-${request.instanceConfiguration.launchDetails.availabilityDomain}` },
+        }));
+        const manager = buildManager({ listFaultDomains: oneFaultDomainPerAD(), launchInstanceConfiguration });
+
+        const result = await manager.launchInstances(initContext(), group, 0, 3);
+
+        assert.deepEqual(result, ['ocid-AD-2', 'ocid-AD-3', 'ocid-AD-1']);
+        const tokens = launchInstanceConfiguration.mock.calls.map((call) => call.arguments[0].opcRetryToken);
+        assert.equal(tokens.length, 3);
+        for (const token of tokens) {
+            assert.match(token, UUID_RE, 'opcRetryToken is a UUID');
+        }
+        assert.equal(new Set(tokens).size, 3, 'opcRetryToken is unique per launch');
+    });
+
+    describe('request timeouts', () => {
+        const never = () => mock.fn(() => new Promise(() => undefined));
+
+        test('a launch that never responds resolves false within the request timeout and logs that the instance may exist', async () => {
+            const launchInstanceConfiguration = never();
+            const manager = buildManager({ listFaultDomains: oneFaultDomainPerAD(), launchInstanceConfiguration });
+            manager.requestTimeoutMs = 20;
+            const ctx = initContext();
+
+            const started = Date.now();
+            const result = await manager.launchInstances(ctx, group, 0, 1);
+            const elapsed = Date.now() - started;
+
+            assert.deepEqual(result, [false]);
+            assert.ok(elapsed < 1000, `settled in ${elapsed}ms`);
+            // a timeout is not a capacity error: no retry in another domain, which would create a second instance
+            assert.equal(launchInstanceConfiguration.mock.calls.length, 1);
+            const errors = ctx.logger.error.mock.calls.map((call) => call.arguments);
+            assert.equal(errors.length, 1);
+            const [message, meta] = errors[0];
+            assert.match(message, /timed out after 20ms/);
+            assert.match(message, /may have been created and is untracked until its sidecar reports/);
+            assert.match(message, /group g in region r1/);
+            assert.equal(meta.err.name, 'TimeoutError');
+            assert.match(meta.err.message, /launchInstanceConfiguration .* group g in region r1 timed out after 20ms/);
+        });
+
+        test('a hung availability domain lookup resolves quantity x false within the request timeout', async () => {
+            const launchInstanceConfiguration = mock.fn();
+            const manager = buildManager({
+                listAvailabilityDomains: never(),
+                listFaultDomains: oneFaultDomainPerAD(),
+                launchInstanceConfiguration,
+            });
+            manager.requestTimeoutMs = 20;
+            const ctx = initContext();
+
+            const started = Date.now();
+            const result = await manager.launchInstances(ctx, group, 0, 2);
+            const elapsed = Date.now() - started;
+
+            assert.deepEqual(result, [false, false]);
+            assert.ok(elapsed < 1000, `settled in ${elapsed}ms`);
+            assert.equal(launchInstanceConfiguration.mock.calls.length, 0);
+            const [message, meta] = ctx.logger.error.mock.calls[0].arguments;
+            assert.match(message, /Failed listing availability\/fault domains for group g/);
+            assert.equal(meta.err.name, 'TimeoutError');
+            assert.match(meta.err.message, /listAvailabilityDomains for group g in region r1 timed out after 20ms/);
+        });
+
+        test('a hung fault domain lookup excludes only that AD within the request timeout', async () => {
+            const listFaultDomains = mock.fn(({ availabilityDomain }) => {
+                if (availabilityDomain === 'AD-2') {
+                    return new Promise(() => undefined);
+                }
+                return Promise.resolve({ items: [{ name: `${availabilityDomain}-FD-1` }] });
+            });
+            const launchInstanceConfiguration = mock.fn(async (request) => ({
+                instance: { id: `ocid-${request.instanceConfiguration.launchDetails.availabilityDomain}` },
+            }));
+            const manager = buildManager({ listFaultDomains, launchInstanceConfiguration });
+            manager.requestTimeoutMs = 20;
+            const ctx = initContext();
+
+            const started = Date.now();
+            const result = await manager.launchInstances(ctx, group, 0, 1);
+            const elapsed = Date.now() - started;
+
+            assert.ok(elapsed < 1000, `settled in ${elapsed}ms`);
+            // usable ADs are AD-1 and AD-3
+            assert.deepEqual(result, ['ocid-AD-3']);
+            const [message, meta] = ctx.logger.error.mock.calls[0].arguments;
+            assert.match(message, /Failed listing fault domains for availability domain AD-2/);
+            assert.equal(meta.err.name, 'TimeoutError');
+            assert.match(meta.err.message, /listFaultDomains \(AD-2\) for group g in region r1 timed out after 20ms/);
+        });
+
+        test('the timeout timer is cleared after a fast response so it cannot keep the process alive', async () => {
+            const launchInstanceConfiguration = mock.fn(async (request) => ({
+                instance: { id: `ocid-${request.instanceConfiguration.launchDetails.availabilityDomain}` },
+            }));
+            const manager = buildManager({ listFaultDomains: oneFaultDomainPerAD(), launchInstanceConfiguration });
+            // a distinctive delay so timers armed by the test runner itself can be told apart
+            manager.requestTimeoutMs = 4321;
+            const setTimeoutSpy = mock.method(globalThis, 'setTimeout');
+            const clearTimeoutSpy = mock.method(globalThis, 'clearTimeout');
+            try {
+                const result = await manager.launchInstances(initContext(), group, 0, 1);
+                assert.deepEqual(result, ['ocid-AD-2']);
+
+                const armed = setTimeoutSpy.mock.calls.filter((call) => call.arguments[1] === 4321);
+                // listAvailabilityDomains + 3 x listFaultDomains + launchInstanceConfiguration
+                assert.equal(armed.length, 5, 'one timer per SDK call');
+                const cleared = new Set(clearTimeoutSpy.mock.calls.map((call) => call.arguments[0]));
+                for (const call of armed) {
+                    assert.ok(cleared.has(call.result), 'timer cleared once the SDK call settled');
+                    assert.equal(call.result.hasRef(), true, 'timer is a ref-ed timer while armed');
+                }
+            } finally {
+                setTimeoutSpy.mock.restore();
+                clearTimeoutSpy.mock.restore();
+            }
+        });
+
+        test('withTimeout passes through the settled value or the original rejection', async () => {
+            const manager = Object.create(OracleInstanceManager.prototype);
+            assert.equal(await manager.withTimeout(Promise.resolve(42), 1000, 'op'), 42);
+            await assert.rejects(manager.withTimeout(Promise.reject(new Error('boom')), 1000, 'op'), {
+                name: 'Error',
+                message: 'boom',
+            });
+            await assert.rejects(manager.withTimeout(new Promise(() => undefined), 5, 'op for group g in region r'), {
+                name: 'TimeoutError',
+                message: 'op for group g in region r timed out after 5ms',
+            });
+        });
     });
 
     test('resolves quantity x false when no AD has known fault domains', async () => {
@@ -360,5 +503,36 @@ describe('OracleInstanceManager.getInstances pagination', () => {
         });
 
         await assert.rejects(manager.getInstances(initContext(), group, retryStrategy), /429 TooManyRequests/);
+    });
+
+    test('a search that never responds rejects with a TimeoutError naming the group and region', async () => {
+        mock.method(ResourceSearchClient.prototype, 'searchResources', () => new Promise(() => undefined));
+        manager.requestTimeoutMs = 20;
+        // no SDK-side retry window, so the bound is exactly the request timeout
+        const noRetry = { maxTimeInSeconds: 0, maxDelayInSeconds: 1, retryableStatusCodes: [429] };
+
+        const started = Date.now();
+        try {
+            await assert.rejects(manager.getInstances(initContext(), group, noRetry), {
+                name: 'TimeoutError',
+                message: 'searchResources (page 1) for group g in region us-phoenix-1 timed out after 20ms',
+            });
+        } finally {
+            manager.requestTimeoutMs = 1000;
+        }
+        assert.ok(Date.now() - started < 1000);
+    });
+
+    test('the search timeout budget covers the SDK retry window plus one request timeout', async () => {
+        mock.method(ResourceSearchClient.prototype, 'searchResources', async () => ({}));
+        const withTimeout = mock.method(manager, 'withTimeout');
+        try {
+            await manager.getInstances(initContext(), group, retryStrategy);
+        } finally {
+            withTimeout.mock.restore();
+        }
+        assert.equal(withTimeout.mock.calls.length, 1);
+        // maxTimeInSeconds 1 -> 1000ms, plus requestTimeoutMs 1000
+        assert.equal(withTimeout.mock.calls[0].arguments[1], 2000);
     });
 });

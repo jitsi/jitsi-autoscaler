@@ -12,22 +12,34 @@ export interface ReservationWithQueue extends Reservation {
     aheadNodeCount?: number | null;
 }
 
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+
 export class AutoscalerApiClient {
     private baseUrl: string;
     private authToken: string;
+    private timeoutMs: number;
 
-    constructor(baseUrl: string, authToken: string) {
+    constructor(baseUrl: string, authToken: string, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS) {
         this.baseUrl = baseUrl.replace(/\/+$/, '');
         this.authToken = authToken;
+        this.timeoutMs = timeoutMs;
     }
 
-    /**
-     * Returns a new client with overridden base URL and/or auth token.
-     * If neither override is provided, returns this client unchanged.
-     */
-    withOverrides(baseUrl: string | undefined, authToken: string | undefined): AutoscalerApiClient {
-        if (!baseUrl && !authToken) return this;
-        return new AutoscalerApiClient(baseUrl || this.baseUrl, authToken || this.authToken);
+    // Per-request deadline. Uses an explicit, ref'd timer rather than AbortSignal.timeout(): that helper's
+    // timer is unref'd, so when nothing else keeps the event loop alive (e.g. the node:test runner on Node 22
+    // awaiting a hung request) the process can drain before the deadline fires and the request never settles.
+    // The abort reason mirrors AbortSignal.timeout() so callers still see err.name === 'TimeoutError'.
+    private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+        const controller = new AbortController();
+        const timer = setTimeout(
+            () => controller.abort(new DOMException(`request timed out after ${this.timeoutMs}ms`, 'TimeoutError')),
+            this.timeoutMs,
+        );
+        try {
+            return await fetch(url, { ...init, signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -37,7 +49,7 @@ export class AutoscalerApiClient {
             'Content-Type': 'application/json',
         };
 
-        const response = await fetch(url, {
+        const response = await this.fetchWithTimeout(url, {
             method,
             headers,
             body: body ? JSON.stringify(body) : undefined,
@@ -62,7 +74,7 @@ export class AutoscalerApiClient {
             'Content-Type': 'application/json',
         };
 
-        const response = await fetch(url, { method, headers });
+        const response = await this.fetchWithTimeout(url, { method, headers });
 
         if (response.status === 404) {
             return null;

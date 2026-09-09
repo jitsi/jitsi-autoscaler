@@ -74,7 +74,8 @@ describe('SeleniumGridClient', () => {
 
             const status = SeleniumGridClient.prototype['parseGridResponse'].call(client, gridResponse);
 
-            assert.strictEqual(status.sessionQueueSize, 0);
+            // an absent queue is "unknown", not "empty", so the autoscaler does not treat it as no load
+            assert.strictEqual(status.sessionQueueSize, undefined);
             assert.strictEqual(status.nodeCount, 1);
         });
 

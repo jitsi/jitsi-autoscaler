@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { READ_ONLY } from './annotations';
 
 export function registerSearchGroups(server: McpServer, client: AutoscalerApiClient): void {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -9,8 +10,6 @@ export function registerSearchGroups(server: McpServer, client: AutoscalerApiCli
         'search_groups',
         'Search and list autoscaler instance groups with optional filters. Returns a summary table of matching groups.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name_pattern: z.string().optional().describe('Regex pattern to filter group names'),
             type: z
                 .string()
@@ -21,10 +20,10 @@ export function registerSearchGroups(server: McpServer, client: AutoscalerApiCli
             cloud: z.string().optional().describe('Cloud provider filter (e.g. oracle, digitalocean, nomad, custom)'),
             tags: z.record(z.string()).optional().describe('Tag key-value pairs to filter by (all must match)'),
         },
-        async ({ base_url, auth_token, name_pattern, type, region, environment, cloud, tags }) => {
+        READ_ONLY,
+        async ({ name_pattern, type, region, environment, cloud, tags }) => {
             try {
-                const c = client.withOverrides(base_url, auth_token);
-                let groups = await c.listGroups(tags);
+                let groups = await client.listGroups(tags);
 
                 if (name_pattern) {
                     let re: RegExp;

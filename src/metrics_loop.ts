@@ -4,7 +4,8 @@ import InstanceGroupManager from './instance_group';
 import { Context } from './context';
 import { InstanceTracker } from './instance_tracker';
 import { CloudInstance } from './cloud_manager';
-import { InstanceGroup, InstanceState } from './instance_store';
+import InstanceStore, { InstanceGroup, InstanceState } from './instance_store';
+import MetricsStore from './metrics_store';
 
 const groupsManaged = new promClient.Gauge({
     name: 'autoscaling_groups_managed',
@@ -63,6 +64,11 @@ export interface MetricsLoopOptions {
     metricsTTL: number;
     instanceGroupManager: InstanceGroupManager;
     instanceTracker: InstanceTracker;
+    // The sanity loop writes cloud instances / untracked counts through these stores; the loop must
+    // read them back through the same stores so Consul / Prometheus deployments are not silently
+    // reading raw Redis keys that nothing ever writes.
+    instanceStore: InstanceStore;
+    metricsStore: MetricsStore;
     ctx: Context;
 }
 
@@ -71,6 +77,8 @@ export default class MetricsLoop {
     private metricsTTL: number;
     private instanceGroupManager: InstanceGroupManager;
     private instanceTracker: InstanceTracker;
+    private instanceStore: InstanceStore;
+    private metricsStore: MetricsStore;
     private groupLabels: Set<string>;
     private ctx: Context;
 
@@ -79,6 +87,8 @@ export default class MetricsLoop {
         this.metricsTTL = options.metricsTTL;
         this.instanceGroupManager = options.instanceGroupManager;
         this.instanceTracker = options.instanceTracker;
+        this.instanceStore = options.instanceStore;
+        this.metricsStore = options.metricsStore;
         this.ctx = options.ctx;
         this.groupLabels = new Set<string>();
     }
@@ -87,8 +97,12 @@ export default class MetricsLoop {
         try {
             const instanceGroups: InstanceGroup[] = await this.instanceGroupManager.getAllInstanceGroups(this.ctx);
             this.updateGroupLabelsAndFixMetrics(instanceGroups);
+            // Set outside the per-group fan-out so the gauge drops to 0 once the last group is deleted.
+            groupsManaged.set(instanceGroups.length);
 
-            await Promise.all(
+            // allSettled: one group's failure must neither abort the cycle for its siblings nor hide their
+            // failures; each rejection is reported on its own, naming the group.
+            const results = await Promise.allSettled(
                 instanceGroups.map(async (group) => {
                     this.ctx.logger.debug(`Will update metrics for group ${group.name}`);
                     const start = process.hrtime();
@@ -96,7 +110,6 @@ export default class MetricsLoop {
                     groupDesired.set({ group: group.name }, group.scalingOptions.desiredCount);
                     groupMin.set({ group: group.name }, group.scalingOptions.minDesired);
                     groupMax.set({ group: group.name }, group.scalingOptions.maxDesired);
-                    groupsManaged.set(instanceGroups.length);
 
                     const currentInventory = await this.instanceTracker.trimCurrent(this.ctx, group.name);
                     instancesCount.set({ group: group.name }, currentInventory.length);
@@ -120,6 +133,15 @@ export default class MetricsLoop {
                     );
                 }),
             );
+            results.forEach((result, i) => {
+                if (result.status === 'rejected') {
+                    const group = instanceGroups[i].name;
+                    this.ctx.logger.warn(
+                        `[MetricsLoop] Error updating in memory metrics for group ${group} ${result.reason}`,
+                        { err: result.reason, group },
+                    );
+                }
+            });
         } catch (err) {
             this.ctx.logger.warn(`[MetricsLoop] Error updating in memory metrics ${err}`, { err });
             return;
@@ -192,22 +214,10 @@ export default class MetricsLoop {
     }
 
     async getUnTrackedCount(groupName: string): Promise<number> {
-        const response = await this.redisClient.get(`service-metrics:${groupName}:untracked-count`);
-        if (response !== null && response.length > 0) {
-            return Number.parseFloat(response) || 0;
-        } else {
-            return 0;
-        }
+        return this.metricsStore.fetchMetricUnTrackedCount(this.ctx, groupName);
     }
 
     async getCloudInstances(groupName: string): Promise<CloudInstance[]> {
-        let cloudInstances = <CloudInstance[]>[];
-        const response = await this.redisClient.get(`cloud-instances-list:${groupName}`);
-        if (response !== null && response.length > 0) {
-            cloudInstances = JSON.parse(response);
-            this.ctx.logger.debug(`Cloud instances: `, { groupName, cloudInstances });
-        }
-
-        return cloudInstances;
+        return this.instanceStore.fetchCloudInstances(this.ctx, groupName);
     }
 }

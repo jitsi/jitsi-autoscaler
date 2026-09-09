@@ -1,4 +1,4 @@
-FROM --platform=$TARGETPLATFORM node:24
+FROM --platform=$TARGETPLATFORM node:26
 ARG TARGETPLATFORM
 
 # install dependencies
@@ -9,13 +9,17 @@ WORKDIR /usr/src/app
 
 # Install app dependencies
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Copy built app
 COPY ./dist/. .
 
 # Copy the run script
 COPY ./build/run.sh .
+
+# Drop privileges
+RUN chown -R node:node /usr/src/app
+USER node
 
 # Run app
 EXPOSE 8080

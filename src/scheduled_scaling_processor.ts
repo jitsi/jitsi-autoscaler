@@ -2,7 +2,7 @@ import { Context } from './context';
 import InstanceGroupManager from './instance_group';
 import { AutoscalerLock, AutoscalerLockManager } from './lock';
 import Audit from './audit';
-import { ScalingOptions, ScheduledScalingConfig, SchedulePeriod } from './instance_store';
+import { InstanceGroup, ScalingOptions, ScheduledScalingConfig, SchedulePeriod } from './instance_store';
 import * as promClient from 'prom-client';
 
 const scheduledScalingTransitionsCounter = new promClient.Counter({
@@ -83,6 +83,41 @@ export default class ScheduledScalingProcessor {
             }
 
             if (!group.scheduledScaling?.enabled) {
+                if (group.scheduledScalingBaseOptions) {
+                    // Scheduled scaling was disabled while a period was active, but the baseline was
+                    // never restored (e.g. an older handler build). Restore it now so the group does
+                    // not stay stuck on the period's overrides forever.
+                    const oldOptions = group.scalingOptions;
+                    const exitingPeriodName = group.scheduledScalingActivePeriod;
+                    const newOptions = ScheduledScalingProcessor.restoreBaseline(
+                        group,
+                        exitingPeriodName,
+                        group.scheduledScaling,
+                    );
+                    ctx.logger.info(
+                        `[ScheduledScaling] Restoring stranded baseline for disabled schedule on group ${groupName}`,
+                        { fromPeriod: exitingPeriodName ?? 'none', oldOptions, newOptions },
+                    );
+                    scheduledScalingTransitionsCounter.inc({ group: groupName });
+                    await this.audit.saveAutoScalerActionItem(groupName, {
+                        timestamp: Date.now(),
+                        actionType: 'scheduledScalingTransition',
+                        count: 0,
+                        oldDesiredCount: oldOptions.desiredCount,
+                        newDesiredCount: newOptions.desiredCount,
+                        scaleMetrics: [],
+                        detail: {
+                            fromPeriod: exitingPeriodName ?? 'none',
+                            toPeriod: 'none',
+                            oldOptions,
+                            newOptions,
+                        },
+                    });
+                    group.scalingOptions = newOptions;
+                    await this.instanceGroupManager.upsertInstanceGroup(ctx, group);
+                    await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, group);
+                    return true;
+                }
                 return false;
             }
 
@@ -145,24 +180,21 @@ export default class ScheduledScalingProcessor {
                 group.scheduledScalingActivePeriod = activePeriod.name;
             } else {
                 // Exiting all periods — restore baseline
-                if (group.scheduledScalingBaseOptions) {
-                    newOptions = { ...group.scheduledScalingBaseOptions };
-                    // If the exiting period didn't explicitly set desiredCount,
-                    // preserve the live value to avoid undoing autoscaler adjustments
-                    const exitingPeriod = group.scheduledScaling?.periods?.find((p) => p.name === currentPeriodName);
-                    if (!exitingPeriod || exitingPeriod.scalingOptions.desiredCount === undefined) {
-                        newOptions.desiredCount = group.scalingOptions.desiredCount;
-                    }
-                    newOptions = ScheduledScalingProcessor.applyInvariants(newOptions);
-                } else {
-                    // No baseline to restore (shouldn't happen, but be safe)
+                if (!group.scheduledScalingBaseOptions) {
+                    // No baseline to restore (shouldn't happen, but be safe). Clear the stale active
+                    // period marker so this does not warn on every run forever.
                     ctx.logger.warn(
                         `[ScheduledScaling] Period ended for group ${groupName} but no baseOptions to restore`,
                     );
+                    delete group.scheduledScalingActivePeriod;
+                    await this.instanceGroupManager.upsertInstanceGroup(ctx, group);
                     return false;
                 }
-                delete group.scheduledScalingActivePeriod;
-                delete group.scheduledScalingBaseOptions;
+                newOptions = ScheduledScalingProcessor.restoreBaseline(
+                    group,
+                    currentPeriodName,
+                    group.scheduledScaling,
+                );
             }
 
             ctx.logger.info(`[ScheduledScaling] Boundary crossed for group ${groupName}`, {
@@ -196,6 +228,34 @@ export default class ScheduledScalingProcessor {
         }
 
         return true;
+    }
+
+    /**
+     * Compute the scaling options to apply when the group leaves scheduled-scaling period
+     * `exitingPeriodName` (the period the group was in before this change), and clear the
+     * period tracking fields on the group. The caller is responsible for assigning the
+     * returned options to `group.scalingOptions` and persisting the group.
+     *
+     * The baseline snapshot is restored, except that when the exiting period did not
+     * explicitly set desiredCount (or cannot be found in `exitingConfig`) the live
+     * desiredCount is kept so autoscaler adjustments made during the period survive.
+     * `exitingConfig` must be the config that was in effect while the period was active,
+     * not a newly submitted one.
+     */
+    static restoreBaseline(
+        group: InstanceGroup,
+        exitingPeriodName: string | undefined,
+        exitingConfig: ScheduledScalingConfig | undefined,
+    ): ScalingOptions {
+        let newOptions: ScalingOptions = { ...group.scheduledScalingBaseOptions };
+        const exitingPeriod = exitingConfig?.periods?.find((p) => p.name === exitingPeriodName);
+        if (!exitingPeriod || exitingPeriod.scalingOptions?.desiredCount === undefined) {
+            newOptions.desiredCount = group.scalingOptions.desiredCount;
+        }
+        newOptions = ScheduledScalingProcessor.applyInvariants(newOptions);
+        delete group.scheduledScalingActivePeriod;
+        delete group.scheduledScalingBaseOptions;
+        return newOptions;
     }
 
     static resolveTimezone(config: ScheduledScalingConfig, region: string, defaultTimezone: string): string {

@@ -1,8 +1,9 @@
+import './polyfills';
 import config from './config';
 import express from 'express';
 import * as context from './context';
 import Consul from 'consul';
-import Handlers from './handlers';
+import Handlers, { DeepHealthDetails, createErrorHandler, evaluateDeepHealth, evaluateShallowHealth } from './handlers';
 import Validator from './validator';
 import Redis, { RedisOptions } from 'ioredis';
 import * as promClient from 'prom-client';
@@ -12,7 +13,7 @@ import { ASAPPubKeyFetcher } from './asap';
 import { expressjwt } from 'express-jwt';
 import { InstanceTracker } from './instance_tracker';
 import CloudManager from './cloud_manager';
-import InstanceGroupManager from './instance_group';
+import InstanceGroupManager, { SUPPORTED_INSTANCE_TYPES } from './instance_group';
 import AutoscaleProcessor from './autoscaler';
 import InstanceLauncher from './instance_launcher';
 import { RedisLockManager, ConsulLockManager } from './lock_manager';
@@ -133,6 +134,9 @@ switch (config.InstanceStoreProvider) {
     case 'consul':
         instanceStore = new ConsulStore({
             client: consulClient,
+            idleTTL: config.IdleTTL,
+            provisioningTTL: config.ProvisioningTTL,
+            shutdownStatusTTL: config.ShutdownStatusTTL,
         });
         break;
     default:
@@ -150,29 +154,45 @@ switch (config.InstanceStoreProvider) {
         break;
 }
 
-mapp.get('/health', async (req: express.Request, res: express.Response) => {
-    logger.debug('Health check');
-    if (shuttingDown) {
-        res.status(503).send('shutting down');
-        return;
-    }
-    if (req.query['deep']) {
-        const storeHealthy = await instanceStore.ping(req.context);
-        const queueHealthy = await jobManager.isHealthy();
+// Upper bound on how long the deep health check waits on the store/queue probes before
+// reporting unhealthy, so a hung backend cannot hang the probe itself.
+const DEEP_HEALTH_TIMEOUT_MS = 5000;
 
-        if (!storeHealthy || !queueHealthy || !jobsStarted) {
-            const details = {
-                instanceStore: !!storeHealthy,
-                jobQueue: queueHealthy,
-                jobsStarted,
-            };
-            logger.warn('Deep health check failed', details);
-            res.status(500).json({ status: 'unhealthy', ...details });
+async function deepHealthChecks(ctx: context.Context): Promise<DeepHealthDetails> {
+    const [storeHealthy, queueHealthy] = await Promise.all([instanceStore.ping(ctx), jobManager.isHealthy()]);
+    return { instanceStore: !!storeHealthy, jobQueue: !!queueHealthy, jobsStarted };
+}
+
+function deepHealthTimeout(ms: number): Promise<DeepHealthDetails> {
+    return new Promise((resolve) => {
+        const t = setTimeout(() => resolve({ instanceStore: false, jobQueue: false, jobsStarted, timedOut: true }), ms);
+        t.unref();
+    });
+}
+
+mapp.use(context.injectContext);
+// Shallow /health is the liveness probe: 200 while the process is up (Redis state is reported, not
+// enforced). /health?deep is the readiness probe and fails closed on Redis, store and queue problems.
+mapp.get('/health', async (req: express.Request, res: express.Response) => {
+    try {
+        logger.debug('Health check');
+        if (req.query['deep']) {
+            const details =
+                !shuttingDown && redisClient.status === 'ready'
+                    ? await Promise.race([deepHealthChecks(req.context), deepHealthTimeout(DEEP_HEALTH_TIMEOUT_MS)])
+                    : undefined;
+            const result = evaluateDeepHealth(shuttingDown, redisClient.status, details);
+            if (result.status !== 200) {
+                logger.warn('Deep health check failed', { redis: redisClient.status, ...details });
+            }
+            res.status(result.status).send(result.body);
         } else {
-            res.send('deeply healthy');
+            const result = evaluateShallowHealth(shuttingDown, redisClient.status);
+            res.status(result.status).send(result.body);
         }
-    } else {
-        res.send('healthy!');
+    } catch (err) {
+        logger.error('Health check error', { err });
+        res.status(500).json({ status: 'unhealthy', error: `${err}` });
     }
 });
 
@@ -214,6 +234,8 @@ const cloudManager = new CloudManager({
     cloudProviders: config.CloudProviders,
     customConfigurationLaunchScriptPath: config.CustomConfigurationLaunchScriptPath,
     customConfigurationLaunchScriptTimeoutMs: config.CustomConfigurationLaunchScriptTimeoutMs,
+    customConfigurationListScriptPath: config.CustomConfigurationListScriptPath,
+    cloudProviderRequestTimeoutMs: config.CloudProviderRequestTimeoutMs,
 });
 
 let lockManager: AutoscalerLockManager;
@@ -223,6 +245,7 @@ if (config.LockProvider === 'consul') {
         consulClient,
         jobCreationLockTTL: config.JobsCreationLockTTLMs,
         groupLockTTLMs: config.GroupLockTTLMs,
+        logger,
     });
 } else {
     lockManager = new RedisLockManager(logger, {
@@ -260,15 +283,28 @@ const start = Date.now();
 const initId = nanoid(10);
 const initLogger = logger.child({ id: initId });
 const initCtx = new context.Context(initLogger, start, initId);
-instanceGroupManager.init(initCtx).catch((err) => {
-    logger.info('Failed initializing list of groups', { err });
-});
+// Consul only: move any per-group data left under the pre-C2 key layout (autoscaler/groups/<g>/...)
+// to autoscaler/group-data/<g>/... before the first job cycle reads it. Idempotent and a no-op on a
+// clean tree; a failure is logged and must not block startup (the next restart retries it).
+const legacyDataMigration =
+    instanceStore instanceof ConsulStore
+        ? instanceStore.migrateLegacyGroupData(initCtx).catch((err) => {
+              logger.error('Failed migrating legacy consul group data', { err });
+          })
+        : Promise.resolve();
+legacyDataMigration
+    .then(() => instanceGroupManager.init(initCtx))
+    .catch((err) => {
+        logger.info('Failed initializing list of groups', { err });
+    });
 
 const metricsLoop = new MetricsLoop({
     redisClient: redisClient,
     metricsTTL: config.ServiceLevelMetricsTTL,
     instanceGroupManager: instanceGroupManager,
     instanceTracker: instanceTracker,
+    instanceStore,
+    metricsStore,
     ctx: initCtx,
 });
 
@@ -304,6 +340,7 @@ const instanceLauncher = new InstanceLauncher({
     instanceTracker,
     cloudManager,
     instanceGroupManager,
+    lockManager,
     shutdownManager,
     audit,
     metricsLoop,
@@ -435,6 +472,8 @@ async function pollForMetrics(metricsLoop: MetricsLoop) {
     }
 }
 
+const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop, shutdownManager });
+
 const h = new Handlers({
     instanceTracker,
     instanceGroupManager,
@@ -447,9 +486,9 @@ const h = new Handlers({
     scalingManager,
     defaultTimezone: config.ScheduledScalingDefaultTimezone,
     reservationManager,
+    validator,
 });
 
-const validator = new Validator({ instanceTracker, instanceGroupManager, metricsLoop, shutdownManager });
 const loggedPaths = ['/sidecar*', '/groups*'];
 app.use(loggedPaths, stats.middleware);
 app.use('/', context.injectContext);
@@ -465,29 +504,42 @@ app.use(
         return !config.ProtectedApi;
     }),
 );
-// This is placed last in the middleware chain and is our default error handler.
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    // If the headers have already been sent then we must use
-    // the built-in default error handler according to
-    // https://expressjs.com/en/guide/error-handling.html
-    if (res.headersSent) {
-        return next(err);
-    }
 
-    let l = logger;
+// Route-scoped authorization (optional). ASAP_JWT_SIDECAR_ISS is a comma-separated list of
+// issuers whose tokens belong to sidecars. When it is set, tokens from those issuers may only
+// call /sidecar* endpoints, and /sidecar* endpoints only accept tokens from those issuers, so a
+// leaked sidecar token cannot manage groups and an operator token cannot spoof sidecar reports.
+// When the variable is unset behaviour is unchanged: any accepted issuer may call anything.
+function parseIssuerList(raw: string | undefined): string[] {
+    return (raw ?? '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0);
+}
+const sidecarIssuers = parseIssuerList(process.env.ASAP_JWT_SIDECAR_ISS);
+if (config.ProtectedApi && sidecarIssuers.length > 0) {
+    logger.info('Route-scoped authorization enabled for sidecar issuers', { sidecarIssuers });
+    app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+        const auth = (req as express.Request & { auth?: { iss?: string } }).auth;
+        const iss = auth?.iss;
+        const isSidecarToken = iss !== undefined && sidecarIssuers.includes(iss);
+        if (req.path.startsWith('/groups') && isSidecarToken) {
+            req.context.logger.info('sidecar issuer token rejected for groups endpoint', { iss, u: req.url });
+            res.status(403).send({ errors: ['sidecar tokens may not access group endpoints'] });
+            return;
+        }
+        if (req.path.startsWith('/sidecar') && !isSidecarToken) {
+            req.context.logger.info('non-sidecar issuer token rejected for sidecar endpoint', { iss, u: req.url });
+            res.status(403).send({ errors: ['only sidecar tokens may access sidecar endpoints'] });
+            return;
+        }
+        next();
+    });
+}
 
-    if (req.context && req.context.logger) {
-        l = req.context.logger;
-    }
-
-    if (err.name === 'UnauthorizedError') {
-        l.info(`unauthorized token ${err}`, { u: req.url });
-        res.status(401).send('invalid token...');
-    } else {
-        l.error(`internal error ${err}`, { u: req.url, stack: err.stack });
-        res.status(500).send('internal server error');
-    }
-});
+// Shared middleware for every /groups/:name* route (other than PUT /groups/:name, which creates):
+// 404 when the group does not exist. Lives on Handlers so it can be unit-tested.
+const requireGroupExists = h.requireGroupExists;
 
 if (config.ProtectedApi) {
     logger.debug('starting in protected api mode');
@@ -529,21 +581,33 @@ app.post('/sidecar/status', async (req, res, next) => {
 
 app.put(
     '/groups/:name',
+    // The safe-alphabet rule for the name is enforced by the handler for new groups only.
+    body('name').isString().withMessage('Invalid group name'),
     body('scalingOptions.minDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions.maxDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions.desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions.scaleUpQuantity').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions.scaleDownQuantity').isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions.scaleUpThreshold').isFloat({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions.scaleDownThreshold').isFloat({ min: 0 }).withMessage('Value must be positive'),
+    body('scalingOptions.scalePeriod').isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('scalingOptions.scaleUpPeriodsCount').isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('scalingOptions.scaleDownPeriodsCount').isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('scalingOptions.cloudGuardGraceCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions.reservationScaleUpThreshold')
         .optional()
         .isInt({ min: 1 })
         .withMessage('Value must be at least 1'),
+    body('gracePeriodTTLSec').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('protectedTTLSec').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
     body('scalingOptions').custom((value) => {
         if (!validator.groupHasValidDesiredValues(value.minDesired, value.maxDesired, value.desiredCount)) {
             throw new Error('Desired count must be between min and max; min cannot be grater than max');
         }
         return true;
     }),
-    body('type').custom((value) => {
-        if (!validator.supportedInstanceType(value)) {
+    body('type').custom(async (value) => {
+        if (!(await validator.supportedInstanceType(value))) {
             throw new Error(`Invalid type of instance: ${value}`);
         }
         return true;
@@ -563,6 +627,7 @@ app.put(
 
 app.put(
     '/groups/:name/desired',
+    requireGroupExists,
     body('minDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('desiredCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
@@ -587,13 +652,16 @@ app.put(
 
 app.put(
     '/groups/:name/scaling-options',
+    requireGroupExists,
     body('scaleUpQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scaleDownQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scaleUpThreshold').optional().isFloat({ min: 0 }).withMessage('Value must be positive'),
     body('scaleDownThreshold').optional().isFloat({ min: 0 }).withMessage('Value must be positive'),
-    body('scalePeriod').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('scaleUpPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('scalePeriod').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('scaleUpPeriodsCount').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('scaleDownPeriodsCount').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('gracePeriodTTLSec').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('cloudGuardGraceCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('reservationScaleUpThreshold').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
     async (req, res, next) => {
         try {
@@ -608,16 +676,31 @@ app.put(
     },
 );
 
-app.put('/groups/:name/scaling-activities', async (req, res, next) => {
-    try {
-        await h.updateScalingActivities(req, res);
-    } catch (err) {
-        next(err);
-    }
-});
+app.put(
+    '/groups/:name/scaling-activities',
+    requireGroupExists,
+    body('enableAutoScale').optional().isBoolean({ strict: true }).withMessage('Value must be a boolean'),
+    body('enableLaunch').optional().isBoolean({ strict: true }).withMessage('Value must be a boolean'),
+    body('enableScheduler').optional().isBoolean({ strict: true }).withMessage('Value must be a boolean'),
+    body('enableUntrackedThrottle').optional().isBoolean({ strict: true }).withMessage('Value must be a boolean'),
+    body('enableReconfiguration').optional().isBoolean({ strict: true }).withMessage('Value must be a boolean'),
+    body('enableCloudGuard').optional().isBoolean({ strict: true }).withMessage('Value must be a boolean'),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.updateScalingActivities(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
 
 app.put(
     '/groups/:name/scheduled-scaling',
+    requireGroupExists,
     body('enabled').isBoolean().withMessage('enabled must be a boolean'),
     body('timezone').optional().isString().withMessage('timezone must be a string'),
     body('periods').isArray().withMessage('periods must be an array'),
@@ -645,12 +728,16 @@ app.put(
         .optional()
         .isFloat({ min: 0 })
         .withMessage('Value must be positive'),
-    body('periods.*.scalingOptions.scalePeriod').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('periods.*.scalingOptions.scalePeriod').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
     body('periods.*.scalingOptions.scaleUpPeriodsCount')
         .optional()
-        .isInt({ min: 0 })
-        .withMessage('Value must be positive'),
+        .isInt({ min: 1 })
+        .withMessage('Value must be at least 1'),
     body('periods.*.scalingOptions.scaleDownPeriodsCount')
+        .optional()
+        .isInt({ min: 1 })
+        .withMessage('Value must be at least 1'),
+    body('periods.*.scalingOptions.cloudGuardGraceCount')
         .optional()
         .isInt({ min: 0 })
         .withMessage('Value must be positive'),
@@ -671,7 +758,7 @@ app.put(
     },
 );
 
-app.get('/groups/:name/scheduled-scaling', async (req, res, next) => {
+app.get('/groups/:name/scheduled-scaling', requireGroupExists, async (req, res, next) => {
     try {
         await h.getScheduledScaling(req, res);
     } catch (err) {
@@ -679,7 +766,7 @@ app.get('/groups/:name/scheduled-scaling', async (req, res, next) => {
     }
 });
 
-app.delete('/groups/:name/scheduled-scaling', async (req, res, next) => {
+app.delete('/groups/:name/scheduled-scaling', requireGroupExists, async (req, res, next) => {
     try {
         await h.deleteScheduledScaling(req, res);
     } catch (err) {
@@ -687,19 +774,24 @@ app.delete('/groups/:name/scheduled-scaling', async (req, res, next) => {
     }
 });
 
-app.put('/groups/:name/instance-configuration', body('instanceConfigurationId').isString(), async (req, res, next) => {
-    try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
+app.put(
+    '/groups/:name/instance-configuration',
+    requireGroupExists,
+    body('instanceConfigurationId').isString(),
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+            await h.updateInstanceConfiguration(req, res);
+        } catch (err) {
+            next(err);
         }
-        await h.updateInstanceConfiguration(req, res);
-    } catch (err) {
-        next(err);
-    }
-});
+    },
+);
 
-app.get('/groups/:name/report', async (req, res, next) => {
+app.get('/groups/:name/report', requireGroupExists, async (req, res, next) => {
     try {
         await h.getGroupReport(req, res);
     } catch (err) {
@@ -707,7 +799,7 @@ app.get('/groups/:name/report', async (req, res, next) => {
     }
 });
 
-app.get('/groups/:name/instance-audit', async (req, res, next) => {
+app.get('/groups/:name/instance-audit', requireGroupExists, async (req, res, next) => {
     try {
         await h.getInstanceAudit(req, res);
     } catch (err) {
@@ -715,7 +807,7 @@ app.get('/groups/:name/instance-audit', async (req, res, next) => {
     }
 });
 
-app.get('/groups/:name/group-audit', async (req, res, next) => {
+app.get('/groups/:name/group-audit', requireGroupExists, async (req, res, next) => {
     try {
         await h.getGroupAudit(req, res);
     } catch (err) {
@@ -726,6 +818,7 @@ app.get('/groups/:name/group-audit', async (req, res, next) => {
 // Reservation endpoints for selenium-grid groups
 app.post(
     '/groups/:name/reservations',
+    requireGroupExists,
     body('nodeCount').isInt({ min: 1 }),
     body('ttlSeconds').optional().isInt({ min: 1 }),
     async (req, res, next) => {
@@ -742,7 +835,7 @@ app.post(
     },
 );
 
-app.get('/groups/:name/reservations', async (req, res, next) => {
+app.get('/groups/:name/reservations', requireGroupExists, async (req, res, next) => {
     try {
         await h.listReservations(req, res);
     } catch (err) {
@@ -750,7 +843,7 @@ app.get('/groups/:name/reservations', async (req, res, next) => {
     }
 });
 
-app.get('/groups/:name/reservations/:id', async (req, res, next) => {
+app.get('/groups/:name/reservations/:id', requireGroupExists, async (req, res, next) => {
     try {
         await h.getReservation(req, res);
     } catch (err) {
@@ -758,20 +851,25 @@ app.get('/groups/:name/reservations/:id', async (req, res, next) => {
     }
 });
 
-app.put('/groups/:name/reservations/:id', body('ttlSeconds').isInt({ min: 1 }), async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        res.status(422).json({ errors: errors.array() });
-        return;
-    }
-    try {
-        await h.extendReservation(req, res);
-    } catch (err) {
-        next(err);
-    }
-});
+app.put(
+    '/groups/:name/reservations/:id',
+    requireGroupExists,
+    body('ttlSeconds').isInt({ min: 1 }),
+    async (req, res, next) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            res.status(422).json({ errors: errors.array() });
+            return;
+        }
+        try {
+            await h.extendReservation(req, res);
+        } catch (err) {
+            next(err);
+        }
+    },
+);
 
-app.delete('/groups/:name/reservations/:id', async (req, res, next) => {
+app.delete('/groups/:name/reservations/:id', requireGroupExists, async (req, res, next) => {
     try {
         await h.deleteReservation(req, res);
     } catch (err) {
@@ -787,7 +885,7 @@ app.get('/groups', async (req, res, next) => {
     }
 });
 
-app.get('/groups/:name', async (req, res, next) => {
+app.get('/groups/:name', requireGroupExists, async (req, res, next) => {
     try {
         await h.getInstanceGroup(req, res);
     } catch (err) {
@@ -797,8 +895,10 @@ app.get('/groups/:name', async (req, res, next) => {
 
 app.delete(
     '/groups/:name',
-    param('name').custom(async (value) => {
-        if (await validator.groupHasActiveInstances(initCtx, value)) {
+    requireGroupExists,
+    // Fast-fail pre-check; the handler re-checks under the group lock and answers 409.
+    param('name').custom(async (value, { req }) => {
+        if (await validator.groupHasActiveInstances((<express.Request>req).context, value)) {
             throw new Error('This group has active instances');
         }
         return true;
@@ -826,8 +926,10 @@ app.post('/groups/actions/reset', async (req, res, next) => {
 
 app.post(
     '/groups/:name/actions/launch-protected',
+    requireGroupExists,
     body('count').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('maxDesired').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('protectedTTLSec').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
     body('count').custom(async (value, { req }) => {
         if (!(await validator.canLaunchInstances(<express.Request>req, value))) {
             throw new Error(`Max desired value must be increased first if you want to launch ${value} new instances.`);
@@ -856,14 +958,13 @@ app.put(
     body('options.scaleDownQuantity').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('options.scaleUpThreshold').optional().isFloat({ min: 0 }).withMessage('Value must be positive'),
     body('options.scaleDownThreshold').optional().isFloat({ min: 0 }).withMessage('Value must be positive'),
-    body('options.scalePeriod').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('options.scaleUpPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
-    body('options.scaleDownPeriodsCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
+    body('options.scalePeriod').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('options.scaleUpPeriodsCount').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('options.scaleDownPeriodsCount').optional().isInt({ min: 1 }).withMessage('Value must be at least 1'),
+    body('options.cloudGuardGraceCount').optional().isInt({ min: 0 }).withMessage('Value must be positive'),
     body('instanceType').custom(async (value) => {
         if (!(await validator.supportedInstanceType(value))) {
-            throw new Error(
-                'Instance type not supported. Use stress, availabity, jvb, jigasi, nomad, jibri, whisper or sip-jibri instead',
-            );
+            throw new Error(`Instance type not supported. Use one of: ${SUPPORTED_INSTANCE_TYPES.join(', ')}`);
         }
         return true;
     }),
@@ -886,7 +987,7 @@ app.put(
     },
 );
 
-app.post('/groups/:name/actions/reconfigure-instances', async (req, res, next) => {
+app.post('/groups/:name/actions/reconfigure-instances', requireGroupExists, async (req, res, next) => {
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -897,6 +998,10 @@ app.post('/groups/:name/actions/reconfigure-instances', async (req, res, next) =
         next(err);
     }
 });
+
+// This is placed last in the middleware chain (after every route) and is our default error handler.
+// See createErrorHandler in handlers.ts for the classification rules.
+app.use(createErrorHandler(logger));
 
 const metricsServer = mapp.listen(config.MetricsServerPort, () => {
     logger.info(`...listening on :${config.MetricsServerPort}`);

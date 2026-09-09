@@ -1,15 +1,123 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { InstanceGroup } from '../../instance_store';
+import { IDEMPOTENT_WRITE } from './annotations';
+
+/** The tool's input, mirroring the zod schema below. */
+interface UpdateGroupParams {
+    name: string;
+    type?: string;
+    region?: string;
+    environment?: string;
+    cloud?: string;
+    compartmentId?: string;
+    instanceConfigurationId?: string;
+    enableAutoScale?: boolean;
+    enableLaunch?: boolean;
+    enableScheduler?: boolean;
+    enableUntrackedThrottle?: boolean;
+    enableReconfiguration?: boolean;
+    gracePeriodTTLSec?: number;
+    protectedTTLSec?: number;
+    minDesired?: number;
+    maxDesired?: number;
+    desiredCount?: number;
+    scaleUpQuantity?: number;
+    scaleDownQuantity?: number;
+    scaleUpThreshold?: number;
+    scaleDownThreshold?: number;
+    scalePeriod?: number;
+    scaleUpPeriodsCount?: number;
+    scaleDownPeriodsCount?: number;
+    reservationScaleUpThreshold?: number;
+    seleniumGridUrl?: string;
+    tags?: Record<string, string>;
+}
+
+type DesiredField = 'minDesired' | 'maxDesired' | 'desiredCount';
+type ScalingOptionField =
+    | 'scaleUpQuantity'
+    | 'scaleDownQuantity'
+    | 'scaleUpThreshold'
+    | 'scaleDownThreshold'
+    | 'scalePeriod'
+    | 'scaleUpPeriodsCount'
+    | 'scaleDownPeriodsCount'
+    | 'reservationScaleUpThreshold';
+type ActivityField =
+    | 'enableAutoScale'
+    | 'enableLaunch'
+    | 'enableScheduler'
+    | 'enableUntrackedThrottle'
+    | 'enableReconfiguration';
+type StructuralField =
+    | 'type'
+    | 'region'
+    | 'environment'
+    | 'cloud'
+    | 'compartmentId'
+    | 'instanceConfigurationId'
+    | 'gracePeriodTTLSec'
+    | 'protectedTTLSec'
+    | 'seleniumGridUrl'
+    | 'tags';
+
+const DESIRED_FIELDS: DesiredField[] = ['minDesired', 'maxDesired', 'desiredCount'];
+const SCALING_OPTION_FIELDS: ScalingOptionField[] = [
+    'scaleUpQuantity',
+    'scaleDownQuantity',
+    'scaleUpThreshold',
+    'scaleDownThreshold',
+    'scalePeriod',
+    'scaleUpPeriodsCount',
+    'scaleDownPeriodsCount',
+    'reservationScaleUpThreshold',
+];
+const ACTIVITY_FIELDS: ActivityField[] = [
+    'enableAutoScale',
+    'enableLaunch',
+    'enableScheduler',
+    'enableUntrackedThrottle',
+    'enableReconfiguration',
+];
+const STRUCTURAL_FIELDS: StructuralField[] = [
+    'type',
+    'region',
+    'environment',
+    'cloud',
+    'compartmentId',
+    'instanceConfigurationId',
+    'gracePeriodTTLSec',
+    'protectedTTLSec',
+    'seleniumGridUrl',
+    'tags',
+];
+
+/** Returns the subset of `keys` that are present (not undefined) in `params`, preserving their types. */
+function pick<T extends object, K extends keyof T>(params: T, keys: readonly K[]): Partial<Pick<T, K>> {
+    const out: Partial<Pick<T, K>> = {};
+    for (const key of keys) {
+        if (params[key] !== undefined) out[key] = params[key];
+    }
+    return out;
+}
 
 export function registerUpdateGroup(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-expect-error - MCP SDK zod type inference may exceed TypeScript recursion limit
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'update_group',
-        'Update an existing instance group. Fetches the current group, merges the provided fields, and saves the result. Only specified fields are changed.',
+        [
+            'Update an existing instance group. Only the specified fields are changed.',
+            'Scaling counts, thresholds/quantities/periods, and enable* flags are sent through their dedicated',
+            'field-wise endpoints so no unrelated live state is written back.',
+            'Changing structural fields (type, region, environment, cloud, compartmentId, instanceConfigurationId,',
+            'gracePeriodTTLSec, protectedTTLSec, seleniumGridUrl, tags) requires a full group PUT: the group is',
+            're-read immediately before the write and all requested changes are merged into that snapshot, but a',
+            'concurrent autoscaler decision in that brief window could still be overwritten.',
+        ].join(' '),
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Name of the instance group to update'),
             type: z.string().optional().describe('Instance type'),
             region: z.string().optional().describe('Region'),
@@ -22,18 +130,18 @@ export function registerUpdateGroup(server: McpServer, client: AutoscalerApiClie
             enableScheduler: z.boolean().optional().describe('Enable the scheduler'),
             enableUntrackedThrottle: z.boolean().optional().describe('Enable untracked throttle'),
             enableReconfiguration: z.boolean().optional().describe('Enable reconfiguration'),
-            gracePeriodTTLSec: z.number().optional().describe('Grace period TTL in seconds'),
-            protectedTTLSec: z.number().optional().describe('Protected TTL in seconds'),
-            minDesired: z.number().optional().describe('Minimum desired instance count'),
-            maxDesired: z.number().optional().describe('Maximum desired instance count'),
-            desiredCount: z.number().optional().describe('Current desired instance count'),
-            scaleUpQuantity: z.number().optional().describe('Instances to add when scaling up'),
-            scaleDownQuantity: z.number().optional().describe('Instances to remove when scaling down'),
+            gracePeriodTTLSec: z.number().int().min(0).optional().describe('Grace period TTL in seconds'),
+            protectedTTLSec: z.number().int().min(0).optional().describe('Protected TTL in seconds'),
+            minDesired: z.number().int().min(0).optional().describe('Minimum desired instance count'),
+            maxDesired: z.number().int().min(0).optional().describe('Maximum desired instance count'),
+            desiredCount: z.number().int().min(0).optional().describe('Current desired instance count'),
+            scaleUpQuantity: z.number().int().min(0).optional().describe('Instances to add when scaling up'),
+            scaleDownQuantity: z.number().int().min(0).optional().describe('Instances to remove when scaling down'),
             scaleUpThreshold: z.number().optional().describe('Scale up threshold'),
             scaleDownThreshold: z.number().optional().describe('Scale down threshold'),
-            scalePeriod: z.number().optional().describe('Measurement period in seconds'),
-            scaleUpPeriodsCount: z.number().optional().describe('Periods above threshold to scale up'),
-            scaleDownPeriodsCount: z.number().optional().describe('Periods below threshold to scale down'),
+            scalePeriod: z.number().int().min(1).optional().describe('Measurement period in seconds'),
+            scaleUpPeriodsCount: z.number().int().min(1).optional().describe('Periods above threshold to scale up'),
+            scaleDownPeriodsCount: z.number().int().min(1).optional().describe('Periods below threshold to scale down'),
             reservationScaleUpThreshold: z
                 .number()
                 .int()
@@ -46,10 +154,24 @@ export function registerUpdateGroup(server: McpServer, client: AutoscalerApiClie
                 .describe('selenium-grid only: URL of the Selenium Grid /status endpoint'),
             tags: z.record(z.string()).optional().describe('Tags (replaces all tags)'),
         },
-        async (params) => {
+        IDEMPOTENT_WRITE,
+        async (rawParams) => {
             try {
-                const c = client.withOverrides(params.base_url, params.auth_token);
-                const existing = await c.getGroup(params.name);
+                const params = rawParams as UpdateGroupParams;
+                const desired = pick(params, DESIRED_FIELDS);
+                const scalingOptions = pick(params, SCALING_OPTION_FIELDS);
+                const activities = pick(params, ACTIVITY_FIELDS);
+                const structural = pick(params, STRUCTURAL_FIELDS);
+
+                const changedKeys = [
+                    ...Object.keys(desired),
+                    ...Object.keys(scalingOptions),
+                    ...Object.keys(activities),
+                    ...Object.keys(structural),
+                ];
+
+                // Existence check (and, on the full-PUT path, the snapshot we merge into).
+                const existing = await client.getGroup(params.name);
                 if (!existing) {
                     return {
                         content: [{ type: 'text', text: `Group '${params.name}' not found.` }],
@@ -57,50 +179,39 @@ export function registerUpdateGroup(server: McpServer, client: AutoscalerApiClie
                     };
                 }
 
-                // Merge top-level fields
-                const merged = { ...existing };
-                if (params.type !== undefined) merged.type = params.type;
-                if (params.region !== undefined) merged.region = params.region;
-                if (params.environment !== undefined) merged.environment = params.environment;
-                if (params.cloud !== undefined) merged.cloud = params.cloud;
-                if (params.compartmentId !== undefined) merged.compartmentId = params.compartmentId;
-                if (params.instanceConfigurationId !== undefined)
-                    merged.instanceConfigurationId = params.instanceConfigurationId;
-                if (params.enableAutoScale !== undefined) merged.enableAutoScale = params.enableAutoScale;
-                if (params.enableLaunch !== undefined) merged.enableLaunch = params.enableLaunch;
-                if (params.enableScheduler !== undefined) merged.enableScheduler = params.enableScheduler;
-                if (params.enableUntrackedThrottle !== undefined)
-                    merged.enableUntrackedThrottle = params.enableUntrackedThrottle;
-                if (params.enableReconfiguration !== undefined)
-                    merged.enableReconfiguration = params.enableReconfiguration;
-                if (params.gracePeriodTTLSec !== undefined) merged.gracePeriodTTLSec = params.gracePeriodTTLSec;
-                if (params.protectedTTLSec !== undefined) merged.protectedTTLSec = params.protectedTTLSec;
-                if (params.seleniumGridUrl !== undefined) merged.seleniumGridUrl = params.seleniumGridUrl;
-                if (params.tags !== undefined) merged.tags = params.tags;
+                if (changedKeys.length === 0) {
+                    return {
+                        content: [{ type: 'text', text: `No changes specified for group '${params.name}'.` }],
+                    };
+                }
 
-                // Merge scaling options
-                const so = { ...merged.scalingOptions };
-                if (params.minDesired !== undefined) so.minDesired = params.minDesired;
-                if (params.maxDesired !== undefined) so.maxDesired = params.maxDesired;
-                if (params.desiredCount !== undefined) so.desiredCount = params.desiredCount;
-                if (params.scaleUpQuantity !== undefined) so.scaleUpQuantity = params.scaleUpQuantity;
-                if (params.scaleDownQuantity !== undefined) so.scaleDownQuantity = params.scaleDownQuantity;
-                if (params.scaleUpThreshold !== undefined) so.scaleUpThreshold = params.scaleUpThreshold;
-                if (params.scaleDownThreshold !== undefined) so.scaleDownThreshold = params.scaleDownThreshold;
-                if (params.scalePeriod !== undefined) so.scalePeriod = params.scalePeriod;
-                if (params.scaleUpPeriodsCount !== undefined) so.scaleUpPeriodsCount = params.scaleUpPeriodsCount;
-                if (params.scaleDownPeriodsCount !== undefined) so.scaleDownPeriodsCount = params.scaleDownPeriodsCount;
-                if (params.reservationScaleUpThreshold !== undefined)
-                    so.reservationScaleUpThreshold = params.reservationScaleUpThreshold;
-                merged.scalingOptions = so;
-
-                await c.upsertGroup(params.name, merged);
+                if (Object.keys(structural).length > 0) {
+                    // Full PUT is unavoidable: the server requires the complete group (including
+                    // scalingOptions.desiredCount), so merge everything into the fresh snapshot.
+                    const merged: InstanceGroup = {
+                        ...existing,
+                        ...structural,
+                        ...activities,
+                        scalingOptions: { ...existing.scalingOptions, ...desired, ...scalingOptions },
+                    };
+                    await client.upsertGroup(params.name, merged);
+                } else {
+                    if (Object.keys(desired).length > 0) {
+                        await client.updateDesiredCount(params.name, desired);
+                    }
+                    if (Object.keys(scalingOptions).length > 0) {
+                        await client.updateScalingOptions(params.name, scalingOptions);
+                    }
+                    if (Object.keys(activities).length > 0) {
+                        await client.updateScalingActivities(params.name, activities);
+                    }
+                }
 
                 return {
                     content: [
                         {
                             type: 'text',
-                            text: `Group '${params.name}' updated successfully.`,
+                            text: `Group '${params.name}' updated successfully (${changedKeys.join(', ')}).`,
                         },
                     ],
                 };

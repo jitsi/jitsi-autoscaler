@@ -1,7 +1,19 @@
 import { nanoid } from 'nanoid/non-secure';
 import { Context } from './context';
 import { Reservation, ReservationStatus } from './reservation';
-import { ReservationStore } from './reservation_store';
+import { ReservationStore, isTerminalReservationStatus } from './reservation_store';
+
+// Thrown by extendReservation when the reservation exists in the requested group but is already
+// terminal (expired / cancelled), so callers can distinguish "conflict" (409) from "not found" (null).
+export class ReservationNotExtendableError extends Error {
+    readonly reservation: Reservation;
+
+    constructor(reservation: Reservation) {
+        super(`Reservation ${reservation.id} is ${reservation.status} and cannot be extended`);
+        this.name = 'ReservationNotExtendableError';
+        this.reservation = reservation;
+    }
+}
 
 export interface ReservationManagerOptions {
     reservationStore: ReservationStore;
@@ -73,11 +85,21 @@ export default class ReservationManager {
             return reservation;
         }
         if (processingEnabled && reservation.expiresAt < Date.now()) {
-            reservation.status = ReservationStatus.Expired;
-            await this.reservationStore.saveReservation(ctx, reservation);
+            await this.expireReservation(ctx, reservation);
             ctx.logger.info(`Lazily expired reservation ${reservation.id}`);
         }
         return reservation;
+    }
+
+    /**
+     * Transition a reservation to Expired. Every expiry path (lazy GET and the periodic sweep) must go
+     * through here so the scale-down grace is always armed: without it, the autoscaler could scale the
+     * freed nodes down instantly the moment a client observed the expiry.
+     */
+    private async expireReservation(ctx: Context, reservation: Reservation): Promise<void> {
+        reservation.status = ReservationStatus.Expired;
+        await this.reservationStore.saveReservation(ctx, reservation);
+        await this.reservationStore.setScaleDownGrace(ctx, reservation.groupName, this.scaleDownGraceSec);
     }
 
     async listReservations(
@@ -122,17 +144,33 @@ export default class ReservationManager {
             .sort((a, b) => a.createdAt - b.createdAt);
     }
 
-    async extendReservation(ctx: Context, id: string, ttlSeconds: number): Promise<Reservation | null> {
+    /**
+     * Extend a reservation's TTL. Returns null when no reservation with this id exists in `groupName`
+     * (unknown id, or an id that belongs to a different group -- nothing is written in either case).
+     * Throws ReservationNotExtendableError when the reservation is already terminal.
+     */
+    async extendReservation(
+        ctx: Context,
+        groupName: string,
+        id: string,
+        ttlSeconds: number,
+    ): Promise<Reservation | null> {
         const reservation = await this.reservationStore.getReservation(ctx, id);
         if (!reservation) {
             return null;
         }
-        if (this.isTerminal(reservation.status)) {
+        if (reservation.groupName !== groupName) {
+            // Must be checked BEFORE the write: extending through the wrong group's endpoint used to
+            // persist the new expiresAt and only then be reported as a conflict.
+            ctx.logger.warn(`Reservation ${id} belongs to group ${reservation.groupName}, not ${groupName}`);
             return null;
+        }
+        if (this.isTerminal(reservation.status)) {
+            throw new ReservationNotExtendableError(reservation);
         }
         reservation.expiresAt = Date.now() + ttlSeconds * 1000;
         await this.reservationStore.saveReservation(ctx, reservation);
-        ctx.logger.info(`Extended reservation ${id} by ${ttlSeconds}s`);
+        ctx.logger.info(`Extended reservation ${id} by ${ttlSeconds}s`, { groupName });
         return reservation;
     }
 
@@ -163,9 +201,7 @@ export default class ReservationManager {
                 continue;
             }
             if (reservation.expiresAt < now) {
-                reservation.status = ReservationStatus.Expired;
-                await this.reservationStore.saveReservation(ctx, reservation);
-                await this.reservationStore.setScaleDownGrace(ctx, groupName, this.scaleDownGraceSec);
+                await this.expireReservation(ctx, reservation);
                 expiredIds.push(reservation.id);
             }
         }
@@ -235,12 +271,21 @@ export default class ReservationManager {
     ): Promise<void> {
         const reservations = await this.reservationStore.listReservations(ctx, groupName);
 
+        // Capacity already claimed by fulfilled reservations counts first, regardless of creation order:
+        // those nodes are occupied, so an active reservation is only covered once instances exceed
+        // (all fulfilled) + (active demand ahead of it, FIFO) + (its own demand). Counting only active
+        // demand let a later reservation be marked fulfilled while its nodes were still in use by an
+        // earlier fulfilled one.
+        const fulfilledReserved = reservations
+            .filter((r) => r.status === ReservationStatus.Fulfilled)
+            .reduce((sum, r) => sum + r.nodeCount, 0);
+
         // Sort active reservations by createdAt so earlier ones are fulfilled first
         const active = reservations
             .filter((r) => r.status === ReservationStatus.Active)
             .sort((a, b) => a.createdAt - b.createdAt);
 
-        let cumulativeReserved = 0;
+        let cumulativeReserved = fulfilledReserved;
         for (const reservation of active) {
             cumulativeReserved += reservation.nodeCount;
             if (currentInstanceCount >= Math.max(minDesired, cumulativeReserved) && !reservation.fulfilledAt) {
@@ -267,6 +312,6 @@ export default class ReservationManager {
     }
 
     private isTerminal(status: ReservationStatus): boolean {
-        return status === ReservationStatus.Expired || status === ReservationStatus.Cancelled;
+        return isTerminalReservationStatus(status);
     }
 }

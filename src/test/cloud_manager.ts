@@ -115,5 +115,55 @@ describe('CloudManager', () => {
                 'protected instance id should match tracked instance id',
             );
         });
+
+        test('scaleUp should record every launched id from a mixed result and count only successes', async () => {
+            const group = { name: 'mock-group-mixed', cloud: 'mock', type: 'mock' };
+            cloudInstanceManager.launchInstances.mock.mockImplementationOnce(() => [
+                'mock-instance-a',
+                false,
+                'mock-instance-b',
+            ]);
+            const result = await cloudManager.scaleUp(context, group, 0, 3, false);
+            assert.equal(result, 2, 'two launches succeeded');
+            assert.equal(instanceTracker.track.mock.calls.length, 2, 'both launched instances tracked');
+            assert.deepEqual(
+                instanceTracker.track.mock.calls.map((call) => call.arguments[1].instanceId),
+                ['mock-instance-a', 'mock-instance-b'],
+                'tracked ids match the launched ids',
+            );
+            assert.equal(context.logger.warn.mock.calls.length, 1, 'failed launch logged as a warning');
+        });
+
+        test('scaleUp should return 0 and not throw when launchInstances rejects', async () => {
+            const group = { name: 'mock-group-rejecting', cloud: 'mock', type: 'mock' };
+            cloudInstanceManager.launchInstances.mock.mockImplementationOnce(() =>
+                Promise.reject(new Error('provider exploded')),
+            );
+            const result = await cloudManager.scaleUp(context, group, 0, 2, false);
+            assert.equal(result, 0, 'no launches recorded');
+            assert.equal(instanceTracker.track.mock.calls.length, 0, 'nothing tracked');
+            assert.equal(context.logger.error.mock.calls.length, 1, 'rejection logged');
+        });
+
+        test('scaleUp should keep counting when recording one launch fails', async () => {
+            const group = { name: 'mock-group-record-failure', cloud: 'mock', type: 'mock' };
+            cloudInstanceManager.launchInstances.mock.mockImplementationOnce(() => [
+                'mock-instance-a',
+                'mock-instance-b',
+            ]);
+            instanceTracker.track.mock.mockImplementationOnce(() => Promise.reject(new Error('redis down')));
+            const result = await cloudManager.scaleUp(context, group, 0, 2, false);
+            assert.equal(result, 2, 'both launches counted');
+            assert.equal(instanceTracker.track.mock.calls.length, 2, 'tracking attempted for both');
+            assert.equal(context.logger.error.mock.calls.length, 1, 'record failure logged');
+        });
+
+        test('getInstances should retain stopped instances and drop terminated ones', async () => {
+            const stopped = { instanceId: 'stopped', cloudStatus: 'STOPPED', displayName: 'stopped' };
+            const terminated = { instanceId: 'gone', cloudStatus: 'Terminated', displayName: 'gone' };
+            cloudInstanceManager.getInstances.mock.mockImplementation(() => [stopped, terminated]);
+            const result = await cloudManager.getInstances(context, 'group');
+            assert.deepEqual(result, [stopped], 'only the stopped instance is retained');
+        });
     });
 });

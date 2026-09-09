@@ -98,32 +98,69 @@ export default class CloudManager {
             return 0;
         }
 
-        const scaleUpResult = await instanceManager.launchInstances(ctx, group, groupCurrentCount, quantity);
+        // instance managers are expected to resolve with one entry per requested instance
+        // (id, true for dry run, or false), but a rejection must not take the whole scale up
+        // down with it: log and report zero launches recorded.
+        let scaleUpResult: Array<string | boolean>;
+        try {
+            scaleUpResult = await instanceManager.launchInstances(ctx, group, groupCurrentCount, quantity);
+        } catch (err) {
+            ctx.logger.error(
+                `[CloudManager] Launching instances for group ${groupName} failed unexpectedly, no launches recorded: ${err}`,
+                { err, groupName, quantity },
+            );
+            return 0;
+        }
+        const launched = Array.isArray(scaleUpResult) ? scaleUpResult : [];
 
+        // record every launched id, even when sibling entries failed or recording one of them fails
         let scaleUpCount = 0;
-        await Promise.all(
-            scaleUpResult.map(async (instanceId) => {
+        const recordOutcomes = await Promise.allSettled(
+            launched.map(async (instanceId) => {
                 if (instanceId) {
                     scaleUpCount++;
-                    return this.recordLaunch(ctx, group, instanceId, isScaleDownProtected);
                 }
+                await this.recordLaunch(ctx, group, instanceId, isScaleDownProtected);
             }),
         );
+        recordOutcomes.forEach((outcome, i) => {
+            if (outcome.status === 'rejected') {
+                ctx.logger.error(
+                    `[CloudManager] Failed recording launch of instance ${launched[i]} in group ${groupName}; the instance was launched but is untracked until the sanity loop finds it: ${outcome.reason}`,
+                    { err: outcome.reason, instanceId: launched[i], groupName },
+                );
+            }
+        });
 
         return scaleUpCount;
     }
 
+    /**
+     * Requests shutdown of the given instances by flagging them for their sidecars. No cloud
+     * provider API is called here, by any provider: the sidecar polling each instance picks up
+     * the shutdown status and terminates its own VM/job. Consequently an instance whose sidecar
+     * is not running or not polling is never reaped by the autoscaler; it keeps showing up in
+     * the cloud provider listing until it is removed by other means.
+     */
     async scaleDown(ctx: Context, group: InstanceGroup, instances: InstanceDetails[]): Promise<boolean> {
         const groupName = group.name;
-        ctx.logger.info('Scaling down', { groupName, instances });
+        ctx.logger.info('[CloudManager] Requesting shutdown via sidecar', { groupName, instances });
         await this.shutdownManager.setShutdownStatus(ctx, instances);
-        ctx.logger.info(`[CloudManager] Finished scaling down all the instances in group ${group.name}`);
+        ctx.logger.info(
+            `[CloudManager] Shutdown requested via sidecar for ${instances.length} instances in group ${groupName}; termination is performed by the sidecar`,
+        );
         return true;
     }
 
+    /**
+     * Confirms shutdown of a single instance to its sidecar. As with scaleDown, the
+     * termination itself is performed by the sidecar, not by a cloud provider API call.
+     */
     async shutdownInstance(ctx: Context, instance: InstanceDetails): Promise<boolean> {
         const groupName = instance.group;
-        ctx.logger.info(`[CloudManager] Shutting down instance ${instance.instanceId} from group ${groupName}`);
+        ctx.logger.info(
+            `[CloudManager] Shutdown confirmed via sidecar for instance ${instance.instanceId} from group ${groupName}; termination is performed by the sidecar`,
+        );
         await this.shutdownManager.setShutdownConfirmation(ctx, [instance]);
         return true;
     }

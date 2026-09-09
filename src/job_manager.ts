@@ -322,6 +322,11 @@ export default class JobManager {
                 return;
             }
 
+            // Mark this creation window as used BEFORE enqueuing, so a crash or a failed flag write after
+            // a partial batch cannot lead another node (or the next tick) to enqueue a duplicate batch.
+            // Jobs are also deduplicated by id (see createJobs) as a second line of defence.
+            await this.instanceGroupManager.setGroupJobsCreationGracePeriod(ctx);
+
             const instanceGroupNames = await this.instanceGroupManager.getAllInstanceGroupNames(ctx);
 
             // populate queue health metrics BEFORE creating new jobs,
@@ -350,8 +355,6 @@ export default class JobManager {
                 JobType.Launch,
                 this.launcherProcessingTimeoutMs,
             );
-
-            await this.instanceGroupManager.setGroupJobsCreationGracePeriod(ctx);
         } catch (err) {
             ctx.logger.error(`[JobManager] Error while creating jobs for group ${err}`);
             jobCreateFailureCounter.inc();
@@ -377,10 +380,20 @@ export default class JobManager {
                 };
 
                 jobCreateTotalCounter.inc({ type: jobData.type });
-                const newJob = jobQueue.createJob(jobData);
+                // Use a deterministic id so that, if the previous cycle's job for this group is still
+                // queued or running (e.g. a slow provider call), bee-queue does not enqueue a second one.
+                // Jobs are removed on success/failure, so the id is freed as soon as the job completes.
+                const newJob = jobQueue.createJob(jobData).setId(`${jobType}:${instanceGroupName}`);
                 try {
                     const job = await newJob.timeout(processingTimeoutMillis).retries(0).save();
-                    ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
+                    if (job.id) {
+                        ctx.logger.info(`[JobManager] Job created ${jobType}:${job.id} for group ${jobData.groupName}`);
+                    } else {
+                        // bee-queue resolves with a null id when a job with this id is still queued/running
+                        ctx.logger.info(
+                            `[JobManager] ${jobType} job for group ${jobData.groupName} is still pending from a previous cycle, not enqueuing a duplicate`,
+                        );
+                    }
                 } catch (error) {
                     ctx.logger.info(
                         `[JobManager] Error while creating ${jobType} job for group ${instanceGroupName}: ${error}`,

@@ -2,7 +2,7 @@ import OracleInstanceManager from './oracle_instance_manager';
 import CustomInstanceManager from './custom_instance_manager';
 import NomadInstanceManager from './nomad_instance_manager';
 import DigitalOceanInstanceManager from './digital_ocean_instance_manager';
-import { CloudInstanceManager } from './cloud_instance_manager';
+import { CloudInstanceManager, DEFAULT_CLOUD_PROVIDER_REQUEST_TIMEOUT_MS } from './cloud_instance_manager';
 
 export interface CloudInstanceManagerSelectorOptions {
     cloudProviders: string[];
@@ -15,6 +15,11 @@ export interface CloudInstanceManagerSelectorOptions {
 
     customConfigurationLaunchScriptPath: string;
     customConfigurationLaunchScriptTimeoutMs: number;
+    // optional script listing the instances of a group, see custom_instance_manager.ts
+    customConfigurationListScriptPath?: string;
+
+    // per-request HTTP timeout applied to every cloud provider API call
+    cloudProviderRequestTimeoutMs?: number;
 }
 
 export class CloudInstanceManagerSelector {
@@ -24,11 +29,15 @@ export class CloudInstanceManagerSelector {
     private nomadInstanceManager: NomadInstanceManager;
 
     constructor(options: CloudInstanceManagerSelectorOptions) {
+        const cloudProviderRequestTimeoutMs =
+            options.cloudProviderRequestTimeoutMs ?? DEFAULT_CLOUD_PROVIDER_REQUEST_TIMEOUT_MS;
+
         if (options.cloudProviders.includes('oracle')) {
             this.oracleInstanceManager = new OracleInstanceManager({
                 isDryRun: options.isDryRun,
                 ociConfigurationFilePath: options.ociConfigurationFilePath,
                 ociConfigurationProfile: options.ociConfigurationProfile,
+                cloudProviderRequestTimeoutMs,
             });
         }
 
@@ -37,6 +46,7 @@ export class CloudInstanceManagerSelector {
                 isDryRun: options.isDryRun,
                 customConfigurationLaunchScriptPath: options.customConfigurationLaunchScriptPath,
                 customConfigurationLaunchScriptTimeoutMs: options.customConfigurationLaunchScriptTimeoutMs,
+                customConfigurationListScriptPath: options.customConfigurationListScriptPath,
             });
         }
         if (options.cloudProviders.includes('digitalocean')) {
@@ -44,11 +54,13 @@ export class CloudInstanceManagerSelector {
                 isDryRun: options.isDryRun,
                 digitalOceanAPIToken: options.digitalOceanAPIToken,
                 digitalOceanConfigurationFilePath: options.digitalOceanConfigurationFilePath,
+                cloudProviderRequestTimeoutMs,
             });
         }
         if (options.cloudProviders.includes('nomad')) {
             this.nomadInstanceManager = new NomadInstanceManager({
                 isDryRun: options.isDryRun,
+                cloudProviderRequestTimeoutMs,
             });
         }
     }

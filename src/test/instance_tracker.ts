@@ -335,4 +335,226 @@ describe('InstanceTracker', () => {
             assert.deepEqual(results, [4.25, 3]);
         });
     });
+    describe('trackerTrackTests', () => {
+        const trackAudit = { log: mock.fn(), saveLatestStatus: mock.fn() };
+        const trackStore = {
+            saveInstanceStatus: mock.fn(() => true),
+            writeInstanceMetric: mock.fn(() => true),
+        };
+        const tracker = new InstanceTracker({
+            instanceStore: trackStore,
+            metricsStore: trackStore,
+            shutdownManager,
+            audit: trackAudit,
+        });
+
+        function state(instanceType, status) {
+            return {
+                instanceId: 'i-1',
+                instanceType,
+                metadata: { group: groupName },
+                status: { provisioning: false, ...status },
+                timestamp: Date.now(),
+            };
+        }
+
+        afterEach(() => {
+            trackStore.saveInstanceStatus.mock.resetCalls();
+            trackStore.writeInstanceMetric.mock.resetCalls();
+            trackStore.saveInstanceStatus.mock.mockImplementation(() => true);
+        });
+
+        test('tracks an idle availability instance as available (1)', async () => {
+            await tracker.track(context, state('availability', { jibriStatus: { busyStatus: 'IDLE' } }));
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls.length, 1);
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls[0].arguments[2].value, 1);
+        });
+
+        test('tracks a busy availability instance as unavailable (0)', async () => {
+            await tracker.track(context, state('availability', { jibriStatus: { busyStatus: 'BUSY' } }));
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls.length, 1);
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls[0].arguments[2].value, 0);
+        });
+
+        test('tracks an idle jibri instance as available (1)', async () => {
+            await tracker.track(context, state('jibri', { jibriStatus: { busyStatus: 'IDLE' } }));
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls[0].arguments[2].value, 1);
+        });
+
+        test('tracks stress level for a JVB instance', async () => {
+            await tracker.track(context, state('JVB', { stats: { stress_level: 0.42 } }));
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls[0].arguments[2].value, 0.42);
+        });
+
+        test('does not write a metric for a NaN stress level', async () => {
+            await tracker.track(context, state('JVB', { stats: { stress_level: NaN } }));
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls.length, 0);
+        });
+
+        test('does not write a metric for an unknown instance type', async () => {
+            await tracker.track(context, state('mystery', {}));
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls.length, 0);
+            assert.strictEqual(trackStore.saveInstanceStatus.mock.calls.length, 1);
+        });
+
+        test('rejects when the instance status cannot be persisted', async () => {
+            trackStore.saveInstanceStatus.mock.mockImplementation(() => Promise.reject(new Error('store down')));
+            await assert.rejects(() => tracker.track(context, state('JVB', { stats: { stress_level: 0.1 } })), {
+                message: 'store down',
+            });
+            assert.strictEqual(trackStore.writeInstanceMetric.mock.calls.length, 0);
+        });
+    });
+
+    describe('trackerNomadStatsTests', () => {
+        test('returns undefined for a nomad report without gauges', () => {
+            assert.strictEqual(instanceTracker.nomadStatusFromStats({ Gauges: [] }), undefined);
+            assert.strictEqual(instanceTracker.nomadStatusFromStats({}), undefined);
+        });
+
+        test('returns undefined when cpu gauges are missing', () => {
+            const stats = { Gauges: [{ Name: 'nomad.client.allocated.memory', Value: 1, Labels: {} }] };
+            assert.strictEqual(instanceTracker.nomadStatusFromStats(stats), undefined);
+        });
+
+        test('computes stress level from cpu gauges', () => {
+            const stats = {
+                Gauges: [
+                    {
+                        Name: 'nomad.client.allocated.cpu',
+                        Value: 3,
+                        Labels: { node_scheduling_eligibility: 'eligible' },
+                    },
+                    { Name: 'nomad.client.unallocated.cpu', Value: 1, Labels: {} },
+                ],
+            };
+            const status = instanceTracker.nomadStatusFromStats(stats);
+            assert.strictEqual(status.stress_level, 0.75);
+            assert.strictEqual(status.eligibleForScheduling, true);
+        });
+
+        test('summary metric for an empty period is NaN, not 0', () => {
+            assert.ok(Number.isNaN(instanceTracker.computeSummaryMetric([], true)));
+            assert.ok(Number.isNaN(instanceTracker.computeSummaryMetric([], false)));
+        });
+    });
+
+    // Review #6: trimCurrent must read the store's shutdown statuses once. A store that offers the combined
+    // fetchInstanceStatesWithShutdownStatuses is used for both the states and the shutdown filter; a store
+    // without it (Redis) still goes through fetchInstanceStates + ShutdownManager.getShutdownStatuses.
+    describe('trimCurrent shutdown-status lookup', () => {
+        function states() {
+            return [
+                {
+                    instanceId: 'i-running',
+                    instanceType: 'JVB',
+                    status: { provisioning: false },
+                    metadata: { group: groupName },
+                },
+                {
+                    instanceId: 'i-shutdown',
+                    instanceType: 'JVB',
+                    status: { provisioning: false },
+                    metadata: { group: groupName },
+                },
+            ];
+        }
+
+        function tracker(store, sm) {
+            return new InstanceTracker({ instanceStore: store, metricsStore: store, shutdownManager: sm, audit });
+        }
+
+        test('uses the combined store read and does not ask the ShutdownManager for shutdown statuses', async () => {
+            const store = {
+                fetchInstanceStates: mock.fn(async () => {
+                    throw new Error('must not be called when the combined read is available');
+                }),
+                fetchInstanceStatesWithShutdownStatuses: mock.fn(async () => ({
+                    states: states(),
+                    shutdownStatuses: [false, true],
+                })),
+            };
+            const sm = {
+                getShutdownStatuses: mock.fn(async () => {
+                    throw new Error('second shutdown lookup must not happen');
+                }),
+                getShutdownConfirmations: mock.fn(async (_ctx, _group, ids) => ids.map(() => false)),
+            };
+
+            const result = await tracker(store, sm).trimCurrent(context, groupName);
+
+            assert.deepStrictEqual(
+                result.map((s) => s.instanceId),
+                ['i-running'],
+            );
+            assert.strictEqual(store.fetchInstanceStatesWithShutdownStatuses.mock.callCount(), 1);
+            assert.strictEqual(sm.getShutdownStatuses.mock.callCount(), 0);
+            assert.strictEqual(sm.getShutdownConfirmations.mock.callCount(), 1);
+        });
+
+        test('falls back to fetchInstanceStates + ShutdownManager when the store lacks the combined read', async () => {
+            const store = { fetchInstanceStates: mock.fn(async () => states()) };
+            const sm = {
+                getShutdownStatuses: mock.fn(async () => [false, true]),
+                getShutdownConfirmations: mock.fn(async (_ctx, _group, ids) => ids.map(() => false)),
+            };
+
+            const result = await tracker(store, sm).trimCurrent(context, groupName);
+
+            assert.deepStrictEqual(
+                result.map((s) => s.instanceId),
+                ['i-running'],
+            );
+            assert.strictEqual(store.fetchInstanceStates.mock.callCount(), 1);
+            assert.strictEqual(sm.getShutdownStatuses.mock.callCount(), 1);
+            assert.deepStrictEqual(sm.getShutdownStatuses.mock.calls[0].arguments.slice(1), [
+                groupName,
+                ['i-running', 'i-shutdown'],
+            ]);
+        });
+
+        test('filterShutdown=false uses the plain fetchInstanceStates and no shutdown lookups', async () => {
+            const store = {
+                fetchInstanceStates: mock.fn(async () => states()),
+                fetchInstanceStatesWithShutdownStatuses: mock.fn(async () => {
+                    throw new Error('combined read not needed without the shutdown filter');
+                }),
+            };
+            const sm = { getShutdownStatuses: mock.fn(), getShutdownConfirmations: mock.fn() };
+
+            const result = await tracker(store, sm).trimCurrent(context, groupName, false);
+
+            assert.strictEqual(result.length, 2);
+            assert.strictEqual(store.fetchInstanceStates.mock.callCount(), 1);
+            assert.strictEqual(sm.getShutdownStatuses.mock.callCount(), 0);
+            assert.strictEqual(sm.getShutdownConfirmations.mock.callCount(), 0);
+        });
+    });
+
+    // P2: the tracker must forward the full scaling window and the per-period step to the metrics store,
+    // so a Prometheus-backed store neither truncates long windows nor coarsens sub-60s periods.
+    describe('metrics window forwarding (P2)', () => {
+        test('passes windowSeconds = periods * scalePeriod and stepSeconds = scalePeriod', async () => {
+            const scalePeriod = 300;
+            const periods = Math.max(24, 2); // scaleUpPeriodsCount=24, scaleDownPeriodsCount=2 -> 2 hours
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => []);
+
+            await instanceTracker.getMetricInventoryPerPeriod(context, groupName, periods, scalePeriod);
+
+            const call = mockStore.fetchInstanceMetrics.mock.calls.at(-1);
+            assert.strictEqual(call.arguments[1], groupName, 'group name is forwarded');
+            assert.strictEqual(call.arguments[2], 7200, 'windowSeconds must cover every period (24 * 300s)');
+            assert.strictEqual(call.arguments[3], scalePeriod, 'stepSeconds must be the scale period');
+        });
+
+        test('forwards sub-60s scale periods unchanged so the store can keep per-period resolution', async () => {
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => []);
+
+            await instanceTracker.getMetricInventoryPerPeriod(context, groupName, 3, 10);
+
+            const call = mockStore.fetchInstanceMetrics.mock.calls.at(-1);
+            assert.strictEqual(call.arguments[2], 30);
+            assert.strictEqual(call.arguments[3], 10);
+        });
+    });
 });

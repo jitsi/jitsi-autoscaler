@@ -6,6 +6,30 @@ Comprehensive risk review examining high availability, cloud cost, degraded prov
 
 ---
 
+## Status (2026-09-08)
+
+Re-verified against the current code. Items marked MITIGATED in the matrix were already addressed; the rest:
+
+- **1 Redis SPOF / 1.5 single-client Redlock** — architectural; unchanged. Deep health now fails (with a timeout) instead of hanging, and shallow health reports Redis state.
+- **3 No bounds on maxDesired/scaleUpQuantity** — still no global ceiling; validation now rejects non-integers, zero periods and bad TTLs. A system-wide cap remains a product decision.
+- **4 DigitalOcean pagination** — fixed (also Oracle).
+- **5 Non-atomic desired count** — invalid: every writer holds the group lock.
+- **6 Lock expiration during slow jobs** — partially addressed: provider calls now time out and Consul locks are force-released after the configured TTL.
+- **7 Scale-down depends on sidecar** — by design; logs and comments now say so explicitly.
+- **8 No circuit breaker** — unchanged; per-request timeouts bound the damage.
+- **9 Prometheus failure reads as zero** — fixed in PR #189 (errors propagate) plus this change (empty periods skip the cycle).
+- **10 Failed jobs auto-removed, zero retries** — intentional; a retried timed-out LAUNCH would double-launch. Jobs are now de-duplicated by id.
+- **11 Sidecar endpoints unprotected when PROTECTED_API=false** — by design, but note the flag disables JWT for the whole API. Optional `ASAP_JWT_SIDECAR_ISS` now scopes sidecar tokens away from admin routes.
+- **13 Partial cloud results** — fixed via pagination.
+- **14 TOCTOU in group deletion** — fixed: active-instance check runs under the lock.
+- **15 Consul store incomplete** — fixed in PR #189 and this change (write path fail-closed).
+- **2.2 Partial launch orphans** — fixed: successful launches are always recorded.
+- **4.5 Instance state save not awaited** — fixed.
+- **4.6 Launcher race** — fixed: launcher holds the group lock.
+- **5.3 ASAP key fetch timeout** — fixed.
+
+---
+
 ## Risk Priority Matrix
 
 | # | Risk | Severity | Likelihood | Category |

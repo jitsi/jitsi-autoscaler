@@ -2,15 +2,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
 import { InstanceGroup } from '../../instance_store';
+import { DESTRUCTIVE } from './annotations';
 
 export function registerCreateGroup(server: McpServer, client: AutoscalerApiClient): void {
-    // @ts-expect-error - MCP SDK zod type inference may exceed TypeScript recursion limit
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - ts-node hits zod recursion at default heap size
     server.tool(
         'create_group',
-        'Create a new autoscaler instance group with the specified configuration.',
+        'Create a new autoscaler instance group with the specified configuration. Fails if a group with the same name already exists unless overwrite is true, in which case the existing group is replaced wholesale (use update_group to change individual fields instead).',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('Unique name for the instance group'),
             type: z
                 .string()
@@ -25,14 +25,22 @@ export function registerCreateGroup(server: McpServer, client: AutoscalerApiClie
             enableScheduler: z.boolean().optional().default(true).describe('Enable the scheduler'),
             enableUntrackedThrottle: z.boolean().optional().default(false).describe('Enable untracked throttle'),
             enableReconfiguration: z.boolean().optional().default(false).describe('Enable reconfiguration'),
-            gracePeriodTTLSec: z.number().optional().default(480).describe('Grace period TTL in seconds'),
-            protectedTTLSec: z.number().optional().default(600).describe('Protected TTL in seconds'),
-            minDesired: z.number().describe('Minimum desired instance count'),
-            maxDesired: z.number().describe('Maximum desired instance count'),
-            desiredCount: z.number().describe('Current desired instance count'),
-            scaleUpQuantity: z.number().optional().default(1).describe('Number of instances to add when scaling up'),
+            gracePeriodTTLSec: z.number().int().min(0).optional().default(480).describe('Grace period TTL in seconds'),
+            protectedTTLSec: z.number().int().min(0).optional().default(600).describe('Protected TTL in seconds'),
+            minDesired: z.number().int().min(0).describe('Minimum desired instance count'),
+            maxDesired: z.number().int().min(0).describe('Maximum desired instance count'),
+            desiredCount: z.number().int().min(0).describe('Current desired instance count'),
+            scaleUpQuantity: z
+                .number()
+                .int()
+                .min(0)
+                .optional()
+                .default(1)
+                .describe('Number of instances to add when scaling up'),
             scaleDownQuantity: z
                 .number()
+                .int()
+                .min(0)
                 .optional()
                 .default(1)
                 .describe('Number of instances to remove when scaling down'),
@@ -42,14 +50,18 @@ export function registerCreateGroup(server: McpServer, client: AutoscalerApiClie
             scaleDownThreshold: z
                 .number()
                 .describe('Stress threshold to trigger scale down (0-1 for stress, count for availability)'),
-            scalePeriod: z.number().optional().default(60).describe('Measurement period in seconds'),
+            scalePeriod: z.number().int().min(1).optional().default(60).describe('Measurement period in seconds'),
             scaleUpPeriodsCount: z
                 .number()
+                .int()
+                .min(1)
                 .optional()
                 .default(2)
                 .describe('Consecutive periods above threshold to trigger scale up'),
             scaleDownPeriodsCount: z
                 .number()
+                .int()
+                .min(1)
                 .optional()
                 .default(4)
                 .describe('Consecutive periods below threshold to trigger scale down'),
@@ -68,7 +80,13 @@ export function registerCreateGroup(server: McpServer, client: AutoscalerApiClie
                     'selenium-grid only: URL of the Selenium Grid /status endpoint used for organic queue scaling',
                 ),
             tags: z.record(z.string()).optional().default({}).describe('Key-value tags for the group'),
+            overwrite: z
+                .boolean()
+                .optional()
+                .default(false)
+                .describe('Replace an existing group of the same name instead of failing (default false)'),
         },
+        DESTRUCTIVE,
         async (params) => {
             try {
                 if (params.desiredCount < params.minDesired || params.desiredCount > params.maxDesired) {
@@ -77,6 +95,19 @@ export function registerCreateGroup(server: McpServer, client: AutoscalerApiClie
                             {
                                 type: 'text',
                                 text: `Validation error: desiredCount (${params.desiredCount}) must be between minDesired (${params.minDesired}) and maxDesired (${params.maxDesired}).`,
+                            },
+                        ],
+                        isError: true,
+                    };
+                }
+
+                const existing = await client.getGroup(params.name);
+                if (existing && !params.overwrite) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: `Group '${params.name}' already exists; use update_group to change it or pass overwrite: true to replace it.`,
                             },
                         ],
                         isError: true,
@@ -118,13 +149,14 @@ export function registerCreateGroup(server: McpServer, client: AutoscalerApiClie
                     ...(params.seleniumGridUrl !== undefined && { seleniumGridUrl: params.seleniumGridUrl }),
                 };
 
-                await client.withOverrides(params.base_url, params.auth_token).upsertGroup(params.name, group);
+                await client.upsertGroup(params.name, group);
 
+                const verb = existing ? 'replaced' : 'created';
                 return {
                     content: [
                         {
                             type: 'text',
-                            text: `Group '${params.name}' created successfully.\n\nType: ${params.type}, Region: ${params.region}, Environment: ${params.environment}\nDesired: ${params.desiredCount} (min: ${params.minDesired}, max: ${params.maxDesired})`,
+                            text: `Group '${params.name}' ${verb} successfully.\n\nType: ${params.type}, Region: ${params.region}, Environment: ${params.environment}\nDesired: ${params.desiredCount} (min: ${params.minDesired}, max: ${params.maxDesired})`,
                         },
                     ],
                 };

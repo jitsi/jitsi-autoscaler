@@ -548,6 +548,53 @@ describe('ScheduledScalingProcessor', () => {
         });
     });
 
+    describe('restoreBaseline', () => {
+        const base = { ...currentScalingOptions };
+
+        test('restores baseline desiredCount when exiting period explicitly set it', () => {
+            const group = {
+                scalingOptions: { ...base, minDesired: 10, maxDesired: 20, desiredCount: 15 },
+                scheduledScalingActivePeriod: 'weekday-peak',
+                scheduledScalingBaseOptions: { ...base },
+            };
+            const result = ScheduledScalingProcessor.restoreBaseline(group, 'weekday-peak', {
+                enabled: true,
+                periods: [peakPeriod],
+            });
+            assert.deepStrictEqual(result, base);
+            assert.strictEqual(group.scheduledScalingActivePeriod, undefined);
+            assert.strictEqual(group.scheduledScalingBaseOptions, undefined);
+        });
+
+        test('preserves live desiredCount when exiting period did not set it', () => {
+            const noDesired = { ...peakPeriod, scalingOptions: { minDesired: 3, maxDesired: 20 } };
+            const group = {
+                scalingOptions: { ...base, minDesired: 3, maxDesired: 20, desiredCount: 4 },
+                scheduledScalingActivePeriod: 'weekday-peak',
+                scheduledScalingBaseOptions: { ...base },
+            };
+            const result = ScheduledScalingProcessor.restoreBaseline(group, 'weekday-peak', {
+                enabled: true,
+                periods: [noDesired],
+            });
+            assert.strictEqual(result.desiredCount, 4);
+            assert.strictEqual(result.minDesired, base.minDesired);
+            assert.strictEqual(result.maxDesired, base.maxDesired);
+        });
+
+        test('preserves live desiredCount and applies invariants when the period cannot be found', () => {
+            const group = {
+                scalingOptions: { ...base, minDesired: 10, maxDesired: 20, desiredCount: 12 },
+                scheduledScalingActivePeriod: 'removed',
+                scheduledScalingBaseOptions: { ...base },
+            };
+            const result = ScheduledScalingProcessor.restoreBaseline(group, 'removed', undefined);
+            // live 12 kept, baseline max was 5 so maxDesired is raised to 12
+            assert.strictEqual(result.desiredCount, 12);
+            assert.strictEqual(result.maxDesired, 12);
+        });
+    });
+
     describe('processScheduledScalingByGroup', () => {
         let context;
         const groupName = 'test-group';
@@ -933,6 +980,51 @@ describe('ScheduledScalingProcessor', () => {
             const warnCalls = context.logger.warn.mock.calls;
             const zeroWarning = warnCalls.find((call) => call.arguments[0].includes('desiredCount=0'));
             assert.ok(zeroWarning, 'Expected a warning log about desiredCount=0');
+        });
+
+        test('disabled config with stranded baseline restores and clears', async () => {
+            context = initContext();
+            // Schedule was disabled while 'always-peak' was active but the baseline was never restored.
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                scalingOptions: { ...currentScalingOptions, minDesired: 10, maxDesired: 20, desiredCount: 12 },
+                scheduledScaling: { enabled: false, periods: [alwaysPeakPeriod] },
+                scheduledScalingActivePeriod: 'always-peak',
+                scheduledScalingBaseOptions: { ...currentScalingOptions },
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, true);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
+            const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
+            // always-peak explicitly set desiredCount, so the baseline desiredCount is restored.
+            assert.deepStrictEqual(updatedGroup.scalingOptions, currentScalingOptions);
+            assert.strictEqual(updatedGroup.scheduledScalingActivePeriod, undefined);
+            assert.strictEqual(updatedGroup.scheduledScalingBaseOptions, undefined);
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 1);
+            assert.strictEqual(lockRelease.mock.calls.length, 1);
+        });
+
+        test('missing baseline clears activePeriod', async () => {
+            context = initContext();
+            // Active period marker exists, no period is active now, and there is no baseline.
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => ({
+                name: groupName,
+                region: 'us-ashburn-1',
+                scalingOptions: { ...currentScalingOptions },
+                scheduledScaling: { enabled: true, periods: [] },
+                scheduledScalingActivePeriod: 'gone-period',
+            }));
+
+            const result = await processor.processScheduledScalingByGroup(context, groupName);
+            assert.strictEqual(result, false);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
+            const updatedGroup = instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1];
+            assert.strictEqual(updatedGroup.scheduledScalingActivePeriod, undefined);
+            // Scaling options untouched
+            assert.deepStrictEqual(updatedGroup.scalingOptions, currentScalingOptions);
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
         });
 
         test('returns false and does not call audit on lock failure', async () => {

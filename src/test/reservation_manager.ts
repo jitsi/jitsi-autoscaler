@@ -4,7 +4,7 @@
 import assert from 'node:assert';
 import test, { afterEach, describe, mock } from 'node:test';
 
-import ReservationManager from '../reservation_manager';
+import ReservationManager, { ReservationNotExtendableError } from '../reservation_manager';
 import { ReservationStatus } from '../reservation';
 
 describe('ReservationManager', () => {
@@ -103,13 +103,22 @@ describe('ReservationManager', () => {
             assert.strictEqual(result, null);
         });
 
-        test('lazily expires a past-due reservation', async () => {
+        test('lazily expires a past-due reservation and sets scale-down grace', async () => {
+            mockReservationStore.setScaleDownGrace.mock.resetCalls();
             const reservation = await manager.createReservation(context, 'grid-group', 1, 10, 2, 1);
             // Manually set expiresAt to the past
             savedReservations[reservation.id].expiresAt = Date.now() - 1000;
 
             const result = await manager.getReservation(context, reservation.id);
             assert.strictEqual(result.status, ReservationStatus.Expired);
+            assert.strictEqual(savedReservations[reservation.id].status, ReservationStatus.Expired, 'persisted');
+            // Lazy expiry must arm the same scale-down grace as the periodic sweep, or the freed nodes
+            // could be scaled down the instant a client observes the expiry.
+            assert.strictEqual(mockReservationStore.setScaleDownGrace.mock.calls.length, 1);
+            assert.deepStrictEqual(mockReservationStore.setScaleDownGrace.mock.calls[0].arguments.slice(1), [
+                'grid-group',
+                300,
+            ]);
         });
 
         test('returns a terminal reservation as-is without re-expiring', async () => {
@@ -130,12 +139,14 @@ describe('ReservationManager', () => {
         });
 
         test('holds a past-due reservation indefinitely when processing is disabled', async () => {
+            mockReservationStore.setScaleDownGrace.mock.resetCalls();
             const reservation = await manager.createReservation(context, 'grid-group', 1, 10, 2, 1);
             // Past-due, but the owning group has autoscaling off ("take and hold" mode).
             savedReservations[reservation.id].expiresAt = Date.now() - 1000;
 
             const result = await manager.getReservation(context, reservation.id, false);
             assert.strictEqual(result.status, ReservationStatus.Active);
+            assert.strictEqual(mockReservationStore.setScaleDownGrace.mock.calls.length, 0);
         });
     });
 
@@ -143,27 +154,43 @@ describe('ReservationManager', () => {
         test('extends TTL of an active reservation', async () => {
             const reservation = await manager.createReservation(context, 'grid-group', 1, 10, 2);
             const before = Date.now();
-            const extended = await manager.extendReservation(context, reservation.id, 7200);
+            const extended = await manager.extendReservation(context, 'grid-group', reservation.id, 7200);
             assert.ok(extended.expiresAt >= before + 7200 * 1000);
+            assert.strictEqual(savedReservations[reservation.id].expiresAt, extended.expiresAt, 'persisted');
         });
 
-        test('returns null for cancelled reservation', async () => {
+        test('throws ReservationNotExtendableError for a cancelled reservation', async () => {
             const reservation = await manager.createReservation(context, 'grid-group', 1, 10, 2);
             await manager.cancelReservation(context, reservation.id);
-            const result = await manager.extendReservation(context, reservation.id, 3600);
-            assert.strictEqual(result, null);
+            await assert.rejects(
+                () => manager.extendReservation(context, 'grid-group', reservation.id, 3600),
+                (err) => err instanceof ReservationNotExtendableError && err.reservation.id === reservation.id,
+            );
         });
 
-        test('returns null for expired reservation', async () => {
+        test('throws ReservationNotExtendableError for an expired reservation', async () => {
             const reservation = await manager.createReservation(context, 'grid-group', 1, 10, 2);
             savedReservations[reservation.id].status = ReservationStatus.Expired;
-            const result = await manager.extendReservation(context, reservation.id, 3600);
-            assert.strictEqual(result, null);
+            await assert.rejects(
+                () => manager.extendReservation(context, 'grid-group', reservation.id, 3600),
+                ReservationNotExtendableError,
+            );
         });
 
         test('returns null for non-existent reservation', async () => {
-            const result = await manager.extendReservation(context, 'nonexistent', 3600);
+            const result = await manager.extendReservation(context, 'grid-group', 'nonexistent', 3600);
             assert.strictEqual(result, null);
+        });
+
+        test('returns null and writes nothing when the reservation belongs to another group', async () => {
+            const reservation = await manager.createReservation(context, 'grid-group', 1, 10, 2);
+            const originalExpiresAt = savedReservations[reservation.id].expiresAt;
+            mockReservationStore.saveReservation.mock.resetCalls();
+
+            const result = await manager.extendReservation(context, 'other-group', reservation.id, 7200);
+            assert.strictEqual(result, null);
+            assert.strictEqual(mockReservationStore.saveReservation.mock.calls.length, 0, 'must not save');
+            assert.strictEqual(savedReservations[reservation.id].expiresAt, originalExpiresAt, 'unchanged');
         });
     });
 
@@ -441,6 +468,47 @@ describe('ReservationManager', () => {
             await manager.checkAndFulfillReservations(context, 'grid-group', 5, 0);
             assert.strictEqual(savedReservations[r.id].status, ReservationStatus.Fulfilled);
             assert.strictEqual(savedReservations[r.id].fulfilledAt, firstFulfilledAt);
+        });
+
+        test('Fulfilled + Active mix: nodes held by fulfilled reservations count against active ones', async () => {
+            // r1 (3 nodes) is fulfilled with 3 instances running; r2 (2 nodes) arrives later.
+            const r1 = await manager.createReservation(context, 'grid-group', 3, 20, 0);
+            const r2 = await manager.createReservation(context, 'grid-group', 2, 20, 0);
+            savedReservations[r1.id].createdAt = 1000;
+            savedReservations[r2.id].createdAt = 2000;
+            await manager.checkAndFulfillReservations(context, 'grid-group', 3, 0);
+            assert.strictEqual(savedReservations[r1.id].status, ReservationStatus.Fulfilled);
+            assert.strictEqual(savedReservations[r2.id].status, ReservationStatus.Active);
+
+            // Still only 3 instances (r1's): r2 must NOT be fulfilled -- its 2 nodes do not exist yet.
+            await manager.checkAndFulfillReservations(context, 'grid-group', 3, 0);
+            assert.strictEqual(savedReservations[r2.id].status, ReservationStatus.Active);
+
+            // 4 instances: still short (need 3 + 2 = 5).
+            await manager.checkAndFulfillReservations(context, 'grid-group', 4, 0);
+            assert.strictEqual(savedReservations[r2.id].status, ReservationStatus.Active);
+
+            // 5 instances covers both.
+            await manager.checkAndFulfillReservations(context, 'grid-group', 5, 0);
+            assert.strictEqual(savedReservations[r2.id].status, ReservationStatus.Fulfilled);
+            assert.strictEqual(savedReservations[r1.id].status, ReservationStatus.Fulfilled);
+        });
+
+        test('Fulfilled + Active mix: a promoted (older) active reservation still waits for fulfilled capacity', async () => {
+            // older reservation was pending and got promoted after a newer one was already fulfilled
+            const older = await manager.createReservation(context, 'grid-group', 3, 20, 0);
+            const newer = await manager.createReservation(context, 'grid-group', 2, 20, 0);
+            savedReservations[older.id].createdAt = 1000;
+            savedReservations[newer.id].createdAt = 2000;
+            savedReservations[newer.id].status = ReservationStatus.Fulfilled;
+            savedReservations[newer.id].fulfilledAt = Date.now();
+
+            // 3 instances: 2 are occupied by `newer`; `older` needs 3 more -> 5 total.
+            await manager.checkAndFulfillReservations(context, 'grid-group', 3, 0);
+            assert.strictEqual(savedReservations[older.id].status, ReservationStatus.Active);
+
+            await manager.checkAndFulfillReservations(context, 'grid-group', 5, 0);
+            assert.strictEqual(savedReservations[older.id].status, ReservationStatus.Fulfilled);
         });
     });
 

@@ -21,8 +21,25 @@ export class MockRedisClient {
         this.data.set(key, value);
         if (expiryMode === 'EX' && time) {
             this.ttls.set(key, Date.now() + time * 1000);
+        } else {
+            // Redis semantics: a plain SET discards any TTL previously associated with the key.
+            this.ttls.delete(key);
         }
         return 'OK';
+    }
+
+    // Redis TTL semantics: -2 when the key does not exist, -1 when it exists without an expiry,
+    // otherwise the remaining time to live in (rounded-up) seconds.
+    async ttl(key: string): Promise<number> {
+        this.checkTTL(key);
+        const exists = this.data.has(key) || this.hashes.has(key) || this.sets.has(key) || this.sortedSets.has(key);
+        if (!exists) {
+            return -2;
+        }
+        if (!this.ttls.has(key)) {
+            return -1;
+        }
+        return Math.max(0, Math.ceil((this.ttls.get(key)! - Date.now()) / 1000));
     }
 
     async del(key: string): Promise<number> {
@@ -50,6 +67,16 @@ export class MockRedisClient {
     async expire(key: string, seconds: number): Promise<number> {
         if (this.data.has(key) || this.hashes.has(key) || this.sets.has(key) || this.sortedSets.has(key)) {
             this.ttls.set(key, Date.now() + seconds * 1000);
+            return 1;
+        }
+        return 0;
+    }
+
+    // Redis PERSIST semantics: 1 when a TTL was removed, 0 when the key does not exist or has no TTL.
+    async persist(key: string): Promise<number> {
+        this.checkTTL(key);
+        if (this.ttls.has(key)) {
+            this.ttls.delete(key);
             return 1;
         }
         return 0;
@@ -154,6 +181,42 @@ export class MockRedisClient {
         const values = filteredKeys.flatMap((key) => [key, this.hashes.get(hash)!.get(key)]);
 
         return Promise.resolve(['0', values.filter((v) => v !== undefined)]); // Return cursor '0' to indicate completion
+    }
+
+    // Set operations
+    async sadd(key: string, ...members: string[]): Promise<number> {
+        if (!this.sets.has(key)) {
+            this.sets.set(key, new Set());
+        }
+        let added = 0;
+        for (const member of members) {
+            if (!this.sets.get(key)!.has(member)) {
+                this.sets.get(key)!.add(member);
+                added++;
+            }
+        }
+        return added;
+    }
+
+    async smembers(key: string): Promise<string[]> {
+        this.checkTTL(key);
+        if (!this.sets.has(key)) {
+            return [];
+        }
+        return Array.from(this.sets.get(key)!);
+    }
+
+    async srem(key: string, ...members: string[]): Promise<number> {
+        if (!this.sets.has(key)) {
+            return 0;
+        }
+        let removed = 0;
+        for (const member of members) {
+            if (this.sets.get(key)!.delete(member)) {
+                removed++;
+            }
+        }
+        return removed;
     }
 
     // Sorted set operations
@@ -283,8 +346,6 @@ export class MockRedisPipeline {
     private commands: Array<{
         command: string;
         args: any[];
-        resolve: (result: any) => void;
-        reject: (error: Error) => void;
     }> = [];
 
     private redisClient: MockRedisClient;
@@ -293,26 +354,52 @@ export class MockRedisPipeline {
         this.redisClient = redisClient;
     }
 
-    // Key operations
-    get(key: string) {
+    // Key operations - chainable like ioredis pipelines
+    get(key: string): this {
         return this.addCommand('get', [key]);
     }
 
-    set(key: string, value: string, expiryMode?: string, time?: number) {
+    set(key: string, value: string, expiryMode?: string, time?: number): this {
         return this.addCommand('set', [key, value, expiryMode, time]);
     }
 
+    del(key: string): this {
+        return this.addCommand('del', [key]);
+    }
+
     // Hash operations
-    hget(hash: string, field: string) {
+    hget(hash: string, field: string): this {
         return this.addCommand('hget', [hash, field]);
     }
 
-    hset(hash: string, field: string, value: string) {
+    hset(hash: string, field: string, value: string): this {
         return this.addCommand('hset', [hash, field, value]);
     }
 
-    hdel(hash: string, field: string) {
+    hdel(hash: string, field: string): this {
         return this.addCommand('hdel', [hash, field]);
+    }
+
+    expire(key: string, seconds: number): this {
+        return this.addCommand('expire', [key, seconds]);
+    }
+
+    persist(key: string): this {
+        return this.addCommand('persist', [key]);
+    }
+
+    // Set operations
+    sadd(key: string, ...members: string[]): this {
+        return this.addCommand('sadd', [key, ...members]);
+    }
+
+    srem(key: string, ...members: string[]): this {
+        return this.addCommand('srem', [key, ...members]);
+    }
+
+    // Sorted set operations
+    zadd(key: string, score: number, member: string): this {
+        return this.addCommand('zadd', [key, score, member]);
     }
 
     // Execute all commands in the pipeline
@@ -329,6 +416,9 @@ export class MockRedisPipeline {
                     case 'set':
                         result = await this.redisClient.set(cmd.args[0], cmd.args[1], cmd.args[2], cmd.args[3]);
                         break;
+                    case 'del':
+                        result = await this.redisClient.del(cmd.args[0]);
+                        break;
                     case 'hget':
                         result = await this.redisClient.hget(cmd.args[0], cmd.args[1]);
                         break;
@@ -338,14 +428,27 @@ export class MockRedisPipeline {
                     case 'hdel':
                         result = await this.redisClient.hdel(cmd.args[0], cmd.args[1]);
                         break;
+                    case 'expire':
+                        result = await this.redisClient.expire(cmd.args[0], cmd.args[1]);
+                        break;
+                    case 'persist':
+                        result = await this.redisClient.persist(cmd.args[0]);
+                        break;
+                    case 'sadd':
+                        result = await this.redisClient.sadd(cmd.args[0], ...cmd.args.slice(1));
+                        break;
+                    case 'srem':
+                        result = await this.redisClient.srem(cmd.args[0], ...cmd.args.slice(1));
+                        break;
+                    case 'zadd':
+                        result = await this.redisClient.zadd(cmd.args[0], cmd.args[1], cmd.args[2]);
+                        break;
                     default:
                         throw new Error(`Unsupported command: ${cmd.command}`);
                 }
                 results.push([null, result]);
-                cmd.resolve(result);
             } catch (error) {
                 results.push([error as Error, null]);
-                cmd.reject(error as Error);
             }
         }
 
@@ -355,9 +458,8 @@ export class MockRedisPipeline {
         return results;
     }
 
-    private addCommand(command: string, args: any[]) {
-        return new Promise<any>((resolve, reject) => {
-            this.commands.push({ command, args, resolve, reject });
-        });
+    private addCommand(command: string, args: any[]): this {
+        this.commands.push({ command, args });
+        return this;
     }
 }

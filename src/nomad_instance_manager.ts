@@ -6,6 +6,8 @@ import { InstanceGroup } from './instance_store';
 
 export interface NomadInstanceManagerOptions {
     isDryRun: boolean;
+    // per-request HTTP timeout for calls to the nomad API
+    cloudProviderRequestTimeoutMs?: number;
 }
 
 export default class NomadInstanceManager extends AbstractCloudInstanceManager {
@@ -15,7 +17,7 @@ export default class NomadInstanceManager extends AbstractCloudInstanceManager {
     constructor(options: NomadInstanceManagerOptions) {
         super();
         this.isDryRun = options.isDryRun;
-        this.nomadClient = new NomadClient();
+        this.nomadClient = new NomadClient({ requestTimeoutMs: options.cloudProviderRequestTimeoutMs });
     }
 
     private nomadJobFromGroup(group: InstanceGroup) {
@@ -37,14 +39,14 @@ export default class NomadInstanceManager extends AbstractCloudInstanceManager {
 
         const address = this.nomadAddressFromGroup(group);
 
-        ctx.logger.info(`[custom] Launching instance number ${index + 1} in group ${groupName} with properties`, {
+        ctx.logger.info(`[nomad] Launching instance number ${index + 1} in group ${groupName} with properties`, {
             groupName,
             displayName,
             jobName,
         });
 
         if (this.isDryRun) {
-            ctx.logger.info(`[custom] Dry run enabled, skipping the instance number ${index + 1} launch`);
+            ctx.logger.info(`[nomad] Dry run enabled, skipping the instance number ${index + 1} launch`);
             return true;
         }
         try {
@@ -54,7 +56,7 @@ export default class NomadInstanceManager extends AbstractCloudInstanceManager {
             const results = await this.nomadClient.dispatchJob(ctx, address, jobName, payload, meta);
 
             ctx.logger.info(
-                `[custom] Got launch response for instance number ${index + 1} in group ${groupName}: ${
+                `[nomad] Got launch response for instance number ${index + 1} in group ${groupName}: ${
                     results.DispatchedJobID
                 }`,
             );
@@ -62,7 +64,7 @@ export default class NomadInstanceManager extends AbstractCloudInstanceManager {
             return `${results.DispatchedJobID}`;
         } catch (err) {
             ctx.logger.error(
-                `[custom] Failed launching instance number ${index + 1} in group ${groupName} with err ${err}`,
+                `[nomad] Failed launching instance number ${index + 1} in group ${groupName} with err ${err}`,
                 { err },
             );
             return false;
@@ -92,16 +94,12 @@ export default class NomadInstanceManager extends AbstractCloudInstanceManager {
         switch (status) {
             case 'pending':
                 return 'PROVISIONING';
-                break;
             case 'running':
                 return 'RUNNING';
-                break;
             case 'stopped':
                 return 'SHUTDOWN';
-                break;
             case 'dead':
                 return 'SHUTDOWN';
-                break;
         }
         return 'Unknown';
     }

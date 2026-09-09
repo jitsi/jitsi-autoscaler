@@ -80,6 +80,10 @@ const env = cleanEnv(process.env, {
 
     CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_TIMEOUT_MS: num({ default: 60000 }),
     CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_FILE_PATH: str({ default: './scripts/custom-launch.sh' }),
+    // optional script that lists the instances of a group as JSON, see custom_instance_manager.ts
+    CUSTOM_CONFIGURATION_LIST_SCRIPT_FILE_PATH: str({ default: '' }),
+    // per-request HTTP timeout for cloud provider APIs (OCI, DigitalOcean, Nomad)
+    CLOUD_PROVIDER_REQUEST_TIMEOUT_MS: num({ default: 30000 }),
 
     SCHEDULED_SCALING_ENABLED: bool({ default: true }),
     SCHEDULED_SCALING_DEFAULT_TIMEZONE: str({ default: 'UTC' }),
@@ -89,7 +93,15 @@ const env = cleanEnv(process.env, {
     SELENIUM_GRID_FETCH_TIMEOUT_MS: num({ default: 5000 }),
 });
 
-const cloudProviders = env.CLOUD_PROVIDERS ? (env.CLOUD_PROVIDERS as string).split(',') : [env.CLOUD_PROVIDER];
+// split a delimited list env var, dropping surrounding whitespace and empty entries
+function splitList(value: string, separator = ','): string[] {
+    return value
+        .split(separator)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+}
+
+const cloudProviders = env.CLOUD_PROVIDERS ? splitList(env.CLOUD_PROVIDERS as string) : [env.CLOUD_PROVIDER];
 
 if (cloudProviders.includes('oracle')) {
     // ensure that oracle cloud envs are present
@@ -135,7 +147,7 @@ export default {
     AsapPubKeyTTL: env.ASAP_PUB_KEY_TTL,
     AsapPubKeyBaseUrl: env.ASAP_PUB_KEY_BASE_URL,
     AsapJwtAcceptedAud: env.ASAP_JWT_AUD,
-    AsapJwtAcceptedHookIss: env.ASAP_JWT_ACCEPTED_HOOK_ISS.split(','),
+    AsapJwtAcceptedHookIss: splitList(env.ASAP_JWT_ACCEPTED_HOOK_ISS),
     GroupList: groupList,
     InitialWaitForPooling: env.INITIAL_WAIT_FOR_POOLING_MS,
     DryRun: env.DRY_RUN,
@@ -182,10 +194,12 @@ export default {
 
     CustomConfigurationLaunchScriptTimeoutMs: env.CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_TIMEOUT_MS,
     CustomConfigurationLaunchScriptPath: env.CUSTOM_CONFIGURATION_LAUNCH_SCRIPT_FILE_PATH,
+    CustomConfigurationListScriptPath: env.CUSTOM_CONFIGURATION_LIST_SCRIPT_FILE_PATH,
+    CloudProviderRequestTimeoutMs: env.CLOUD_PROVIDER_REQUEST_TIMEOUT_MS,
 
     ReportExtCallMaxTimeInSeconds: env.REPORT_EXT_CALL_MAX_TIME_IN_SECONDS,
     ReportExtCallMaxDelayInSeconds: env.REPORT_EXT_CALL_MAX_DELAY_IN_SECONDS,
-    ReportExtCallRetryableStatusCodes: env.REPORT_EXT_CALL_RETRYABLE_STATUS_CODES.split(' ').map(
+    ReportExtCallRetryableStatusCodes: splitList(env.REPORT_EXT_CALL_RETRYABLE_STATUS_CODES, ' ').map(
         (statusCodeAsString) => {
             return Number(statusCodeAsString);
         },

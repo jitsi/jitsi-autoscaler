@@ -7,6 +7,8 @@ import test, { afterEach, describe, mock } from 'node:test';
 import { mockStore } from './mock_store';
 
 import ShutdownManager from '../shutdown_manager';
+import RedisStore from '../redis';
+import { MockRedisClient } from './mock-redis-client';
 
 describe('ShutdownManager', () => {
     let context = {
@@ -60,16 +62,38 @@ describe('ShutdownManager', () => {
     // these tests are for the shutdown confirmation statuses
     describe('shutdownConfirmationStatuses', () => {
         test('read non-existent shutdown confirmation status', async () => {
-            const result = await shutdownManager.getShutdownConfirmation(context, 'instanceId');
+            const result = await shutdownManager.getShutdownConfirmation(context, 'group', 'instanceId');
             assert.equal(result, false, 'expect no shutdown confirmation when no key exists');
         });
 
         test('read existing shutdown confirmation status', async () => {
             const shutdownConfirmation = new Date().toISOString();
             mockStore.getShutdownConfirmation.mock.mockImplementationOnce(() => shutdownConfirmation);
-            const result = await shutdownManager.getShutdownConfirmation(context, 'instanceId');
+            const result = await shutdownManager.getShutdownConfirmation(context, 'group', 'instanceId');
             assert.ok(result, 'expect ok result');
             assert.equal(result, shutdownConfirmation, 'expect shutdown confirmation to match mock date');
+        });
+
+        // R2: ShutdownManager forwards (ctx, group, instanceId); RedisStore must read the instance id,
+        // not the group name, or it always returns false.
+        test('getShutdownConfirmation reads the instance id against a RedisStore', async () => {
+            const mockRedisClient = new MockRedisClient();
+            const redisStore = new RedisStore({
+                redisClient: mockRedisClient,
+                redisScanCount: 100,
+                idleTTL: 60,
+                metricTTL: 60,
+                provisioningTTL: 60,
+                shutdownStatusTTL: 60,
+                groupRelatedDataTTL: 60,
+                serviceLevelMetricsTTL: 60,
+            });
+            const confirmation = new Date().toISOString();
+            await mockRedisClient.set('instance:shutdownConfirmed:instance', confirmation, 'EX', 60);
+
+            const redisShutdownManager = new ShutdownManager({ instanceStore: redisStore, audit, shutdownTTL: 60 });
+            const result = await redisShutdownManager.getShutdownConfirmation(context, 'group', 'instance');
+            assert.equal(result, confirmation, 'expect confirmation to be found by instance id');
         });
 
         test('read multiple non-existent shutdown confirmation statuses', async () => {

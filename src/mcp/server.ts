@@ -1,3 +1,4 @@
+import '../polyfills';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import config from './config';
@@ -7,7 +8,11 @@ import { registerResources } from './resources';
 import { registerPrompts } from './prompts';
 
 async function main(): Promise<void> {
-    const client = new AutoscalerApiClient(config.MCP_AUTOSCALER_BASE_URL, config.MCP_AUTH_TOKEN);
+    const client = new AutoscalerApiClient(
+        config.MCP_AUTOSCALER_BASE_URL,
+        config.MCP_AUTH_TOKEN,
+        config.MCP_REQUEST_TIMEOUT_MS,
+    );
 
     const server = new McpServer({
         name: 'jitsi-autoscaler',

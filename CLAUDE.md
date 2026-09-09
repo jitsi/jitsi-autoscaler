@@ -16,7 +16,7 @@ npm start            # Run compiled app from dist/app.js
 
 **Run a single test file:**
 ```bash
-npx ts-node -r ts-node/register src/test/<filename>.ts
+node --test --require ./src/test/setup.js --require ts-node/register src/test/<filename>.ts
 ```
 
 ## Architecture Overview
@@ -74,7 +74,7 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json` or project `.cla
   "mcpServers": {
     "jitsi-autoscaler": {
       "command": "node",
-      "args": ["-r", "./src/polyfills.js", "dist/mcp/server.js"],
+      "args": ["dist/mcp/server.js"],
       "cwd": "/path/to/jitsi-autoscaler",
       "env": {
         "MCP_AUTOSCALER_BASE_URL": "http://localhost:3000",
@@ -102,6 +102,11 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json` or project `.cla
 | `update_scheduled_scaling` | Update scaling overrides of an existing scheduled period |
 | `remove_scheduled_scaling_period` | Remove a scheduled scaling period by name |
 | `delete_group` | Delete an instance group |
+| `create_reservation` | Reserve grid capacity for a job on a selenium-grid group (active if it fits under maxDesired, otherwise pending/queued) |
+| `list_reservations` | List reservations for a selenium-grid group, optionally filtered by status; pending ones include place in line |
+| `get_reservation` | Get a single reservation by id, including status and (if pending) place in line |
+| `extend_reservation` | Extend a non-terminal reservation by setting a new TTL from now |
+| `cancel_reservation` | Cancel (release) a reservation, freeing its grid capacity |
 
 ### Available Prompts
 
@@ -119,5 +124,5 @@ The MCP server (`src/mcp/server.ts`) is a separate process that communicates wit
 - **Testing**: Node.js native `test` module (`node:test` + `node:assert`). Tests in `src/test/`. Mock Redis via `src/test/mock-redis-client.ts`, mock stores via `src/test/mock_store.ts`
 - **Dependency injection**: All major classes take an options object in constructor
 - **Context pattern**: `Context` object (logger + request ID) threaded through all async operations
-- **Node.js >=20** required
+- **Node.js >=20** required; CI runs 22, 24 and 26, and the Docker image and `.nvmrc` use Node 26. `src/polyfills.ts` (imported first by `app.ts` and `mcp/server.ts`) shims `SlowBuffer`, which Node >= 25 removed and `jsonwebtoken` still needs transitively; `src/test/setup.js` does the same for the test runner
 - The MCP SDK's zod type inference is memory-intensive; CI build requires `NODE_OPTIONS=--max-old-space-size=8192`

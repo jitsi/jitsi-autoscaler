@@ -107,7 +107,7 @@ export default class GroupReportGenerator {
             cloudInstances = await this.metricsLoop.getCloudInstances(group.name);
         }
 
-        this.getInstanceReportsMap(group, instanceStates, cloudInstances).forEach((instanceReport) => {
+        this.getInstanceReportsMap(ctx, group, instanceStates, cloudInstances).forEach((instanceReport) => {
             groupReport.instances.push(instanceReport);
         });
 
@@ -167,6 +167,11 @@ export default class GroupReportGenerator {
                 case 'selenium-grid':
                     // @TODO: implement JVB instance counting
                     break;
+                default:
+                    ctx.logger.error(`Unsupported group type ${group.type} while counting instances`, {
+                        group: groupName,
+                    });
+                    break;
             }
         });
 
@@ -183,6 +188,7 @@ export default class GroupReportGenerator {
     }
 
     private getInstanceReportsMap(
+        ctx: Context,
         group: InstanceGroup,
         instanceStates: InstanceState[],
         cloudInstances: CloudInstance[],
@@ -258,6 +264,12 @@ export default class GroupReportGenerator {
                                 instanceReport.scaleStatus = 'GRACEFUL SHUTDOWN';
                             }
                         }
+                        break;
+                    default:
+                        ctx.logger.error(`Unsupported group type ${group.type} while building instance report`, {
+                            group: group.name,
+                            instanceId: instanceState.instanceId,
+                        });
                         break;
                 }
             }

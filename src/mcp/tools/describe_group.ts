@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AutoscalerApiClient } from '../api_client';
+import { READ_ONLY } from './annotations';
 
 export function registerDescribeGroup(server: McpServer, client: AutoscalerApiClient): void {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -9,14 +10,12 @@ export function registerDescribeGroup(server: McpServer, client: AutoscalerApiCl
         'describe_group',
         'Get detailed configuration of a specific autoscaler instance group, including scaling options, feature flags, tags, and scheduled scaling.',
         {
-            base_url: z.string().optional().describe('Override the default autoscaler base URL for this request'),
-            auth_token: z.string().optional().describe('Override the default auth token for this request'),
             name: z.string().describe('The name of the instance group'),
         },
-        async ({ base_url, auth_token, name }) => {
+        READ_ONLY,
+        async ({ name }) => {
             try {
-                const c = client.withOverrides(base_url, auth_token);
-                const group = await c.getGroup(name);
+                const group = await client.getGroup(name);
                 if (!group) {
                     return {
                         content: [{ type: 'text', text: `Group '${name}' not found.` }],
@@ -24,7 +23,7 @@ export function registerDescribeGroup(server: McpServer, client: AutoscalerApiCl
                     };
                 }
 
-                const scheduledScaling = await c.getScheduledScaling(name).catch((): null => null);
+                const scheduledScaling = await client.getScheduledScaling(name).catch((): null => null);
 
                 const lines: string[] = [
                     `# Group: ${group.name}`,

@@ -627,9 +627,14 @@ export default class RedisStore implements MetricsStore, InstanceStore, Reservat
             // grace; a held ("take and hold") reservation is never re-saved and must not be evicted.
             pipeline.set(key, value);
         }
+        // The per-group id set must not expire either: on a group with autoscaling off nothing re-saves the
+        // reservation, and an evicted set would make listReservations return [] and deleteInstanceGroup unable to
+        // find (and delete) the reservation keys. It is removed by deleteInstanceGroup and pruned by
+        // listReservations, matching the Consul store which has no TTL. PERSIST clears the TTL armed by
+        // earlier releases on already-deployed sets.
         pipeline
             .sadd(this.reservationGroupSetKey(reservation.groupName), reservation.id)
-            .expire(this.reservationGroupSetKey(reservation.groupName), this.groupRelatedDataTTL);
+            .persist(this.reservationGroupSetKey(reservation.groupName));
         await this.execPipelineOrThrow(ctx, pipeline, 'saveReservation', {
             reservationId: reservation.id,
             groupName: reservation.groupName,

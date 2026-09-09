@@ -209,12 +209,28 @@ export default class AutoscaleProcessor {
             Math.max(group.scalingOptions.scaleUpPeriodsCount, group.scalingOptions.scaleDownPeriodsCount),
         );
         // A NaN period means no metrics were recorded for that period (see InstanceTracker.computeSummaryMetric).
-        // Treat that as "no metrics available" and skip the cycle rather than acting on an implicit 0,
-        // which would otherwise drain stress groups to minDesired or push availability groups to maxDesired.
-        const hasMissingPeriods = scaleMetrics?.some((value) => !Number.isFinite(value)) ?? false;
-        if (scaleMetrics && scaleMetrics.length > 0 && !hasMissingPeriods) {
+        // Never act on an implicit 0 for such a period: that would drain stress groups to minDesired or push
+        // availability groups to maxDesired. When every period is missing, skip the cycle entirely. Otherwise
+        // check finiteness per direction on the slice that direction actually evaluates (the newest
+        // scaleUpPeriodsCount / scaleDownPeriodsCount periods, see evalScaleConditionForAllPeriods), so a gap
+        // in an old period (cold start, one-period hole) only blocks the direction whose window contains it.
+        const allPeriodsMissing = scaleMetrics?.every((value) => !Number.isFinite(value)) ?? true;
+        if (scaleMetrics && scaleMetrics.length > 0 && !allPeriodsMissing) {
+            const canEvaluate = (direction: 'up' | 'down', periodsCount: number): boolean => {
+                if (scaleMetrics.slice(0, periodsCount).every((value) => Number.isFinite(value))) {
+                    return true;
+                }
+                ctx.logger.warn(
+                    `[AutoScaler] Missing metrics in scale ${direction} periods for group ${group.name} with ${count} instances, skipping scale ${direction} evaluation`,
+                    { scaleMetrics, periodsCount },
+                );
+                return false;
+            };
+            const canScaleUp = canEvaluate('up', group.scalingOptions.scaleUpPeriodsCount);
+            const canScaleDown = canEvaluate('down', group.scalingOptions.scaleDownPeriodsCount);
+
             // check if we should scale up the group
-            if (this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'up')) {
+            if (canScaleUp && this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'up')) {
                 desiredCount = desiredCount + group.scalingOptions.scaleUpQuantity;
                 if (desiredCount > group.scalingOptions.maxDesired) {
                     desiredCount = group.scalingOptions.maxDesired;
@@ -237,6 +253,7 @@ export default class AutoscaleProcessor {
                 await this.updateDesiredCount(ctx, desiredCount, group);
                 await this.instanceGroupManager.setAutoScaleGracePeriod(ctx, group);
             } else if (
+                canScaleDown &&
                 !this.isScaleDownInhibited(group) &&
                 this.evalScaleConditionForAllPeriods(ctx, scaleMetrics, count, group, 'down')
             ) {

@@ -411,6 +411,52 @@ describe('RedisStore with Mock Redis Client', () => {
         assert.deepStrictEqual(await mockRedisClient.smembers('reservations:group:group'), ['res-live']);
     });
 
+    // The per-group reservation id set must not expire: a held ("take and hold") reservation on a group with
+    // autoscaling off is never re-saved, so an expiring set would make listReservations return [] and
+    // deleteInstanceGroup unable to find (and delete) the reservation keys, while getReservation still finds them.
+    test('saveReservation leaves the reservation group id set without a TTL', async () => {
+        const group = 'held-group';
+        await redisStore.saveReservation(context, {
+            id: 'res-held',
+            groupName: group,
+            status: 'active',
+            expiresAt: Date.now() + 60 * 1000,
+        });
+
+        assert.deepStrictEqual(await mockRedisClient.smembers('reservations:group:' + group), ['res-held']);
+        assert.strictEqual(
+            await mockRedisClient.ttl('reservations:group:' + group),
+            -1,
+            'expect the reservation group set to have no TTL',
+        );
+        assert.strictEqual(await mockRedisClient.ttl('reservation:res-held'), -1, 'non-terminal key has no TTL');
+    });
+
+    test('saveReservation clears a TTL previously armed on the reservation group id set', async () => {
+        const group = 'deployed-group';
+        // simulate a set written by a previous release which armed groupRelatedDataTTL on it
+        await mockRedisClient.sadd('reservations:group:' + group, 'res-old');
+        await mockRedisClient.expire('reservations:group:' + group, 60);
+        assert.ok((await mockRedisClient.ttl('reservations:group:' + group)) > 0, 'precondition: set has a TTL');
+
+        await redisStore.saveReservation(context, {
+            id: 'res-new',
+            groupName: group,
+            status: 'active',
+            expiresAt: Date.now() + 60 * 1000,
+        });
+
+        assert.strictEqual(
+            await mockRedisClient.ttl('reservations:group:' + group),
+            -1,
+            'expect the previously armed TTL to be cleared',
+        );
+        assert.deepStrictEqual((await mockRedisClient.smembers('reservations:group:' + group)).sort(), [
+            'res-new',
+            'res-old',
+        ]);
+    });
+
     // R5: deleting a group must remove reservation keys too
     test('deleteInstanceGroup removes reservation keys', async () => {
         const group = 'test-group';

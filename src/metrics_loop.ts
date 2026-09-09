@@ -97,8 +97,12 @@ export default class MetricsLoop {
         try {
             const instanceGroups: InstanceGroup[] = await this.instanceGroupManager.getAllInstanceGroups(this.ctx);
             this.updateGroupLabelsAndFixMetrics(instanceGroups);
+            // Set outside the per-group fan-out so the gauge drops to 0 once the last group is deleted.
+            groupsManaged.set(instanceGroups.length);
 
-            await Promise.all(
+            // allSettled: one group's failure must neither abort the cycle for its siblings nor hide their
+            // failures; each rejection is reported on its own, naming the group.
+            const results = await Promise.allSettled(
                 instanceGroups.map(async (group) => {
                     this.ctx.logger.debug(`Will update metrics for group ${group.name}`);
                     const start = process.hrtime();
@@ -106,7 +110,6 @@ export default class MetricsLoop {
                     groupDesired.set({ group: group.name }, group.scalingOptions.desiredCount);
                     groupMin.set({ group: group.name }, group.scalingOptions.minDesired);
                     groupMax.set({ group: group.name }, group.scalingOptions.maxDesired);
-                    groupsManaged.set(instanceGroups.length);
 
                     const currentInventory = await this.instanceTracker.trimCurrent(this.ctx, group.name);
                     instancesCount.set({ group: group.name }, currentInventory.length);
@@ -130,6 +133,15 @@ export default class MetricsLoop {
                     );
                 }),
             );
+            results.forEach((result, i) => {
+                if (result.status === 'rejected') {
+                    const group = instanceGroups[i].name;
+                    this.ctx.logger.warn(
+                        `[MetricsLoop] Error updating in memory metrics for group ${group} ${result.reason}`,
+                        { err: result.reason, group },
+                    );
+                }
+            });
         } catch (err) {
             this.ctx.logger.warn(`[MetricsLoop] Error updating in memory metrics ${err}`, { err });
             return;

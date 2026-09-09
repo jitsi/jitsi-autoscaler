@@ -72,6 +72,16 @@ export class MockRedisClient {
         return 0;
     }
 
+    // Redis PERSIST semantics: 1 when a TTL was removed, 0 when the key does not exist or has no TTL.
+    async persist(key: string): Promise<number> {
+        this.checkTTL(key);
+        if (this.ttls.has(key)) {
+            this.ttls.delete(key);
+            return 1;
+        }
+        return 0;
+    }
+
     // Hash operations
     async hset(hash: string, field: string, value: string): Promise<number> {
         if (!this.hashes.has(hash)) {
@@ -374,6 +384,10 @@ export class MockRedisPipeline {
         return this.addCommand('expire', [key, seconds]);
     }
 
+    persist(key: string): this {
+        return this.addCommand('persist', [key]);
+    }
+
     // Set operations
     sadd(key: string, ...members: string[]): this {
         return this.addCommand('sadd', [key, ...members]);
@@ -416,6 +430,9 @@ export class MockRedisPipeline {
                         break;
                     case 'expire':
                         result = await this.redisClient.expire(cmd.args[0], cmd.args[1]);
+                        break;
+                    case 'persist':
+                        result = await this.redisClient.persist(cmd.args[0]);
                         break;
                     case 'sadd':
                         result = await this.redisClient.sadd(cmd.args[0], ...cmd.args.slice(1));

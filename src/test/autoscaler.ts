@@ -1027,6 +1027,105 @@ describe('AutoscaleProcessor', () => {
             assert.strictEqual(result, true);
         });
 
+        test('will scale up when only the newest scaleUpPeriodsCount periods have metrics (cold start)', async () => {
+            // up=2, down=10: instances younger than the 10-period window leave the older periods empty (NaN).
+            // Scale-up only needs the newest 2 periods, so a NaN beyond them must not block it.
+            const group = {
+                ...groupDetails,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    maxDesired: 2,
+                    scaleUpThreshold: 0.8,
+                    scaleUpPeriodsCount: 2,
+                    scaleDownPeriodsCount: 10,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => group);
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{ instance_id: 'i-0a1b2c3d4e5f6g7h8' }]);
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => [
+                [{ value: 1, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+                [{ value: 1, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+                ...Array.from({ length: 8 }, () => []),
+            ]);
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 1);
+            assert.strictEqual(
+                audit.saveAutoScalerActionItem.mock.calls[0].arguments[1].actionType,
+                'increaseDesiredCount',
+            );
+            assert.deepStrictEqual(audit.saveAutoScalerActionItem.mock.calls[0].arguments[1].scaleMetrics, [1, 1]);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
+            assert.strictEqual(group.scalingOptions.desiredCount, 2);
+            assert.strictEqual(result, true);
+        });
+
+        test('will not scale up when a period inside the newest scaleUpPeriodsCount has no metrics', async () => {
+            const group = {
+                ...groupDetails,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    maxDesired: 2,
+                    scaleUpThreshold: 0.8,
+                    scaleUpPeriodsCount: 2,
+                    scaleDownPeriodsCount: 10,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => group);
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{ instance_id: 'i-0a1b2c3d4e5f6g7h8' }]);
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => [
+                [{ value: 1, instanceId: 'i-0a1b2c3d4e5f6g7h8' }],
+                [],
+                ...Array.from({ length: 8 }, () => [{ value: 1, instanceId: 'i-0a1b2c3d4e5f6g7h8' }]),
+            ]);
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+            assert.strictEqual(group.scalingOptions.desiredCount, 1);
+            assert.ok(
+                context.logger.warn.mock.calls.some((c) =>
+                    c.arguments[0].includes(`[AutoScaler] Missing metrics in scale up periods for group ${groupName}`),
+                ),
+                'expect a warn that the scale-up evaluation was skipped',
+            );
+            assert.strictEqual(result, true);
+        });
+
+        test('will not scale down when a period inside scaleDownPeriodsCount has no metrics', async () => {
+            // newest 2 periods (scale-up window) are finite but well below both thresholds; a gap at period 5
+            // sits inside the 10-period scale-down window and must block the scale-down.
+            const group = {
+                ...groupDetails,
+                scalingOptions: {
+                    ...groupDetails.scalingOptions,
+                    minDesired: 0,
+                    scaleDownThreshold: 2,
+                    scaleUpPeriodsCount: 2,
+                    scaleDownPeriodsCount: 10,
+                },
+            };
+            instanceGroupManager.getInstanceGroup.mock.mockImplementationOnce(() => group);
+            instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{ instance_id: 'i-0a1b2c3d4e5f6g7h8' }]);
+            const inventory = Array.from({ length: 10 }, () => [{ value: 0.1, instanceId: 'i-0a1b2c3d4e5f6g7h8' }]);
+            inventory[5] = [];
+            instanceTracker.getMetricInventoryPerPeriod.mock.mockImplementationOnce(() => inventory);
+            const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);
+
+            assert.strictEqual(audit.saveAutoScalerActionItem.mock.calls.length, 0);
+            assert.strictEqual(instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+            assert.strictEqual(group.scalingOptions.desiredCount, 1);
+            assert.ok(
+                context.logger.warn.mock.calls.some((c) =>
+                    c.arguments[0].includes(
+                        `[AutoScaler] Missing metrics in scale down periods for group ${groupName}`,
+                    ),
+                ),
+                'expect a warn that the scale-down evaluation was skipped',
+            );
+            assert.strictEqual(result, true);
+        });
+
         test('will not updated desired count if no changes are indicated based on metrics', async () => {
             instanceTracker.trimCurrent.mock.mockImplementationOnce(() => [{ instance_id: 'i-0a1b2c3d4e5f6g7h8' }]);
             const result = await autoscaleProcessor.processAutoscalingByGroup(context, groupName);

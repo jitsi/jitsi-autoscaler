@@ -241,26 +241,78 @@ describe('MetricsLoop', () => {
             assert.strictEqual(await gaugeValue('autoscaling_desired_count', mine), 1);
         });
 
-        test('a group whose inventory lookup rejects is caught and logged; updateMetrics resolves', async () => {
+        test('a group whose inventory lookup rejects is warned about by name and the other groups are still updated', async () => {
             const a = uniqueName('ok');
             const b = uniqueName('broken');
-            const h = makeHarness({ groups: [makeGroup(a), makeGroup(b)] });
+            const h = makeHarness({
+                groups: [makeGroup(b), makeGroup(a, { desiredCount: 4 })],
+                inventory: { [a]: [state('i-1'), state('i-2')] },
+                cloudInstances: { [a]: [{ instanceId: 'i-1', displayName: 'i-1', cloudStatus: 'RUNNING' }] },
+                untracked: { [a]: 3 },
+            });
             const failure = new Error('redis timeout');
             h.instanceTracker.trimCurrent.mock.mockImplementation(async (_ctx, groupName) => {
                 if (groupName === b) {
                     throw failure;
+                }
+                return [state('i-1'), state('i-2')];
+            });
+
+            await assert.doesNotReject(h.metricsLoop.updateMetrics());
+
+            // the sibling group's per-group gauges were still set despite the failure of the first group
+            assert.strictEqual(await gaugeValue('autoscaling_desired_count', a), 4);
+            assert.strictEqual(await gaugeValue('autoscaling_instance_count', a), 2);
+            assert.strictEqual(await gaugeValue('autoscaling_instance_running', a), 2);
+            assert.strictEqual(await gaugeValue('autoscaling_cloud_instance_count', a), 1);
+            assert.strictEqual(await gaugeValue('autoscaling_untracked_instance_count', a), 3);
+            assert.strictEqual(await plainGaugeValue('autoscaling_groups_managed'), 2);
+
+            // exactly one warn, naming the failing group, carrying the error
+            assert.strictEqual(h.ctx.logger.warn.mock.calls.length, 1);
+            const [message, meta] = h.ctx.logger.warn.mock.calls[0].arguments;
+            assert.ok(message.includes(b), `warn names the failing group: ${message}`);
+            assert.ok(message.includes('redis timeout'), `warn carries the error: ${message}`);
+            assert.ok(!message.includes(a), 'warn does not blame the healthy group');
+            assert.strictEqual(meta.err, failure);
+            assert.strictEqual(meta.group, b);
+            // the synchronous gauges for the broken group were still set before the rejection
+            assert.strictEqual(await gaugeValue('autoscaling_desired_count', b), 1);
+        });
+
+        test('each failing group gets its own warn; siblings are not hidden behind the first rejection', async () => {
+            const a = uniqueName('ok');
+            const b = uniqueName('broken');
+            const c = uniqueName('also-broken');
+            const h = makeHarness({ groups: [makeGroup(b), makeGroup(c), makeGroup(a)] });
+            h.instanceTracker.trimCurrent.mock.mockImplementation(async (_ctx, groupName) => {
+                if (groupName === b || groupName === c) {
+                    throw new Error(`boom ${groupName}`);
                 }
                 return [];
             });
 
             await assert.doesNotReject(h.metricsLoop.updateMetrics());
 
-            assert.strictEqual(h.ctx.logger.warn.mock.calls.length, 1);
-            const [message, meta] = h.ctx.logger.warn.mock.calls[0].arguments;
-            assert.ok(message.includes('[MetricsLoop] Error updating in memory metrics Error: redis timeout'));
-            assert.strictEqual(meta.err, failure);
-            // the synchronous gauges for the broken group were still set before the rejection
-            assert.strictEqual(await gaugeValue('autoscaling_desired_count', b), 1);
+            assert.strictEqual(h.ctx.logger.warn.mock.calls.length, 2);
+            const warned = h.ctx.logger.warn.mock.calls.map((call) => call.arguments[1].group).sort();
+            assert.deepStrictEqual(warned, [b, c].sort());
+            assert.strictEqual(await gaugeValue('autoscaling_instance_count', a), 0);
+        });
+
+        test('sets autoscaling_groups_managed to 0 when the last group has been deleted', async () => {
+            const a = uniqueName('last');
+            const groups = [makeGroup(a)];
+            const h = makeHarness({ groups });
+
+            await h.metricsLoop.updateMetrics();
+            assert.strictEqual(await plainGaugeValue('autoscaling_groups_managed'), 1);
+
+            h.instanceGroupManager.getAllInstanceGroups.mock.mockImplementation(async () => []);
+            await h.metricsLoop.updateMetrics();
+
+            assert.strictEqual(await plainGaugeValue('autoscaling_groups_managed'), 0);
+            assert.strictEqual(h.ctx.logger.warn.mock.calls.length, 0);
         });
 
         test('a rejected store read is caught and logged; updateMetrics resolves', async () => {
@@ -274,6 +326,7 @@ describe('MetricsLoop', () => {
 
             assert.strictEqual(h.ctx.logger.warn.mock.calls.length, 1);
             assert.ok(h.ctx.logger.warn.mock.calls[0].arguments[0].includes('prometheus unreachable'));
+            assert.ok(h.ctx.logger.warn.mock.calls[0].arguments[0].includes(a), 'warn names the failing group');
         });
 
         test('a failing group listing is caught and logged without touching any gauge', async () => {

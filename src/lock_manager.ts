@@ -32,9 +32,14 @@ export class ConsulLocker implements AutoscalerLock {
     private client: Consul;
     public session: string;
     public key: string;
-    private onRelease?: () => void;
+    // Reports whether this locker is still the tracked holder of its key (untracking it if so). Returns
+    // false when the manager force-released the key (releaseOverheldLocks) and this node has since
+    // re-acquired it: every lock on a node shares one Consul session, and Consul's `?release=<session>`
+    // succeeds whenever the key's session matches, so a KV release from the stale locker would strip the
+    // *current* holder's lock. Absent when a locker is constructed standalone (always releases).
+    private onRelease?: () => boolean;
 
-    constructor(client: Consul, session: string, key: string, onRelease?: () => void) {
+    constructor(client: Consul, session: string, key: string, onRelease?: () => boolean) {
         this.client = client;
         this.session = session;
         this.key = key;
@@ -44,7 +49,14 @@ export class ConsulLocker implements AutoscalerLock {
     // release() is called from finally blocks, so it must never throw or it would mask the original error.
     async release(ctx: Context): Promise<void> {
         ctx.logger.debug(`Releasing consul lock ${this.key}`, { key: this.key, session: this.session });
-        this.onRelease?.();
+        const isTrackedHolder = this.onRelease ? this.onRelease() : true;
+        if (!isTrackedHolder) {
+            ctx.logger.warn(
+                `Consul lock ${this.key} was already force-released; skipping KV release so the current holder keeps it`,
+                { key: this.key, session: this.session },
+            );
+            return;
+        }
         try {
             const res = await this.client.kv.set({ key: this.key, value: 'false', release: this.session });
             if (!res) {
@@ -100,9 +112,21 @@ export class ConsulLockManager implements AutoscalerLockManager {
     // Locks currently held by this node, keyed by lock key. Consul locks are backed by the renewed
     // session and would otherwise be held forever by a hung job; see releaseOverheldLocks.
     private heldLocks = new Map<string, HeldConsulLock>();
+    // Keys whose KV acquire is in flight on this node. Consul's acquire returns true when the key is already
+    // held by the *same* session, and every lock on this node shares one session, so two local callers
+    // (AUTOSCALE:G and LAUNCH:G, or a job and an HTTP handler) would both "acquire" the same group lock and
+    // run unprotected. heldLocks alone can't prevent that: two callers that both pass the check before either
+    // has tracked its lock would still race to KV. Reserving the key synchronously right before the KV call
+    // (and checking both maps at that instant) makes the local check atomic.
+    private acquiring = new Set<string>();
 
     private static readonly ACQUIRE_RETRY_COUNT = 3;
     private static readonly ACQUIRE_RETRY_DELAY_MS = 200;
+    // Consul rejects session.create outside this TTL range; see deriveSessionTTLSeconds.
+    private static readonly SESSION_TTL_MIN_SECONDS = 10;
+    private static readonly SESSION_TTL_MAX_SECONDS = 86400;
+    // Bounded fallback when no usable lock TTL is configured (unbounded sessions would stall a group forever).
+    private static readonly DEFAULT_SESSION_TTL_SECONDS = 90;
 
     constructor(options: ConsulLockManagerOptions) {
         this.consulClient = options.consulClient;
@@ -114,13 +138,38 @@ export class ConsulLockManager implements AutoscalerLockManager {
         this.jobCreationLockMaxHoldMs = options.jobCreationLockTTL > 0 ? options.jobCreationLockTTL : Infinity;
         // Derive the shared Consul session TTL from the configured lock TTLs. The session backs every
         // lock, so a crashed node holds its locks until the session TTL lapses; bounding it to the
-        // configured lock TTL keeps crash-stall in the same ballpark as the Redis TTLs. Consul enforces
-        // a 10s minimum session TTL.
+        // configured lock TTL keeps crash-stall in the same ballpark as the Redis TTLs. Consul only accepts
+        // session TTLs in [10s, 86400s]; an out-of-range value is clamped (with a warning) rather than passed
+        // through, because session.create would reject it and every lock call would then throw.
         const maxTTLMs = Math.max(options.groupLockTTLMs || 0, options.jobCreationLockTTL || 0);
-        const derivedSeconds = Math.ceil(maxTTLMs / 1000);
-        this.consulSessionTTLSeconds = Number.isFinite(derivedSeconds) && derivedSeconds >= 10 ? derivedSeconds : 90;
+        this.consulSessionTTLSeconds = this.deriveSessionTTLSeconds(maxTTLMs);
         // Renew at ~1/3 of the TTL so a single missed renewal doesn't expire the session.
         this.consulSessionRenewInterval = Math.max(5000, Math.floor((this.consulSessionTTLSeconds * 1000) / 3));
+    }
+
+    private deriveSessionTTLSeconds(maxTTLMs: number): number {
+        const derivedSeconds = Math.ceil(maxTTLMs / 1000);
+        if (!(derivedSeconds > 0)) {
+            // Nothing configured (or NaN): a deliberate default, not a misconfiguration, so no warning.
+            return ConsulLockManager.DEFAULT_SESSION_TTL_SECONDS;
+        }
+        if (derivedSeconds < ConsulLockManager.SESSION_TTL_MIN_SECONDS) {
+            this.logger?.warn(
+                `Configured lock TTL (${derivedSeconds}s) is below the Consul session minimum of ${ConsulLockManager.SESSION_TTL_MIN_SECONDS}s; using ${ConsulLockManager.DEFAULT_SESSION_TTL_SECONDS}s`,
+                { derivedSeconds, maxTTLMs },
+            );
+            return ConsulLockManager.DEFAULT_SESSION_TTL_SECONDS;
+        }
+        if (derivedSeconds > ConsulLockManager.SESSION_TTL_MAX_SECONDS) {
+            // Covers Infinity too. Locks are still bounded by their own maxHoldMs; only the crash-stall
+            // window (how long a dead node's locks linger) is capped here.
+            this.logger?.warn(
+                `Configured lock TTL (${derivedSeconds}s) exceeds the Consul session maximum of ${ConsulLockManager.SESSION_TTL_MAX_SECONDS}s; clamping`,
+                { derivedSeconds, maxTTLMs },
+            );
+            return ConsulLockManager.SESSION_TTL_MAX_SECONDS;
+        }
+        return derivedSeconds;
     }
 
     async initConsulSession(): Promise<string> {
@@ -209,13 +258,25 @@ export class ConsulLockManager implements AutoscalerLockManager {
                     failureCount: this.renewFailureCount,
                 });
                 this.scheduleRenew();
+                // The retries are keeping this session (and every lock under it) alive, so overheld locks must
+                // stay bounded through a partial outage too. Timer is already armed, so a slow sweep is harmless.
+                await this.releaseOverheldLocks();
                 return false;
             }
             // Give up, but do NOT destroy: a client-side renew failure does not prove the session is dead
             // server-side (Consul invalidates TTL sessions lazily), and destroying would force-release locks
             // that in-flight jobs still hold. Just drop our reference — a dead session's locks are already
             // gone, a live one's stay held until its TTL. Destroy is only safe from shutdown().
-            this.logger?.error('Consul session renewal exhausted, abandoning session reference', { err });
+            // Nothing renews this session any more, so every lock still held under it (in-flight jobs) lapses
+            // at the TTL with no release from us. Name exactly which keys are affected, then drop them from the
+            // held map: their lockers' release() will find themselves untracked and skip the KV release, which
+            // is right — the session is presumed dead and the lock is already gone server-side.
+            const heldKeys = Array.from(this.heldLocks.keys());
+            this.logger?.error(
+                'Consul session renewal exhausted, abandoning session reference; locks still held under it will lapse at its TTL without release',
+                { err, session, heldKeys },
+            );
+            this.heldLocks.clear();
             this.clearSession();
             return false;
         }
@@ -223,11 +284,14 @@ export class ConsulLockManager implements AutoscalerLockManager {
             return true; // rotated while in flight; this timer is stale, don't reschedule
         }
         this.renewFailureCount = 0;
+        // Arm the next renewal BEFORE sweeping. The sweep does KV round-trips, and a slow or stalled Consul KV
+        // there must not delay the renew that keeps the session (and every lock on this node) alive: with a
+        // 180s TTL a sweep stall of ~120s would otherwise expire the session and release all locks.
+        this.scheduleRenew();
         // Renewing the session keeps every lock under it alive indefinitely, so this is the point where a
         // lock that outlived its TTL (a hung or overrunning job) must be force-released. Redlock locks
         // simply lapse at their TTL; without this, a Consul-backed group lock would never lapse at all.
         await this.releaseOverheldLocks();
-        this.scheduleRenew();
         return true;
     }
 
@@ -264,12 +328,17 @@ export class ConsulLockManager implements AutoscalerLockManager {
     private trackHeldLock(key: string, session: string, maxHoldMs: number): ConsulLocker {
         const held: HeldConsulLock = { key, session, acquiredAt: Date.now(), maxHoldMs };
         this.heldLocks.set(key, held);
-        // Only drop this exact entry: if the lock was force-released and re-acquired by this node in the
-        // meantime, the stale locker's release() must not untrack the new holder.
+        // Only drop this exact entry, and report whether it was still the tracked holder. If the lock was
+        // force-released (releaseOverheldLocks) and re-acquired by this node in the meantime, the stale
+        // locker's release() must neither untrack the new holder nor issue a KV release: all locks share one
+        // session, so that release would succeed against the new holder's lock. Returning false makes the
+        // locker skip the KV release. The same applies after shutdown()/renewal exhaustion cleared the map.
         return new ConsulLocker(this.consulClient, session, key, () => {
-            if (this.heldLocks.get(key) === held) {
-                this.heldLocks.delete(key);
+            if (this.heldLocks.get(key) !== held) {
+                return false;
             }
+            this.heldLocks.delete(key);
+            return true;
         });
     }
 
@@ -360,6 +429,21 @@ export class ConsulLockManager implements AutoscalerLockManager {
             // The session we successfully acquire under is the one handed to the ConsulLocker, so release()
             // always targets the correct session.
             const session = await this.initConsulSession();
+            // Local re-entrancy guard, evaluated synchronously right before the KV call (no await between the
+            // check and the reservation). If this node already holds the key, or another local caller is mid-
+            // acquire, the KV acquire would succeed against our own session, so never issue it: treat it exactly
+            // like contention with another node. A key removed by releaseOverheldLocks is no longer here, so a
+            // fresh acquire after a force-release proceeds normally.
+            if (this.heldLocks.has(key) || this.acquiring.has(key)) {
+                ctx.logger.debug(`Consul lock ${key} is already held on this node, treating as contention`, { key });
+                contentionAttempts++;
+                if (!retryOnContention || contentionAttempts >= ConsulLockManager.ACQUIRE_RETRY_COUNT) {
+                    throw new Error(`Failed to obtain lock for key ${key}`);
+                }
+                await this.delayWithJitter();
+                continue;
+            }
+            this.acquiring.add(key);
             let lock;
             try {
                 ctx.logger.debug(`Obtaining consul lock ${key}`);
@@ -376,6 +460,9 @@ export class ConsulLockManager implements AutoscalerLockManager {
                 }
                 ctx.logger.error(`Error obtaining consul lock for key ${key}`, err);
                 throw err;
+            } finally {
+                // Runs before trackHeldLock below with no await in between, so the key is never unguarded.
+                this.acquiring.delete(key);
             }
             if (lock) {
                 ctx.logger.debug(`Lock obtained for consul ${key}`, { key, session });

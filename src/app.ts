@@ -283,9 +283,20 @@ const start = Date.now();
 const initId = nanoid(10);
 const initLogger = logger.child({ id: initId });
 const initCtx = new context.Context(initLogger, start, initId);
-instanceGroupManager.init(initCtx).catch((err) => {
-    logger.info('Failed initializing list of groups', { err });
-});
+// Consul only: move any per-group data left under the pre-C2 key layout (autoscaler/groups/<g>/...)
+// to autoscaler/group-data/<g>/... before the first job cycle reads it. Idempotent and a no-op on a
+// clean tree; a failure is logged and must not block startup (the next restart retries it).
+const legacyDataMigration =
+    instanceStore instanceof ConsulStore
+        ? instanceStore.migrateLegacyGroupData(initCtx).catch((err) => {
+              logger.error('Failed migrating legacy consul group data', { err });
+          })
+        : Promise.resolve();
+legacyDataMigration
+    .then(() => instanceGroupManager.init(initCtx))
+    .catch((err) => {
+        logger.info('Failed initializing list of groups', { err });
+    });
 
 const metricsLoop = new MetricsLoop({
     redisClient: redisClient,

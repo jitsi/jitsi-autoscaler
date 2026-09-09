@@ -1,4 +1,5 @@
-import { Request, Response } from 'express';
+import { ErrorRequestHandler, NextFunction, Request, Response } from 'express';
+import { Logger } from 'winston';
 import { InstanceTracker, StatsReport } from './instance_tracker';
 import InstanceGroupManager from './instance_group';
 import { AutoscalerLock, AutoscalerLockManager } from './lock';
@@ -103,6 +104,120 @@ interface InstanceConfigurationUpdateRequest {
     instanceConfigurationId: string;
 }
 
+// Group names are used as path params and as store key fragments: new groups are restricted to a safe
+// alphabet. Groups that already exist under a looser name are still addressable so they can be managed
+// and removed; the PromQL/OCI query interpolation sites escape names independently.
+export const GROUP_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+export function isValidNewGroupName(name: unknown): boolean {
+    return typeof name === 'string' && GROUP_NAME_PATTERN.test(name);
+}
+
+type HttpLikeError = Error & { status?: number; statusCode?: number; type?: string; expose?: boolean };
+
+// body-parser/http-errors style error types (raw-body, iconv, qs) that describe a fault in the request.
+const CLIENT_ERROR_TYPE_PREFIXES = ['entity.', 'encoding.', 'charset.', 'parameters.'];
+
+/**
+ * Whether an error that reached the default error handler describes a fault in the client's request
+ * (malformed JSON, oversized or badly encoded body, ...) rather than a server-side failure.
+ *
+ * Only body-parser/http-errors style errors qualify: those set `type` to a dotted request-fault
+ * category or mark themselves `expose: true`. A bare 4xx `status`/`statusCode` is NOT enough, because
+ * backend client libraries (consul/papi, oci-common) attach the upstream HTTP status to their errors,
+ * and a Consul ACL 403 or 429 inside a store call is an internal failure from the API caller's view.
+ */
+export function isClientRequestError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') {
+        return false;
+    }
+    const httpErr = err as HttpLikeError;
+    if (httpErr.expose === true) {
+        return true;
+    }
+    return typeof httpErr.type === 'string' && CLIENT_ERROR_TYPE_PREFIXES.some((p) => httpErr.type.startsWith(p));
+}
+
+function clientErrorStatus(err: HttpLikeError): number {
+    const status = err.status ?? err.statusCode;
+    return typeof status === 'number' && status >= 400 && status <= 499 ? status : 400;
+}
+
+/**
+ * Builds the default express error handler. Unauthorized tokens are answered 401, request faults
+ * (see isClientRequestError) with their own 4xx status at info level, and everything else is a 500
+ * logged at error level so backend failures are never mistaken for client mistakes.
+ */
+export function createErrorHandler(fallbackLogger: Logger): ErrorRequestHandler {
+    return (err: Error, req: Request, res: Response, next: NextFunction) => {
+        // If the headers have already been sent then we must use the built-in default error handler
+        // according to https://expressjs.com/en/guide/error-handling.html
+        if (res.headersSent) {
+            return next(err);
+        }
+
+        const l = req.context && req.context.logger ? req.context.logger : fallbackLogger;
+
+        if (err && err.name === 'UnauthorizedError') {
+            l.info(`unauthorized token ${err}`, { u: req.url });
+            res.status(401).send('invalid token...');
+        } else if (isClientRequestError(err)) {
+            const status = clientErrorStatus(err as HttpLikeError);
+            l.info(`client error ${err}`, { u: req.url, status });
+            res.status(status).json({ errors: [err.message] });
+        } else {
+            l.error(`internal error ${err}`, { u: req.url, stack: err && err.stack });
+            res.status(500).send('internal server error');
+        }
+    };
+}
+
+export interface DeepHealthDetails {
+    instanceStore: boolean;
+    jobQueue: boolean;
+    jobsStarted: boolean;
+    timedOut?: boolean;
+}
+
+export interface HealthResult {
+    status: number;
+    body: string | Record<string, unknown>;
+}
+
+/**
+ * Shallow (liveness) health: 200 for as long as the process is up and not shutting down. The Redis
+ * connection state is reported for observability but never fails the probe, so a Redis outage or a
+ * reconnect blip cannot restart-loop otherwise healthy pods.
+ */
+export function evaluateShallowHealth(shuttingDown: boolean, redisStatus: string): HealthResult {
+    if (shuttingDown) {
+        return { status: 503, body: 'shutting down' };
+    }
+    return { status: 200, body: { status: 'healthy', redis: redisStatus } };
+}
+
+/**
+ * Deep (readiness) health: fails closed. Shutting down and a Redis client that is not ready are 503;
+ * a failed or timed-out store/queue probe, or jobs not yet started, are 500 with the probe details.
+ * `details` is only consulted once the Redis client is ready, so callers may skip the probes otherwise.
+ */
+export function evaluateDeepHealth(
+    shuttingDown: boolean,
+    redisStatus: string,
+    details: DeepHealthDetails | undefined,
+): HealthResult {
+    if (shuttingDown) {
+        return { status: 503, body: 'shutting down' };
+    }
+    if (redisStatus !== 'ready') {
+        return { status: 503, body: { status: 'unhealthy', redis: redisStatus } };
+    }
+    if (!details || !details.instanceStore || !details.jobQueue || !details.jobsStarted) {
+        return { status: 500, body: { status: 'unhealthy', ...(details || {}) } };
+    }
+    return { status: 200, body: 'deeply healthy' };
+}
+
 interface HandlersOptions {
     cloudManager: CloudManager;
     instanceTracker: InstanceTracker;
@@ -134,6 +249,7 @@ class Handlers {
 
     constructor(options: HandlersOptions) {
         this.sidecarPoll = this.sidecarPoll.bind(this);
+        this.requireGroupExists = this.requireGroupExists.bind(this);
 
         this.lockManager = options.lockManager;
         this.cloudManager = options.cloudManager;
@@ -413,12 +529,44 @@ class Handlers {
         }
     }
 
+    /**
+     * Shared middleware for every /groups/:name* route other than PUT /groups/:name (which creates):
+     * looks the group up by its raw name and answers 404 when absent. No name-shape check happens
+     * here so pre-existing groups with names outside GROUP_NAME_PATTERN stay manageable and deletable.
+     */
+    async requireGroupExists(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const name = req.params.name;
+            if (typeof name !== 'string' || name === '') {
+                res.status(400).json({ errors: ['Invalid group name'] });
+                return;
+            }
+            const group = await this.instanceGroupManager.getInstanceGroup(req.context, name);
+            if (!group) {
+                res.status(404).json({ errors: [`Group ${name} not found`] });
+                return;
+            }
+            next();
+        } catch (err) {
+            next(err);
+        }
+    }
+
     async upsertInstanceGroup(req: Request, res: Response): Promise<void> {
         const instanceGroup: InstanceGroup = req.body;
         if (instanceGroup.name != req.params.name) {
             res.status(400);
             res.send({ errors: ['The request param group name must match group name in the body'] });
             return;
+        }
+        // The safe-alphabet rule applies to new groups only; an existing group keeps its name.
+        if (!isValidNewGroupName(instanceGroup.name)) {
+            const existing = await this.instanceGroupManager.getInstanceGroup(req.context, instanceGroup.name);
+            if (!existing) {
+                res.status(400);
+                res.send({ errors: ['Invalid group name'] });
+                return;
+            }
         }
         const lock: AutoscalerLock = await this.lockManager.lockGroup(req.context, instanceGroup.name);
         try {

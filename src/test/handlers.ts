@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import { ReservationNotExtendableError } from '../reservation_manager';
 import test, { describe, mock } from 'node:test';
 
-import Handlers from '../handlers';
+import Handlers, { createErrorHandler, evaluateDeepHealth, evaluateShallowHealth } from '../handlers';
 import { ReservationStatus } from '../reservation';
 
 describe('Handlers', () => {
@@ -101,11 +101,16 @@ describe('Handlers', () => {
         return {
             statusCode: undefined,
             body: undefined,
+            headersSent: false,
             status(code) {
                 this.statusCode = code;
                 return this;
             },
             send(body) {
+                this.body = body;
+                return this;
+            },
+            json(body) {
                 this.body = body;
                 return this;
             },
@@ -527,6 +532,327 @@ describe('Handlers', () => {
 
             assert.strictEqual(res.statusCode, 200);
             assert.strictEqual(h.reservationManager.getReservation.mock.calls[0].arguments[2], true);
+        });
+    });
+    describe('upsertInstanceGroup group-name rule', () => {
+        function groupBody(name) {
+            return { name, type: 'JVB', scalingOptions: { minDesired: 0, maxDesired: 1, desiredCount: 0 } };
+        }
+
+        test('rejects a NEW group whose name is outside the safe alphabet with 400 and does not save', async () => {
+            const h = makeHarness();
+            h.instanceGroupManager.getInstanceGroup.mock.mockImplementation(() => Promise.resolve(null));
+            const res = mockRes();
+
+            await h.handlers.upsertInstanceGroup(
+                mockReq({ params: { name: 'new:group' }, body: groupBody('new:group') }),
+                res,
+            );
+
+            assert.strictEqual(res.statusCode, 400);
+            assert.deepStrictEqual(res.body, { errors: ['Invalid group name'] });
+            assert.strictEqual(h.instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+            assert.strictEqual(h.lockManager.lockGroup.mock.calls.length, 0);
+        });
+
+        test('allows updating an EXISTING group whose legacy name contains ":"', async () => {
+            const h = makeHarness({ name: 'legacy:group' });
+            const res = mockRes();
+
+            await h.handlers.upsertInstanceGroup(
+                mockReq({ params: { name: 'legacy:group' }, body: groupBody('legacy:group') }),
+                res,
+            );
+
+            assert.strictEqual(res.statusCode, 200);
+            assert.deepStrictEqual(res.body, { save: 'OK' });
+            assert.strictEqual(h.instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
+            assert.strictEqual(
+                h.instanceGroupManager.upsertInstanceGroup.mock.calls[0].arguments[1].name,
+                'legacy:group',
+            );
+            assert.strictEqual(h.lock.release.mock.calls.length, 1);
+        });
+
+        test('creates a NEW group with a safe name without looking it up first', async () => {
+            const h = makeHarness();
+            h.instanceGroupManager.getInstanceGroup.mock.mockImplementation(() => Promise.resolve(null));
+            const res = mockRes();
+
+            await h.handlers.upsertInstanceGroup(
+                mockReq({ params: { name: 'new.group-1' }, body: groupBody('new.group-1') }),
+                res,
+            );
+
+            assert.strictEqual(res.statusCode, 200);
+            assert.strictEqual(h.instanceGroupManager.getInstanceGroup.mock.calls.length, 0);
+            assert.strictEqual(h.instanceGroupManager.upsertInstanceGroup.mock.calls.length, 1);
+        });
+
+        test('still rejects a body name that does not match the path param', async () => {
+            const h = makeHarness();
+            const res = mockRes();
+
+            await h.handlers.upsertInstanceGroup(mockReq({ params: { name: 'a' }, body: groupBody('b') }), res);
+
+            assert.strictEqual(res.statusCode, 400);
+            assert.strictEqual(h.instanceGroupManager.upsertInstanceGroup.mock.calls.length, 0);
+        });
+    });
+
+    describe('requireGroupExists', () => {
+        test('passes an existing group with a legacy name containing ":" through to next()', async () => {
+            const h = makeHarness({ name: 'legacy:group' });
+            const req = mockReq({ params: { name: 'legacy:group' } });
+            const res = mockRes();
+            const next = mock.fn();
+
+            await h.handlers.requireGroupExists(req, res, next);
+
+            assert.strictEqual(next.mock.calls.length, 1);
+            assert.strictEqual(next.mock.calls[0].arguments.length, 0);
+            assert.strictEqual(res.statusCode, undefined);
+            assert.strictEqual(h.instanceGroupManager.getInstanceGroup.mock.calls[0].arguments[1], 'legacy:group');
+        });
+
+        test('passes names with "/", "@" and spaces through when the group exists', async () => {
+            for (const name of ['env/region', 'user@host', 'my group']) {
+                const h = makeHarness({ name });
+                const next = mock.fn();
+                await h.handlers.requireGroupExists(mockReq({ params: { name } }), mockRes(), next);
+                assert.strictEqual(next.mock.calls.length, 1, name);
+            }
+        });
+
+        test('answers 404 when the group does not exist', async () => {
+            const h = makeHarness();
+            h.instanceGroupManager.getInstanceGroup.mock.mockImplementation(() => Promise.resolve(null));
+            const res = mockRes();
+            const next = mock.fn();
+
+            await h.handlers.requireGroupExists(mockReq({ params: { name: 'nope:group' } }), res, next);
+
+            assert.strictEqual(res.statusCode, 404);
+            assert.deepStrictEqual(res.body, { errors: ['Group nope:group not found'] });
+            assert.strictEqual(next.mock.calls.length, 0);
+        });
+
+        test('forwards a store failure to next(err) rather than swallowing it', async () => {
+            const h = makeHarness();
+            const boom = new Error('consul down');
+            h.instanceGroupManager.getInstanceGroup.mock.mockImplementation(() => Promise.reject(boom));
+            const res = mockRes();
+            const next = mock.fn();
+
+            await h.handlers.requireGroupExists(mockReq(), res, next);
+
+            assert.strictEqual(next.mock.calls.length, 1);
+            assert.strictEqual(next.mock.calls[0].arguments[0], boom);
+            assert.strictEqual(res.statusCode, undefined);
+        });
+    });
+
+    describe('createErrorHandler', () => {
+        function errorHarness() {
+            const fallbackLogger = { info: mock.fn(), error: mock.fn(), warn: mock.fn(), debug: mock.fn() };
+            const reqLogger = { info: mock.fn(), error: mock.fn(), warn: mock.fn(), debug: mock.fn() };
+            const handler = createErrorHandler(fallbackLogger);
+            const req = { url: '/groups/x', context: { logger: reqLogger } };
+            const res = mockRes();
+            const next = mock.fn();
+            return { handler, req, res, next, reqLogger, fallbackLogger };
+        }
+
+        test('a backend error carrying a 4xx statusCode (consul ACL 403) is a 500 logged at error', () => {
+            const h = errorHarness();
+            const err = Object.assign(new Error('ACL'), { statusCode: 403 });
+
+            h.handler(err, h.req, h.res, h.next);
+
+            assert.strictEqual(h.res.statusCode, 500);
+            assert.strictEqual(h.res.body, 'internal server error');
+            assert.strictEqual(h.reqLogger.error.mock.calls.length, 1);
+            assert.match(h.reqLogger.error.mock.calls[0].arguments[0], /internal error/);
+            assert.strictEqual(h.reqLogger.info.mock.calls.length, 0);
+            assert.strictEqual(h.next.mock.calls.length, 0);
+        });
+
+        test('a backend error carrying a 4xx status (OCI 429) is a 500 logged at error', () => {
+            const h = errorHarness();
+            const err = Object.assign(new Error('TooManyRequests'), { status: 429 });
+
+            h.handler(err, h.req, h.res, h.next);
+
+            assert.strictEqual(h.res.statusCode, 500);
+            assert.strictEqual(h.reqLogger.error.mock.calls.length, 1);
+            assert.strictEqual(h.reqLogger.info.mock.calls.length, 0);
+        });
+
+        test('a body-parser entity.parse.failed error is a 400 json error logged at info', () => {
+            const h = errorHarness();
+            const err = Object.assign(new Error('Unexpected token } in JSON'), {
+                type: 'entity.parse.failed',
+                status: 400,
+            });
+
+            h.handler(err, h.req, h.res, h.next);
+
+            assert.strictEqual(h.res.statusCode, 400);
+            assert.deepStrictEqual(h.res.body, { errors: ['Unexpected token } in JSON'] });
+            assert.strictEqual(h.reqLogger.info.mock.calls.length, 1);
+            assert.strictEqual(h.reqLogger.error.mock.calls.length, 0);
+        });
+
+        test('an http-errors style error with expose=true keeps its own status (413)', () => {
+            const h = errorHarness();
+            const err = Object.assign(new Error('request entity too large'), { expose: true, status: 413 });
+
+            h.handler(err, h.req, h.res, h.next);
+
+            assert.strictEqual(h.res.statusCode, 413);
+            assert.deepStrictEqual(h.res.body, { errors: ['request entity too large'] });
+            assert.strictEqual(h.reqLogger.info.mock.calls.length, 1);
+            assert.strictEqual(h.reqLogger.error.mock.calls.length, 0);
+        });
+
+        test('encoding./charset./parameters. body-parser types are client errors', () => {
+            for (const [type, status] of [
+                ['encoding.unsupported', 415],
+                ['charset.unsupported', 415],
+                ['parameters.too.many', 413],
+            ]) {
+                const h = errorHarness();
+                h.handler(Object.assign(new Error(type), { type, status }), h.req, h.res, h.next);
+                assert.strictEqual(h.res.statusCode, status, type);
+                assert.strictEqual(h.reqLogger.error.mock.calls.length, 0, type);
+            }
+        });
+
+        test('a client-typed error without a valid 4xx status falls back to 400', () => {
+            const h = errorHarness();
+            h.handler(Object.assign(new Error('bad'), { type: 'entity.parse.failed' }), h.req, h.res, h.next);
+            assert.strictEqual(h.res.statusCode, 400);
+        });
+
+        test('an unrelated dotted type is not a client error', () => {
+            const h = errorHarness();
+            h.handler(Object.assign(new Error('x'), { type: 'system.failure', status: 404 }), h.req, h.res, h.next);
+            assert.strictEqual(h.res.statusCode, 500);
+            assert.strictEqual(h.reqLogger.error.mock.calls.length, 1);
+        });
+
+        test('UnauthorizedError is answered 401 at info level', () => {
+            const h = errorHarness();
+            const err = Object.assign(new Error('jwt expired'), { name: 'UnauthorizedError', status: 401 });
+
+            h.handler(err, h.req, h.res, h.next);
+
+            assert.strictEqual(h.res.statusCode, 401);
+            assert.strictEqual(h.res.body, 'invalid token...');
+            assert.strictEqual(h.reqLogger.info.mock.calls.length, 1);
+            assert.strictEqual(h.reqLogger.error.mock.calls.length, 0);
+        });
+
+        test('delegates to next(err) when headers were already sent', () => {
+            const h = errorHarness();
+            h.res.headersSent = true;
+            const err = new Error('late');
+
+            h.handler(err, h.req, h.res, h.next);
+
+            assert.strictEqual(h.next.mock.calls.length, 1);
+            assert.strictEqual(h.next.mock.calls[0].arguments[0], err);
+            assert.strictEqual(h.res.statusCode, undefined);
+        });
+
+        test('uses the fallback logger when the request has no context', () => {
+            const h = errorHarness();
+            const req = { url: '/x' };
+
+            h.handler(new Error('no ctx'), req, h.res, h.next);
+
+            assert.strictEqual(h.res.statusCode, 500);
+            assert.strictEqual(h.fallbackLogger.error.mock.calls.length, 1);
+        });
+    });
+
+    describe('health evaluation', () => {
+        test('shallow health is 200 while redis is still connecting and reports the redis status', () => {
+            const result = evaluateShallowHealth(false, 'connecting');
+            assert.strictEqual(result.status, 200);
+            assert.deepStrictEqual(result.body, { status: 'healthy', redis: 'connecting' });
+        });
+
+        test('shallow health stays 200 through a redis reconnect blip', () => {
+            for (const redis of ['reconnecting', 'close', 'end', 'wait']) {
+                const result = evaluateShallowHealth(false, redis);
+                assert.strictEqual(result.status, 200, redis);
+                assert.strictEqual(result.body.redis, redis);
+            }
+        });
+
+        test('shallow health is 200 when redis is ready', () => {
+            const result = evaluateShallowHealth(false, 'ready');
+            assert.strictEqual(result.status, 200);
+            assert.deepStrictEqual(result.body, { status: 'healthy', redis: 'ready' });
+        });
+
+        test('shallow health is 503 once the process is shutting down', () => {
+            const result = evaluateShallowHealth(true, 'ready');
+            assert.strictEqual(result.status, 503);
+            assert.strictEqual(result.body, 'shutting down');
+        });
+
+        test('deep health fails closed (503) when redis is not ready', () => {
+            const result = evaluateDeepHealth(false, 'reconnecting', undefined);
+            assert.strictEqual(result.status, 503);
+            assert.deepStrictEqual(result.body, { status: 'unhealthy', redis: 'reconnecting' });
+        });
+
+        test('deep health is 503 when shutting down', () => {
+            const result = evaluateDeepHealth(true, 'ready', {
+                instanceStore: true,
+                jobQueue: true,
+                jobsStarted: true,
+            });
+            assert.strictEqual(result.status, 503);
+        });
+
+        test('deep health is 500 with details when the store probe fails', () => {
+            const details = { instanceStore: false, jobQueue: true, jobsStarted: true };
+            const result = evaluateDeepHealth(false, 'ready', details);
+            assert.strictEqual(result.status, 500);
+            assert.deepStrictEqual(result.body, { status: 'unhealthy', ...details });
+        });
+
+        test('deep health is 500 when the queue probe fails, jobs have not started, or the probes timed out', () => {
+            assert.strictEqual(
+                evaluateDeepHealth(false, 'ready', { instanceStore: true, jobQueue: false, jobsStarted: true }).status,
+                500,
+            );
+            assert.strictEqual(
+                evaluateDeepHealth(false, 'ready', { instanceStore: true, jobQueue: true, jobsStarted: false }).status,
+                500,
+            );
+            const timedOut = evaluateDeepHealth(false, 'ready', {
+                instanceStore: false,
+                jobQueue: false,
+                jobsStarted: true,
+                timedOut: true,
+            });
+            assert.strictEqual(timedOut.status, 500);
+            assert.strictEqual(timedOut.body.timedOut, true);
+            assert.strictEqual(evaluateDeepHealth(false, 'ready', undefined).status, 500);
+        });
+
+        test('deep health is 200 when every probe passes', () => {
+            const result = evaluateDeepHealth(false, 'ready', {
+                instanceStore: true,
+                jobQueue: true,
+                jobsStarted: true,
+            });
+            assert.strictEqual(result.status, 200);
+            assert.strictEqual(result.body, 'deeply healthy');
         });
     });
 });

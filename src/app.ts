@@ -3,7 +3,7 @@ import config from './config';
 import express from 'express';
 import * as context from './context';
 import Consul from 'consul';
-import Handlers from './handlers';
+import Handlers, { DeepHealthDetails, createErrorHandler, evaluateDeepHealth, evaluateShallowHealth } from './handlers';
 import Validator from './validator';
 import Redis, { RedisOptions } from 'ioredis';
 import * as promClient from 'prom-client';
@@ -158,13 +158,6 @@ switch (config.InstanceStoreProvider) {
 // reporting unhealthy, so a hung backend cannot hang the probe itself.
 const DEEP_HEALTH_TIMEOUT_MS = 5000;
 
-interface DeepHealthDetails {
-    instanceStore: boolean;
-    jobQueue: boolean;
-    jobsStarted: boolean;
-    timedOut?: boolean;
-}
-
 async function deepHealthChecks(ctx: context.Context): Promise<DeepHealthDetails> {
     const [storeHealthy, queueHealthy] = await Promise.all([instanceStore.ping(ctx), jobManager.isHealthy()]);
     return { instanceStore: !!storeHealthy, jobQueue: !!queueHealthy, jobsStarted };
@@ -178,32 +171,24 @@ function deepHealthTimeout(ms: number): Promise<DeepHealthDetails> {
 }
 
 mapp.use(context.injectContext);
+// Shallow /health is the liveness probe: 200 while the process is up (Redis state is reported, not
+// enforced). /health?deep is the readiness probe and fails closed on Redis, store and queue problems.
 mapp.get('/health', async (req: express.Request, res: express.Response) => {
     try {
         logger.debug('Health check');
-        if (shuttingDown) {
-            res.status(503).send('shutting down');
-            return;
-        }
-        if (redisClient.status !== 'ready') {
-            logger.warn('Health check failed: redis not ready', { redis: redisClient.status });
-            res.status(503).json({ status: 'unhealthy', redis: redisClient.status });
-            return;
-        }
         if (req.query['deep']) {
-            const details = await Promise.race([
-                deepHealthChecks(req.context),
-                deepHealthTimeout(DEEP_HEALTH_TIMEOUT_MS),
-            ]);
-
-            if (!details.instanceStore || !details.jobQueue || !details.jobsStarted) {
-                logger.warn('Deep health check failed', details);
-                res.status(500).json({ status: 'unhealthy', ...details });
-            } else {
-                res.send('deeply healthy');
+            const details =
+                !shuttingDown && redisClient.status === 'ready'
+                    ? await Promise.race([deepHealthChecks(req.context), deepHealthTimeout(DEEP_HEALTH_TIMEOUT_MS)])
+                    : undefined;
+            const result = evaluateDeepHealth(shuttingDown, redisClient.status, details);
+            if (result.status !== 200) {
+                logger.warn('Deep health check failed', { redis: redisClient.status, ...details });
             }
+            res.status(result.status).send(result.body);
         } else {
-            res.send('healthy!');
+            const result = evaluateShallowHealth(shuttingDown, redisClient.status);
+            res.status(result.status).send(result.body);
         }
     } catch (err) {
         logger.error('Health check error', { err });
@@ -541,28 +526,9 @@ if (config.ProtectedApi && sidecarIssuers.length > 0) {
     });
 }
 
-// Group names are used as path params and as store key fragments: restrict them to a safe alphabet.
-const GROUP_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-
 // Shared middleware for every /groups/:name* route (other than PUT /groups/:name, which creates):
-// 400 on a malformed name, 404 when the group does not exist.
-async function requireGroupExists(req: express.Request, res: express.Response, next: express.NextFunction) {
-    try {
-        const name = req.params.name;
-        if (typeof name !== 'string' || !GROUP_NAME_PATTERN.test(name)) {
-            res.status(400).json({ errors: ['Invalid group name'] });
-            return;
-        }
-        const group = await instanceGroupManager.getInstanceGroup(req.context, name);
-        if (!group) {
-            res.status(404).json({ errors: [`Group ${name} not found`] });
-            return;
-        }
-        next();
-    } catch (err) {
-        next(err);
-    }
-}
+// 404 when the group does not exist. Lives on Handlers so it can be unit-tested.
+const requireGroupExists = h.requireGroupExists;
 
 if (config.ProtectedApi) {
     logger.debug('starting in protected api mode');
@@ -604,8 +570,8 @@ app.post('/sidecar/status', async (req, res, next) => {
 
 app.put(
     '/groups/:name',
-    param('name').matches(GROUP_NAME_PATTERN).withMessage('Invalid group name'),
-    body('name').isString().matches(GROUP_NAME_PATTERN).withMessage('Invalid group name'),
+    // The safe-alphabet rule for the name is enforced by the handler for new groups only.
+    body('name').isString().withMessage('Invalid group name'),
     body('scalingOptions.minDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions.maxDesired').isInt({ min: 0 }).withMessage('Value must be positive'),
     body('scalingOptions.desiredCount').isInt({ min: 0 }).withMessage('Value must be positive'),
@@ -1023,35 +989,8 @@ app.post('/groups/:name/actions/reconfigure-instances', requireGroupExists, asyn
 });
 
 // This is placed last in the middleware chain (after every route) and is our default error handler.
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    // If the headers have already been sent then we must use
-    // the built-in default error handler according to
-    // https://expressjs.com/en/guide/error-handling.html
-    if (res.headersSent) {
-        return next(err);
-    }
-
-    let l = logger;
-
-    if (req.context && req.context.logger) {
-        l = req.context.logger;
-    }
-
-    const httpErr = err as Error & { status?: number; statusCode?: number; type?: string };
-    const status = httpErr.status ?? httpErr.statusCode;
-
-    if (err.name === 'UnauthorizedError') {
-        l.info(`unauthorized token ${err}`, { u: req.url });
-        res.status(401).send('invalid token...');
-    } else if (httpErr.type === 'entity.parse.failed' || (status >= 400 && status <= 499)) {
-        // Client errors raised by body-parser and friends (malformed JSON, oversized payload, ...)
-        l.info(`client error ${err}`, { u: req.url, status });
-        res.status(status || 400).json({ errors: [err.message] });
-    } else {
-        l.error(`internal error ${err}`, { u: req.url, stack: err.stack });
-        res.status(500).send('internal server error');
-    }
-});
+// See createErrorHandler in handlers.ts for the classification rules.
+app.use(createErrorHandler(logger));
 
 const metricsServer = mapp.listen(config.MetricsServerPort, () => {
     logger.info(`...listening on :${config.MetricsServerPort}`);

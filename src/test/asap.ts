@@ -55,6 +55,21 @@ describe('ASAPPubKeyFetcher', () => {
         return { header: { kid } };
     }
 
+    // Shaped like got's HTTPError: name plus the response status the key server answered with.
+    function httpError(statusCode) {
+        const err = new Error(`Response code ${statusCode}`);
+        err.name = 'HTTPError';
+        err.response = { statusCode };
+        return err;
+    }
+
+    // Behaves like got's request timeout error.
+    function timeoutError() {
+        const err = new Error('Timeout awaiting request');
+        err.name = 'TimeoutError';
+        return err;
+    }
+
     beforeEach(() => {
         logger = { debug: mock.fn(), info: mock.fn(), warn: mock.fn(), error: mock.fn() };
         req = { context: { logger } };
@@ -137,8 +152,10 @@ describe('ASAPPubKeyFetcher', () => {
             }
         });
 
-        test('an HTTP error from a real key server surfaces as invalid_token', async () => {
+        test('a 404 from a real key server surfaces as invalid_token and is negatively cached', async () => {
+            let hits = 0;
             const server = http.createServer((_request, response) => {
+                hits++;
                 response.statusCode = 404;
                 response.end('not found');
             });
@@ -154,6 +171,46 @@ describe('ASAPPubKeyFetcher', () => {
                     return true;
                 });
                 assert.strictEqual(logger.error.mock.callCount(), 1);
+                assert.strictEqual(hits, 1);
+
+                // The real got HTTPError is recognised as definitive: the second call never reaches the server.
+                await assert.rejects(
+                    fetcher.secretCallback(req, tokenFor('unknown-kid')),
+                    /failed to fetch public key/,
+                );
+                assert.strictEqual(hits, 1);
+            } finally {
+                await new Promise((resolve) => server.close(resolve));
+            }
+        });
+
+        test('a 503 from a real key server is not negatively cached: the next call asks the server again', async () => {
+            let hits = 0;
+            const server = http.createServer((_request, response) => {
+                hits++;
+                if (hits <= 2) {
+                    // got retries once (retry.limit 1), so the first secretCallback consumes two hits.
+                    response.statusCode = 503;
+                    response.end('unavailable');
+                    return;
+                }
+                response.end('RECOVERED-PEM');
+            });
+            await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+            try {
+                const port = server.address().port;
+                const fetcher = new ASAPPubKeyFetcher(`http://127.0.0.1:${port}/keys`, 3600);
+
+                await assert.rejects(fetcher.secretCallback(req, tokenFor('kid-1')), (err) => {
+                    assert.strictEqual(err.code, 'invalid_token');
+                    assert.match(err.message, /503/);
+                    return true;
+                });
+                const hitsAfterFailure = hits;
+                assert.ok(hitsAfterFailure >= 1);
+
+                assert.strictEqual(await fetcher.secretCallback(req, tokenFor('kid-1')), 'RECOVERED-PEM');
+                assert.ok(hits > hitsAfterFailure);
             } finally {
                 await new Promise((resolve) => server.close(resolve));
             }
@@ -278,25 +335,26 @@ describe('ASAPPubKeyFetcher', () => {
     });
 
     describe('negative caching of failed kids', () => {
-        test('a failed fetch is remembered so the next call rejects immediately without refetching', async () => {
-            stubGot(() => Promise.reject(new Error('boom')));
+        test('a definitive 404 is remembered so the next call rejects immediately without refetching', async () => {
+            stubGot(() => Promise.reject(httpError(404)));
             const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
             const kid = 'bad-kid';
 
             await assert.rejects(fetcher.secretCallback(req, tokenFor(kid)), (err) => {
                 assert.strictEqual(err.name, 'UnauthorizedError');
                 assert.strictEqual(err.code, 'invalid_token');
-                assert.strictEqual(err.message, 'boom');
-                assert.strictEqual(err.inner.message, 'boom');
+                assert.strictEqual(err.message, 'Response code 404');
+                assert.strictEqual(err.inner.name, 'HTTPError');
                 return true;
             });
             assert.strictEqual(fetchCalls.length, 1);
             assert.strictEqual(logger.error.mock.callCount(), 1);
+            assert.strictEqual(logger.error.mock.calls[0].arguments[1].negativelyCached, true);
 
             await assert.rejects(fetcher.secretCallback(req, tokenFor(kid)), (err) => {
                 assert.strictEqual(err.code, 'invalid_token');
                 assert.match(err.message, new RegExp(`failed to fetch public key for kid ${kid}`));
-                assert.match(err.message, /boom/);
+                assert.match(err.message, /404/);
                 return true;
             });
             // No second outbound request and no second error log: the rejection came from the negative cache.
@@ -311,7 +369,7 @@ describe('ASAPPubKeyFetcher', () => {
         test('the negative cache entry expires after the failed-kid ttl and the key is fetched again', async () => {
             mock.timers.enable({ apis: ['Date'], now: Date.now() });
             let shouldFail = true;
-            stubGot(() => (shouldFail ? Promise.reject(new Error('boom')) : Promise.resolve({ body: 'PEM-OK' })));
+            stubGot(() => (shouldFail ? Promise.reject(httpError(404)) : Promise.resolve({ body: 'PEM-OK' })));
             const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
             const kid = 'flaky-kid';
 
@@ -333,13 +391,96 @@ describe('ASAPPubKeyFetcher', () => {
 
         test('a failure for one kid does not block fetches for another kid', async () => {
             stubGot((url) =>
-                url.includes(sha256('bad-kid')) ? Promise.reject(new Error('boom')) : Promise.resolve({ body: 'GOOD' }),
+                url.includes(sha256('bad-kid')) ? Promise.reject(httpError(404)) : Promise.resolve({ body: 'GOOD' }),
             );
             const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
 
             await assert.rejects(fetcher.secretCallback(req, tokenFor('bad-kid')));
             assert.strictEqual(await fetcher.secretCallback(req, tokenFor('good-kid')), 'GOOD');
             assert.strictEqual(fetchCalls.length, 2);
+        });
+
+        test('every 4xx from the key server is negatively cached', async () => {
+            for (const status of [400, 401, 403, 404, 410, 429, 499]) {
+                fetchCalls = [];
+                stubGot(() => Promise.reject(httpError(status)));
+                const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
+                await assert.rejects(fetcher.secretCallback(req, tokenFor('kid')), new RegExp(`${status}`));
+                await assert.rejects(fetcher.secretCallback(req, tokenFor('kid')), /failed to fetch public key/);
+                assert.strictEqual(fetchCalls.length, 1, `status ${status}`);
+            }
+        });
+
+        test('a 503 from the key server is not negatively cached: the next call refetches and succeeds', async () => {
+            let shouldFail = true;
+            stubGot(() => (shouldFail ? Promise.reject(httpError(503)) : Promise.resolve({ body: 'PEM-OK' })));
+            const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
+            const kid = 'blip-kid';
+
+            await assert.rejects(fetcher.secretCallback(req, tokenFor(kid)), (err) => {
+                assert.strictEqual(err.code, 'invalid_token');
+                assert.strictEqual(err.message, 'Response code 503');
+                return true;
+            });
+            assert.strictEqual(fetchCalls.length, 1);
+            assert.strictEqual(logger.error.mock.callCount(), 1);
+            assert.strictEqual(logger.error.mock.calls[0].arguments[1].negativelyCached, false);
+
+            // No time passes: the very next request goes back to the key server.
+            shouldFail = false;
+            assert.strictEqual(await fetcher.secretCallback(req, tokenFor(kid)), 'PEM-OK');
+            assert.strictEqual(fetchCalls.length, 2);
+            const shortCircuits = logger.debug.mock.calls.filter((c) =>
+                String(c.arguments[0]).includes('recently failed for kid'),
+            );
+            assert.strictEqual(shortCircuits.length, 0);
+        });
+
+        test('5xx and 3xx HTTP errors are all treated as transient', async () => {
+            for (const status of [500, 502, 503, 504, 302]) {
+                fetchCalls = [];
+                let shouldFail = true;
+                stubGot(() => (shouldFail ? Promise.reject(httpError(status)) : Promise.resolve({ body: 'PEM' })));
+                const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
+                await assert.rejects(fetcher.secretCallback(req, tokenFor('kid')));
+                shouldFail = false;
+                assert.strictEqual(await fetcher.secretCallback(req, tokenFor('kid')), 'PEM', `status ${status}`);
+                assert.strictEqual(fetchCalls.length, 2, `status ${status}`);
+            }
+        });
+
+        test('a network error (ECONNRESET) is not negatively cached: the next call refetches', async () => {
+            let shouldFail = true;
+            const reset = Object.assign(new Error('read ECONNRESET'), { name: 'RequestError', code: 'ECONNRESET' });
+            stubGot(() => (shouldFail ? Promise.reject(reset) : Promise.resolve({ body: 'PEM-OK' })));
+            const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
+
+            await assert.rejects(fetcher.secretCallback(req, tokenFor('kid-1')), /ECONNRESET/);
+            shouldFail = false;
+            assert.strictEqual(await fetcher.secretCallback(req, tokenFor('kid-1')), 'PEM-OK');
+            assert.strictEqual(fetchCalls.length, 2);
+        });
+
+        test('a transient failure at the positive-cache expiry boundary does not lock the kid out', async () => {
+            mock.timers.enable({ apis: ['Date'], now: Date.now() });
+            let mode = 'ok';
+            stubGot(() => {
+                if (mode === 'fail') {
+                    return Promise.reject(httpError(503));
+                }
+                return Promise.resolve({ body: 'PEM' });
+            });
+            const fetcher = new ASAPPubKeyFetcher(baseUrl, 30);
+
+            assert.strictEqual(await fetcher.secretCallback(req, tokenFor('kid-1')), 'PEM');
+            // The positive cache entry lapses and the refetch hits a blip...
+            mock.timers.tick(31_000);
+            mode = 'fail';
+            await assert.rejects(fetcher.secretCallback(req, tokenFor('kid-1')), /503/);
+            // ...but the request right after is served again instead of being rejected for 60s.
+            mode = 'ok';
+            assert.strictEqual(await fetcher.secretCallback(req, tokenFor('kid-1')), 'PEM');
+            assert.strictEqual(fetchCalls.length, 3);
         });
     });
 
@@ -383,15 +524,26 @@ describe('ASAPPubKeyFetcher', () => {
             assert.strictEqual(err.inner.name, 'TimeoutError');
         });
 
-        test('a timed-out kid is negatively cached like any other failure', async () => {
-            const err = new Error('Timeout awaiting request');
-            err.name = 'TimeoutError';
-            stubGot(() => Promise.reject(err));
+        test('a timed-out kid is not negatively cached: the next call refetches', async () => {
+            let shouldFail = true;
+            stubGot(() => (shouldFail ? Promise.reject(timeoutError()) : Promise.resolve({ body: 'PEM-OK' })));
             const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
 
             await assert.rejects(fetcher.secretCallback(req, tokenFor('slow-kid')), /Timeout awaiting request/);
-            await assert.rejects(fetcher.secretCallback(req, tokenFor('slow-kid')), /failed to fetch public key/);
             assert.strictEqual(fetchCalls.length, 1);
+
+            shouldFail = false;
+            assert.strictEqual(await fetcher.secretCallback(req, tokenFor('slow-kid')), 'PEM-OK');
+            assert.strictEqual(fetchCalls.length, 2);
+        });
+
+        test('repeated timeouts keep asking the key server rather than short-circuiting', async () => {
+            stubGot(() => Promise.reject(timeoutError()));
+            const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
+
+            await assert.rejects(fetcher.secretCallback(req, tokenFor('slow-kid')), /Timeout awaiting request/);
+            await assert.rejects(fetcher.secretCallback(req, tokenFor('slow-kid')), /Timeout awaiting request/);
+            assert.strictEqual(fetchCalls.length, 2);
         });
     });
 });

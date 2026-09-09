@@ -7,9 +7,21 @@ import jwt from 'jsonwebtoken';
 
 // How long to wait for the key server before giving up on a single request.
 const KEY_FETCH_TIMEOUT_MS = 5000;
-// How long a failed kid lookup is remembered before the key server is asked again. This keeps a
-// flood of requests bearing an unknown kid from hammering the key server.
+// How long a definitively rejected kid (key server answered 4xx) is remembered before the key server
+// is asked again. This keeps a flood of requests bearing an unknown kid from hammering the key server.
+// Transient failures (timeouts, network errors, 5xx) are deliberately not remembered: a single blip at
+// the positive-cache expiry boundary must not lock out every token sharing that kid for a minute.
 const FAILED_KID_TTL_SEC = 60;
+
+// A got HTTPError whose response status is 4xx: the key server has definitively said it has no such key.
+export function isDefinitiveKeyServerRejection(err: unknown): boolean {
+    if (!err || typeof err !== 'object') {
+        return false;
+    }
+    const httpErr = err as { name?: string; response?: { statusCode?: number } };
+    const status = httpErr.response?.statusCode;
+    return httpErr.name === 'HTTPError' && typeof status === 'number' && status >= 400 && status <= 499;
+}
 
 export class ASAPPubKeyFetcher {
     private baseUrl: string;
@@ -52,12 +64,16 @@ export class ASAPPubKeyFetcher {
             this.cache.set(kid, fetched);
             return fetched;
         } catch (err) {
+            const definitive = isDefinitiveKeyServerRejection(err);
             req.context.logger.error('error fetching pub key from key server', {
                 baseUrl: this.baseUrl,
                 kid,
                 err,
+                negativelyCached: definitive,
             });
-            this.failedKids.set(kid, `failed to fetch public key for kid ${kid}: ${err}`);
+            if (definitive) {
+                this.failedKids.set(kid, `failed to fetch public key for kid ${kid}: ${err}`);
+            }
             throw new UnauthorizedError('invalid_token', err);
         }
     }

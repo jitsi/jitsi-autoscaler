@@ -3,7 +3,6 @@
 
 import { mock } from 'node:test';
 import { Context } from '../context';
-import { InstanceState } from '../instance_store';
 
 const _values = {};
 
@@ -23,7 +22,6 @@ export const mockStore = {
     // instance states
     fetchInstanceStates: mock.fn(() => []),
     saveInstanceStatus: mock.fn(() => true),
-    filterOutAndTrimExpiredStates: mock.fn((_ctx: Context, _group: string, states: InstanceState[]) => states),
 
     // shutdown
     setShutdownStatus: mock.fn(() => true),

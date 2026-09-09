@@ -23,7 +23,7 @@ export interface ConsulOptions {
     groupDataPrefix?: string;
     valuesPrefix?: string;
     client?: Consul;
-    // Instance-state expiry TTLs (seconds), mirroring the Redis store. See filterOutAndTrimExpiredStates.
+    // Instance-state expiry TTLs (seconds), mirroring the Redis store. See trimExpiredStates.
     idleTTL?: number;
     provisioningTTL?: number;
     shutdownStatusTTL?: number;
@@ -46,6 +46,12 @@ function isTTLValueExpired(v: TTLValue, now: number): boolean {
 
 interface TTLValueMap {
     [key: string]: TTLValue;
+}
+
+export interface LegacyGroupDataMigrationSummary {
+    moved: number;
+    skipped: number;
+    deleted: number;
 }
 
 // NOTE: Consul TTL semantics are wall-clock timestamps compared client-side (see writeTTLValue /
@@ -95,6 +101,28 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         if (options.terminalReservationRetentionSec !== undefined) {
             this.terminalReservationRetentionSec = options.terminalReservationRetentionSec;
         }
+    }
+
+    // Parses a KV item's JSON value. Returns undefined (and warns with the key) for an empty/null value
+    // (e.g. a directory-style key created via the Consul UI) or malformed / non-object JSON, so a single
+    // bad key cannot fail a whole group read or every reservation lookup.
+    private parseItemValue<T>(ctx: Context, item: GetItem, what: string): T | undefined {
+        if (!item.Value) {
+            ctx.logger.warn(`Skipping ${what} with an empty value in consul`, { key: item.Key });
+            return undefined;
+        }
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(item.Value);
+        } catch (err) {
+            ctx.logger.warn(`Skipping ${what} with malformed JSON in consul: ${err}`, { key: item.Key, err });
+            return undefined;
+        }
+        if (parsed === null || typeof parsed !== 'object') {
+            ctx.logger.warn(`Skipping ${what} with a non-object JSON value in consul`, { key: item.Key });
+            return undefined;
+        }
+        return <T>parsed;
     }
 
     // shutdown related methods
@@ -266,37 +294,42 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         }
     }
 
-    async getAllInstanceGroupNames(ctx: Context): Promise<string[]> {
-        const res = await this.fetchRecursive(ctx, this.groupsPrefix);
-        if (!res) {
-            return [];
+    // Returns the group name when the item is a group definition, otherwise undefined. A definition is a
+    // bare `${groupsPrefix}<name>` key (no further nesting) with a non-empty value. Older builds wrote
+    // per-group data (states/shutdown/...) under this same prefix, so nested leftover keys must not be
+    // parsed as phantom groups named e.g. `jvb-east/states/i-123`; a bare-prefix placeholder (empty name)
+    // and empty-valued keys (e.g. a directory key created via the Consul UI) are skipped for the same
+    // reason. Shared by every group listing so the two cannot drift.
+    private groupDefinitionName(item: GetItem): string | undefined {
+        const name = item.Key.startsWith(this.groupsPrefix) ? item.Key.slice(this.groupsPrefix.length) : item.Key;
+        if (name.length === 0 || name.includes('/') || !item.Value) {
+            return undefined;
         }
-        // A group definition key is `${groupsPrefix}<name>` with no further nesting. Older builds wrote
-        // per-group data (states/shutdown/...) under this same prefix; skip any such leftover nested keys
-        // so they aren't parsed as phantom groups named e.g. `jvb-east/states/i-123`.
-        return Object.entries(res)
-            .map(([_k, v]) => v.Key.replace(this.groupsPrefix, ''))
-            .filter((name) => name.length > 0 && !name.includes('/'));
+        return name;
+    }
+
+    private async fetchGroupDefinitionItems(ctx: Context): Promise<GetItem[]> {
+        return (await this.fetchRecursive(ctx, this.groupsPrefix)).filter(
+            (item) => this.groupDefinitionName(item) !== undefined,
+        );
+    }
+
+    async getAllInstanceGroupNames(ctx: Context): Promise<string[]> {
+        return (await this.fetchGroupDefinitionItems(ctx)).map((item) => this.groupDefinitionName(item));
     }
 
     async getAllInstanceGroups(ctx: Context): Promise<InstanceGroup[]> {
         ctx.logger.debug('fetching consul k/v keys');
-        const key = this.groupsPrefix;
-        const res = await this.client.kv.get({ key, recurse: true });
-        if (!res) {
-            ctx.logger.debug('received consul k/v results', { key });
-            return [];
+        const items = await this.fetchGroupDefinitionItems(ctx);
+        ctx.logger.debug('received consul k/v results', { key: this.groupsPrefix, res: items });
+        const groups: InstanceGroup[] = [];
+        for (const item of items) {
+            const group = this.parseItemValue<InstanceGroup>(ctx, item, 'instance group');
+            if (group) {
+                groups.push(group);
+            }
         }
-        ctx.logger.debug('received consul k/v results', { key, res });
-        // Only bare `${groupsPrefix}<name>` keys with a non-empty value are group definitions; skip nested
-        // legacy data keys, a bare-prefix placeholder (empty name), and empty-valued keys (e.g. a directory
-        // key created via the Consul UI) so nothing is cast to a phantom InstanceGroup or crashes JSON.parse.
-        return Object.entries(res)
-            .filter(([_k, v]) => {
-                const name = v.Key.replace(this.groupsPrefix, '');
-                return name.length > 0 && !name.includes('/') && !!v.Value;
-            })
-            .map(([_k, v]) => <InstanceGroup>JSON.parse(v.Value));
+        return groups;
     }
 
     // Write failures propagate (write() logs and rethrows), matching RedisStore: a swallowed failure
@@ -307,30 +340,110 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     }
 
     async deleteInstanceGroup(ctx: Context, group: string): Promise<void> {
+        // Purge every per-group data tree first (in parallel) and the definition LAST, only once all of the
+        // data deletes succeeded. Deleting the definition first left orphaned data behind on a transient
+        // failure and made the retry 404. Reservations and the grace flag live outside groupDataPrefix, so
+        // omitting them would resurrect stale reservations if the group is recreated; the legacy nested
+        // subtree under groupsPrefix is from the pre-C2 layout.
+        const dataDeletes: { what: string; run: () => Promise<unknown> }[] = [
+            {
+                what: 'group data',
+                run: () => this.client.kv.del({ key: `${this.groupDataPrefix}${group}/`, recurse: true }),
+            },
+            {
+                what: 'reservations',
+                run: () => this.client.kv.del({ key: `${this.reservationsPrefix}${group}/`, recurse: true }),
+            },
+            {
+                what: 'scale-down grace flag',
+                run: () => this.delete(`${this.valuesPrefix}reservation-scaledown-grace:${group}`),
+            },
+            {
+                what: 'legacy group data',
+                run: () => this.client.kv.del({ key: `${this.groupsPrefix}${group}/`, recurse: true }),
+            },
+        ];
+        const results = await Promise.allSettled(dataDeletes.map((d) => d.run()));
+        const failed: string[] = [];
+        results.forEach((r, i) => {
+            if (r.status === 'rejected') {
+                failed.push(dataDeletes[i].what);
+                ctx.logger.error(
+                    `Failed to delete ${dataDeletes[i].what} for instance group from consul: ${r.reason}`,
+                    {
+                        group,
+                        err: r.reason,
+                    },
+                );
+            }
+        });
+        if (failed.length > 0) {
+            // The definition is intentionally left in place so the API caller can retry the delete.
+            throw new Error(`Failed to delete instance group ${group} from consul: ${failed.join(', ')} not deleted`);
+        }
         try {
-            // Delete the group definition, the whole per-group data subtree, the reservations subtree, and
-            // the scale-down grace flag. Reservations and the grace flag live outside groupDataPrefix, so
-            // omitting them would resurrect stale reservations if the group is recreated.
             await this.delete(`${this.groupsPrefix}${group}`);
-            await this.client.kv.del({ key: `${this.groupDataPrefix}${group}/`, recurse: true });
-            await this.client.kv.del({ key: `${this.reservationsPrefix}${group}/`, recurse: true });
-            await this.delete(`${this.valuesPrefix}reservation-scaledown-grace:${group}`);
         } catch (err) {
             // Propagate like RedisStore.deleteInstanceGroup: a partial delete must not read as success.
-            ctx.logger.error(`Failed to delete instance group from consul: ${err}`, { group, err });
+            ctx.logger.error(`Failed to delete instance group definition from consul: ${err}`, { group, err });
             throw err;
         }
     }
 
+    // Raw (untrimmed) states under the group's states subtree; keys with empty or malformed values are
+    // skipped (see parseItemValue) so one bad key cannot take the whole group down.
+    private async fetchRawInstanceStates(ctx: Context, group: string): Promise<InstanceState[]> {
+        const items = await this.fetchRecursive(ctx, `${this.groupDataPrefix}${group}/states`);
+        const states: InstanceState[] = [];
+        for (const item of items) {
+            const state = this.parseItemValue<InstanceState>(ctx, item, 'instance state');
+            if (state) {
+                states.push(state);
+            }
+        }
+        return states;
+    }
+
     async fetchInstanceStates(ctx: Context, group: string): Promise<InstanceState[]> {
         try {
-            const states = await this.client.kv.get({ key: `${this.groupDataPrefix}${group}/states`, recurse: true });
-            // kv.get returns undefined when no keys match; Object.entries(undefined) would throw.
-            if (!states) {
+            const rawStates = await this.fetchRawInstanceStates(ctx, group);
+            // Skip the recursive shutdown-status fetch for idle/empty groups. This does not leak expired
+            // shutdown-status keys: trimCurrent(filterShutdown=true) — the default on the autoscaler/launcher/
+            // metrics paths — goes through fetchInstanceStatesWithShutdownStatuses, whose clean read of the
+            // shutdown subtree runs every cycle regardless of instance count and reaps them.
+            if (rawStates.length === 0) {
                 return [];
             }
-            const rawStates = Object.entries(states).map(([_k, v]) => <InstanceState>JSON.parse(v.Value));
-            return this.filterOutAndTrimExpiredStates(ctx, group, rawStates);
+            const shutdownStatuses = await this.getShutdownStatuses(
+                ctx,
+                group,
+                rawStates.map((state) => state.instanceId),
+            );
+            return this.trimExpiredStates(ctx, group, rawStates, shutdownStatuses);
+        } catch (err) {
+            ctx.logger.error(`Failed to get instance states from consul: ${err}`, { err });
+            throw err;
+        }
+    }
+
+    // Single-round-trip variant used by InstanceTracker.trimCurrent. The recursive shutdown-status GET is
+    // a whole-group read independent of the instance ids, so one fetch serves both the expiry partition
+    // and the tracker's shutting-down filter (it used to run twice per trimCurrent). The shutdown map is
+    // always read (even for an empty group) because that clean read is what reaps expired shutdown keys.
+    async fetchInstanceStatesWithShutdownStatuses(
+        ctx: Context,
+        group: string,
+    ): Promise<{ states: InstanceState[]; shutdownStatuses: boolean[] }> {
+        try {
+            const rawStates = await this.fetchRawInstanceStates(ctx, group);
+            const shutdownIds = new Set(Object.keys(await this.fetchShutdownStatus(ctx, group)));
+            const states = await this.trimExpiredStates(
+                ctx,
+                group,
+                rawStates,
+                rawStates.map((state) => shutdownIds.has(state.instanceId)),
+            );
+            return { states, shutdownStatuses: states.map((state) => shutdownIds.has(state.instanceId)) };
         } catch (err) {
             ctx.logger.error(`Failed to get instance states from consul: ${err}`, { err });
             throw err;
@@ -338,25 +451,16 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
     }
 
     // Uses the shared expiry policy (see instance_state_expiry.ts) so Consul and Redis stay in lockstep,
-    // then deletes the expired state keys from Consul.
-    async filterOutAndTrimExpiredStates(
+    // then deletes the expired state keys from Consul. `shutdownStatuses` is index-aligned with `states`.
+    private async trimExpiredStates(
         ctx: Context,
         group: string,
         states: InstanceState[],
+        shutdownStatuses: boolean[],
     ): Promise<InstanceState[]> {
-        // Skip the recursive shutdown-status fetch here for idle/empty groups. This does not leak expired
-        // shutdown-status keys: trimCurrent(filterShutdown=true) — the default on the autoscaler/launcher/
-        // metrics paths — calls filterOutInstancesShuttingDown -> getShutdownStatuses ->
-        // fetchRecursiveTTLValues(clean=true) every cycle regardless of instance count, which reaps them.
         if (states.length === 0) {
             return [];
         }
-        const shutdownStatuses = await this.getShutdownStatuses(
-            ctx,
-            group,
-            states.map((state) => state.instanceId),
-        );
-
         const { valid, expired } = partitionExpiredStates(
             ctx,
             group,
@@ -408,8 +512,12 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         // value changed since we read it.
         const meta: { [shortKey: string]: { fullKey: string; modifyIndex: number } } = {};
         (await this.fetchRecursive(ctx, prefix)).map((v) => {
+            const ttlValue = this.parseItemValue<TTLValue>(ctx, v, 'TTL value');
+            if (!ttlValue) {
+                return;
+            }
             const shortKey = v.Key.startsWith(prefix) ? v.Key.slice(prefix.length) : v.Key;
-            values[shortKey] = <TTLValue>JSON.parse(v.Value);
+            values[shortKey] = ttlValue;
             meta[shortKey] = { fullKey: v.Key, modifyIndex: v.ModifyIndex };
         });
         if (clean) {
@@ -473,7 +581,14 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         return true;
     }
 
+    // The TTL must be a finite number of seconds >= 0. A non-finite ttl (undefined/NaN, e.g. a group created
+    // without protectedTTLSec) would serialize `expires` as null, which isTTLValueExpired reads as
+    // never-expires — permanent scale-down protection. Redis throws on `EX undefined`; throwing here keeps
+    // the two stores in parity. Use writePersistentValue for values that intentionally never expire.
     async writeTTLValue(ctx: Context, key: string, status: string, ttl: number): Promise<boolean> {
+        if (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl < 0) {
+            throw new Error(`Invalid TTL ${ttl} for consul key ${key}: must be a finite number of seconds >= 0`);
+        }
         return this.write(ctx, key, JSON.stringify(<TTLValue>{ status, expires: Date.now() + ttl * 1000 }));
     }
 
@@ -538,10 +653,66 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         }
     }
 
+    // One-off, idempotent migration for the C2 key-tree move: per-group data used to be nested under the
+    // group definitions prefix (`${groupsPrefix}<group>/states/<id>`, ...) and now lives under
+    // groupDataPrefix. Every nested key under groupsPrefix is copied to the same suffix under
+    // groupDataPrefix unless a value already exists there (the new layout wins), then the legacy key is
+    // deleted. A clean tree is a no-op. Safe to run on every startup.
+    async migrateLegacyGroupData(ctx: Context): Promise<LegacyGroupDataMigrationSummary> {
+        const summary: LegacyGroupDataMigrationSummary = { moved: 0, skipped: 0, deleted: 0 };
+        const items = await this.fetchRecursive(ctx, this.groupsPrefix);
+        for (const item of items) {
+            if (!item.Key.startsWith(this.groupsPrefix)) {
+                continue;
+            }
+            const suffix = item.Key.slice(this.groupsPrefix.length);
+            if (!suffix.includes('/')) {
+                // a bare `${groupsPrefix}<name>` key is a group definition, which stays where it is
+                continue;
+            }
+            const target = `${this.groupDataPrefix}${suffix}`;
+            const existing = await this.fetch(ctx, target);
+            if (existing) {
+                ctx.logger.debug('legacy group data key not moved, target already exists', { key: item.Key, target });
+                summary.skipped++;
+            } else if (!item.Value) {
+                ctx.logger.debug('legacy group data key has no value, not moved', { key: item.Key });
+                summary.skipped++;
+            } else {
+                await this.write(ctx, target, item.Value);
+                summary.moved++;
+            }
+            await this.delete(item.Key);
+            summary.deleted++;
+        }
+        ctx.logger.info('Legacy consul group data migration finished', {
+            ...summary,
+            groupsPrefix: this.groupsPrefix,
+            groupDataPrefix: this.groupDataPrefix,
+        });
+        return summary;
+    }
+
     // Reservation store methods
 
     private reservationKey(groupName: string, id: string): string {
         return `${this.reservationsPrefix}${groupName}/${id}`;
+    }
+
+    // The reservation itself is JSON nested inside the TTLValue's status string; a malformed inner value is
+    // skipped (with a warning) rather than failing the lookup.
+    private parseReservation(ctx: Context, key: string, ttlValue: TTLValue): Reservation | undefined {
+        try {
+            const reservation = JSON.parse(ttlValue.status);
+            if (reservation === null || typeof reservation !== 'object') {
+                ctx.logger.warn('Skipping reservation with a non-object JSON value in consul', { key });
+                return undefined;
+            }
+            return <Reservation>reservation;
+        } catch (err) {
+            ctx.logger.warn(`Skipping reservation with malformed JSON in consul: ${err}`, { key, err });
+            return undefined;
+        }
     }
 
     async saveReservation(ctx: Context, reservation: Reservation): Promise<void> {
@@ -563,19 +734,31 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         // Since we don't know the group name, search all reservations
         const items = await this.fetchRecursive(ctx, this.reservationsPrefix);
         for (const item of items) {
-            if (item.Key.endsWith(`/${id}`)) {
-                const ttlValue = JSON.parse(item.Value) as TTLValue;
-                if (!isTTLValueExpired(ttlValue, Date.now())) {
-                    return JSON.parse(ttlValue.status);
-                }
-                // Expired reservation: clean it up (by its full key) rather than leaving it in the KV.
-                try {
-                    await this.delete(item.Key);
-                } catch (err) {
-                    ctx.logger.error(`Failed to delete expired reservation from consul`, { id, key: item.Key, err });
-                }
-                return null;
+            if (!item.Key.endsWith(`/${id}`)) {
+                continue;
             }
+            const ttlValue = this.parseItemValue<TTLValue>(ctx, item, 'reservation');
+            if (!ttlValue) {
+                continue;
+            }
+            if (!isTTLValueExpired(ttlValue, Date.now())) {
+                return this.parseReservation(ctx, item.Key, ttlValue) ?? null;
+            }
+            // Expired reservation: clean it up (by its full key) rather than leaving it in the KV. CAS-guarded
+            // like fetchRecursiveTTLValues so a concurrent re-save between our read and this delete (which
+            // bumps the ModifyIndex) is never clobbered; the next read picks up the refreshed value.
+            try {
+                const deleted = await this.deleteCas(item.Key, item.ModifyIndex);
+                if (!deleted) {
+                    ctx.logger.debug('expired reservation was rewritten concurrently, not deleted', {
+                        id,
+                        key: item.Key,
+                    });
+                }
+            } catch (err) {
+                ctx.logger.error(`Failed to delete expired reservation from consul`, { id, key: item.Key, err });
+            }
+            return null;
         }
         return null;
     }
@@ -584,7 +767,14 @@ export default class ConsulStore implements InstanceStore, ReservationStore {
         // Trailing slash: the prefix `.../jvb-east` would otherwise also match `.../jvb-east-2/<id>`.
         const key = `${this.reservationsPrefix}${groupName}/`;
         const ttlValues = await this.fetchRecursiveTTLValues(ctx, key, true);
-        return Object.values(ttlValues).map((v) => JSON.parse(v.status) as Reservation);
+        const reservations: Reservation[] = [];
+        for (const [shortKey, ttlValue] of Object.entries(ttlValues)) {
+            const reservation = this.parseReservation(ctx, `${key}${shortKey}`, ttlValue);
+            if (reservation) {
+                reservations.push(reservation);
+            }
+        }
+        return reservations;
     }
 
     async deleteReservation(ctx: Context, id: string, groupName: string): Promise<void> {

@@ -8,6 +8,14 @@ import ConsulClient, { ConsulOptions } from '../consul';
 import { ConsulLockManager } from '../lock_manager';
 import Consul from 'consul';
 import { MockConsulClient } from './mock-consul-client';
+import { InstanceTracker } from '../instance_tracker';
+import ShutdownManager from '../shutdown_manager';
+
+// Writes an already-expired TTLValue straight into the mock KV. writeTTLValue rejects negative TTLs, so
+// tests that need an expired entry craft the wrapper directly instead of writing with ttl -1.
+function writeExpiredTTLValue(mockConsul: MockConsulClient, key: string, status: string) {
+    return mockConsul.kv.set(key, JSON.stringify({ status, expires: Date.now() - 1000 }));
+}
 
 const asLogger = new AutoscalerLogger({ logLevel: 'debug' });
 const logger = asLogger.createLogger('debug');
@@ -212,8 +220,36 @@ describe('ConsulStore data operations (in-memory client)', () => {
         });
 
         test('returns false for an expired value', async () => {
-            await store.setValue(ctx, 'k', 'v', -1);
+            await writeExpiredTTLValue(mockConsul, 'autoscaler/values/k', 'v');
             assert.strictEqual(await store.checkValue(ctx, 'k'), false);
+        });
+    });
+
+    // A non-finite ttl used to serialize `expires: null`, which reads as never-expires: a group created
+    // without protectedTTLSec would leave its instances permanently scale-down protected.
+    describe('writeTTLValue rejects invalid TTLs', () => {
+        test('setValue with an undefined ttl rejects and writes nothing', async () => {
+            await assert.rejects(() => store.setValue(ctx, 'k', 'v', undefined), /Invalid TTL/);
+            assert.strictEqual(await store.checkValue(ctx, 'k'), false, 'nothing must have been written');
+            assert.deepStrictEqual(mockConsul.keys(), []);
+        });
+
+        test('NaN, negative and non-numeric ttls reject', async () => {
+            await assert.rejects(() => store.setValue(ctx, 'k', 'v', NaN), /Invalid TTL/);
+            await assert.rejects(() => store.setValue(ctx, 'k', 'v', -1), /Invalid TTL/);
+            await assert.rejects(() => store.setValue(ctx, 'k', 'v', '60'), /Invalid TTL/);
+            await assert.rejects(
+                () => store.setScaleDownProtected(ctx, group.name, 'i-1', undefined, 'isScaleDownProtected'),
+                /Invalid TTL/,
+            );
+            assert.deepStrictEqual(await store.areScaleDownProtected(ctx, group.name, ['i-1']), [false]);
+        });
+
+        test('a valid ttl still works', async () => {
+            await store.setValue(ctx, 'k', 'v', 60);
+            assert.strictEqual(await store.checkValue(ctx, 'k'), true);
+            await store.setValue(ctx, 'k0', 'v', 0);
+            assert.strictEqual(await store.checkValue(ctx, 'k0'), false, 'a zero ttl expires immediately');
         });
     });
 
@@ -250,14 +286,14 @@ describe('ConsulStore data operations (in-memory client)', () => {
     });
 
     test('expired reconfigure date reads as empty (C3)', async () => {
-        await store.writeTTLValue(ctx, `autoscaler/group-data/${group.name}/reconfigure/i-1`, 'old-date', -1);
+        await writeExpiredTTLValue(mockConsul, `autoscaler/group-data/${group.name}/reconfigure/i-1`, 'old-date');
         assert.strictEqual(await store.getReconfigureDate(ctx, group.name, 'i-1'), '');
     });
 
     // C4: expired TTL entries must be deleted by their full consul path
     test('fetchRecursiveTTLValues deletes expired entries by full key (C4)', async () => {
         const prefix = 'autoscaler/group-data/testgroup/shutdown';
-        await store.writeTTLValue(ctx, `${prefix}/x`, 'shutdown', -1);
+        await writeExpiredTTLValue(mockConsul, `${prefix}/x`, 'shutdown');
         assert.ok(mockConsul.keys().includes(`${prefix}/x`), 'precondition: key exists');
 
         const res = await store.fetchRecursiveTTLValues(ctx, prefix);
@@ -332,13 +368,39 @@ describe('ConsulStore data operations (in-memory client)', () => {
         assert.ok(await store.getReservation(ctx, 'res-1'), 'precondition: reservation readable');
 
         // overwrite with an already-expired TTL wrapper
-        await store.writeTTLValue(ctx, `autoscaler/reservations/${group.name}/res-1`, JSON.stringify(reservation), -1);
+        await writeExpiredTTLValue(
+            mockConsul,
+            `autoscaler/reservations/${group.name}/res-1`,
+            JSON.stringify(reservation),
+        );
         const res = await store.getReservation(ctx, 'res-1');
         assert.strictEqual(res, null, 'expect expired reservation to read as null');
         assert.ok(
             !mockConsul.keys().includes(`autoscaler/reservations/${group.name}/res-1`),
             'expect expired reservation key to be deleted',
         );
+    });
+
+    // Review #7: the expired-reservation cleanup must be CAS-guarded like fetchRecursiveTTLValues, so a
+    // reservation re-saved between our read and our delete is not clobbered.
+    test('getReservation does not clobber a reservation rewritten between its read and the expired-delete', async () => {
+        const key = `autoscaler/reservations/${group.name}/res-1`;
+        const stale = { id: 'res-1', groupName: group.name, expiresAt: Date.now() - 1000 };
+        const fresh = { id: 'res-1', groupName: group.name, expiresAt: Date.now() + 60 * 1000 };
+        await writeExpiredTTLValue(mockConsul, key, JSON.stringify(stale));
+
+        // simulate a concurrent writer that re-saves the reservation right after our recursive read
+        const originalGet = mockConsul.kv.get;
+        mockConsul.kv.get = async (arg) => {
+            const res = await originalGet(arg);
+            mockConsul.kv.get = originalGet;
+            await mockConsul.kv.set(key, JSON.stringify({ status: JSON.stringify(fresh), expires: 0 }));
+            return res;
+        };
+
+        assert.strictEqual(await store.getReservation(ctx, 'res-1'), null, 'the value we read was expired');
+        assert.ok(mockConsul.keys().includes(key), 'the concurrently refreshed reservation must survive');
+        assert.deepStrictEqual(await store.getReservation(ctx, 'res-1'), fresh, 'next read sees the fresh value');
     });
 
     // Prefix isolation: `.../reservations/g` must not also match `.../reservations/g-2/...`.
@@ -448,5 +510,354 @@ describe('ConsulStore existsAtLeastOneGroup (C8)', () => {
         await store.upsertInstanceGroup(ctx, { name: 'real', type: 'test', region: 'r', environment: 'e', tags: {} });
         await store.deleteInstanceGroup(ctx, 'real');
         assert.strictEqual(await store.existsAtLeastOneGroup(ctx), false);
+    });
+});
+
+// Review #1 / #3 / #7 / #11 / #6 and the legacy-layout migration: ConsulStore hardening, all against the
+// in-memory client so the key layout and the exact KV calls can be inspected.
+describe('ConsulStore hardening (in-memory client)', () => {
+    let mockConsul: MockConsulClient;
+    let store: ConsulClient;
+    let wctx;
+
+    beforeEach(() => {
+        mockConsul = new MockConsulClient();
+        store = new ConsulClient({ client: mockConsul, idleTTL: 60, provisioningTTL: 60, shutdownStatusTTL: 60 });
+        wctx = { logger: { info: mock.fn(), debug: mock.fn(), error: mock.fn(), warn: mock.fn() } };
+    });
+
+    afterEach(() => {
+        mockConsul.clearAll();
+    });
+
+    function warnedKeys() {
+        return wctx.logger.warn.mock.calls.map((c) => c.arguments[1]?.key);
+    }
+
+    async function seedGroup(name = 'test') {
+        await store.upsertInstanceGroup(wctx, { ...group, name });
+        await store.saveInstanceStatus(wctx, name, {
+            instanceId: 'i-1',
+            instanceType: 'test',
+            status: { provisioning: false },
+            timestamp: Date.now(),
+            metadata: { group: name },
+        });
+        await store.setShutdownStatus(wctx, [{ instanceId: 'i-1', group: name }], 'shutdown', 60);
+        await store.saveReservation(wctx, { id: 'res-1', groupName: name, expiresAt: Date.now() + 60000 });
+        await store.setScaleDownGrace(wctx, name, 60);
+    }
+
+    describe('deleteInstanceGroup (review #1)', () => {
+        test('purges the definition, group data, reservations, grace flag and nothing else', async () => {
+            await seedGroup('test');
+            await seedGroup('test-2');
+
+            await store.deleteInstanceGroup(wctx, 'test');
+
+            const remaining = mockConsul.keys();
+            assert.ok(!remaining.some((k) => k.includes('/test/') || k.endsWith('/test') || k.endsWith(':test')));
+            assert.ok(remaining.includes('autoscaler/groups/test-2'), 'prefix-sharing sibling definition kept');
+            assert.ok(remaining.includes('autoscaler/group-data/test-2/states/i-1'), 'sibling data kept');
+            assert.ok(remaining.includes('autoscaler/reservations/test-2/res-1'), 'sibling reservations kept');
+            assert.ok(remaining.includes('autoscaler/values/reservation-scaledown-grace:test-2'), 'sibling grace kept');
+            assert.strictEqual(await store.getInstanceGroup(wctx, 'test'), undefined);
+        });
+
+        test('keeps the definition and rejects when a data delete fails, so the caller can retry', async () => {
+            await seedGroup('test');
+            const originalDel = mockConsul.kv.del;
+            mockConsul.kv.del = async (arg) => {
+                if (typeof arg !== 'string' && arg.key === 'autoscaler/group-data/test/') {
+                    throw new Error('EXPECTED ERROR: consul down');
+                }
+                return originalDel(arg);
+            };
+
+            await assert.rejects(() => store.deleteInstanceGroup(wctx, 'test'), /group data not deleted/);
+            assert.ok(
+                mockConsul.keys().includes('autoscaler/groups/test'),
+                'definition must survive a failed data delete',
+            );
+            assert.deepStrictEqual(await store.getInstanceGroup(wctx, 'test'), { ...group, name: 'test' });
+            assert.strictEqual(wctx.logger.error.mock.calls.length, 1, 'each failed subtree is logged');
+
+            // the retry (with consul healthy again) completes the delete
+            mockConsul.kv.del = originalDel;
+            await store.deleteInstanceGroup(wctx, 'test');
+            assert.deepStrictEqual(mockConsul.keys(), []);
+        });
+
+        test('purges legacy nested keys under groupsPrefix from the pre-C2 layout', async () => {
+            await seedGroup('test');
+            await mockConsul.kv.set(
+                'autoscaler/groups/test/states/i-legacy',
+                JSON.stringify({ instanceId: 'i-legacy' }),
+            );
+            await mockConsul.kv.set(
+                'autoscaler/groups/test/shutdown/i-legacy',
+                JSON.stringify({ status: 'x', expires: 0 }),
+            );
+            await mockConsul.kv.set('autoscaler/groups/test-2', JSON.stringify({ ...group, name: 'test-2' }));
+
+            await store.deleteInstanceGroup(wctx, 'test');
+
+            assert.deepStrictEqual(mockConsul.keys(), ['autoscaler/groups/test-2']);
+        });
+    });
+
+    describe('group listings ignore empty-valued keys (review #3)', () => {
+        test('an empty-valued key under groupsPrefix is not a group', async () => {
+            await mockConsul.kv.set('autoscaler/groups/dir-placeholder', '');
+            await mockConsul.kv.set('autoscaler/groups/', '');
+            assert.strictEqual(await store.existsAtLeastOneGroup(wctx), false);
+            assert.deepStrictEqual(await store.getAllInstanceGroupNames(wctx), []);
+            assert.deepStrictEqual(await store.getAllInstanceGroups(wctx), []);
+
+            await store.upsertInstanceGroup(wctx, group);
+            assert.deepStrictEqual(await store.getAllInstanceGroupNames(wctx), ['test']);
+            assert.deepStrictEqual(
+                (await store.getAllInstanceGroups(wctx)).map((g) => g.name),
+                ['test'],
+            );
+            assert.strictEqual(await store.existsAtLeastOneGroup(wctx), true);
+        });
+    });
+
+    describe('malformed values are skipped, not fatal (review #11)', () => {
+        test('fetchInstanceStates skips a directory-style key and garbage JSON under states/', async () => {
+            await store.saveInstanceStatus(wctx, 'g', {
+                instanceId: 'i-ok',
+                instanceType: 'test',
+                status: { provisioning: false },
+                timestamp: Date.now(),
+                metadata: { group: 'g' },
+            });
+            await mockConsul.kv.set('autoscaler/group-data/g/states/', null);
+            await mockConsul.kv.set('autoscaler/group-data/g/states/i-bad', '{not json');
+
+            const states = await store.fetchInstanceStates(wctx, 'g');
+            assert.deepStrictEqual(
+                states.map((s) => s.instanceId),
+                ['i-ok'],
+            );
+            assert.deepStrictEqual(warnedKeys().sort(), [
+                'autoscaler/group-data/g/states/',
+                'autoscaler/group-data/g/states/i-bad',
+            ]);
+        });
+
+        test('shutdown statuses skip a null-valued key and garbage JSON under shutdown/', async () => {
+            await store.setShutdownStatus(wctx, [{ instanceId: 'i-ok', group: 'g' }], 'shutdown', 60);
+            await mockConsul.kv.set('autoscaler/group-data/g/shutdown/', null);
+            await mockConsul.kv.set('autoscaler/group-data/g/shutdown/i-bad', 'garbage');
+
+            assert.deepStrictEqual(await store.getShutdownStatuses(wctx, 'g', ['i-ok', 'i-bad']), [true, false]);
+            assert.deepStrictEqual(warnedKeys().sort(), [
+                'autoscaler/group-data/g/shutdown/',
+                'autoscaler/group-data/g/shutdown/i-bad',
+            ]);
+            // the bad keys are left alone (only expired TTL values are reaped)
+            assert.ok(mockConsul.keys().includes('autoscaler/group-data/g/shutdown/i-bad'));
+        });
+
+        test('reservation reads skip bad siblings', async () => {
+            const good = { id: 'res-ok', groupName: 'g', expiresAt: Date.now() + 60000 };
+            await store.saveReservation(wctx, good);
+            await mockConsul.kv.set('autoscaler/reservations/g/', null);
+            await mockConsul.kv.set('autoscaler/reservations/g/res-bad', '<<<');
+            // valid TTL wrapper whose inner reservation is garbage
+            await mockConsul.kv.set(
+                'autoscaler/reservations/g/res-inner',
+                JSON.stringify({ status: '{oops', expires: 0 }),
+            );
+
+            assert.deepStrictEqual(await store.listReservations(wctx, 'g'), [good]);
+            assert.deepStrictEqual(await store.getReservation(wctx, 'res-ok'), good);
+            assert.strictEqual(await store.getReservation(wctx, 'res-bad'), null);
+            assert.strictEqual(await store.getReservation(wctx, 'res-inner'), null);
+            assert.ok(warnedKeys().includes('autoscaler/reservations/g/res-bad'));
+            assert.ok(warnedKeys().includes('autoscaler/reservations/g/res-inner'));
+            assert.ok(warnedKeys().includes('autoscaler/reservations/g/'));
+        });
+
+        test('getAllInstanceGroups skips a garbage definition and keeps its siblings', async () => {
+            await store.upsertInstanceGroup(wctx, group);
+            await mockConsul.kv.set('autoscaler/groups/broken', '{"name": ');
+
+            const groups = await store.getAllInstanceGroups(wctx);
+            assert.deepStrictEqual(
+                groups.map((g) => g.name),
+                ['test'],
+            );
+            assert.deepStrictEqual(warnedKeys(), ['autoscaler/groups/broken']);
+            // the name listing is layout-only and still reports the key so operators can find and fix it
+            assert.deepStrictEqual((await store.getAllInstanceGroupNames(wctx)).sort(), ['broken', 'test']);
+        });
+    });
+
+    describe('shutdown subtree is read once per trimCurrent (review #6)', () => {
+        function countingTracker() {
+            const counts = { shutdown: 0, confirmation: 0, states: 0 };
+            const originalGet = mockConsul.kv.get;
+            mockConsul.kv.get = async (arg) => {
+                if (typeof arg !== 'string' && arg.recurse) {
+                    if (arg.key.includes('/shutdown')) counts.shutdown++;
+                    if (arg.key.includes('/confirmation')) counts.confirmation++;
+                    if (arg.key.includes('/states')) counts.states++;
+                }
+                return originalGet(arg);
+            };
+            const audit = {
+                saveShutdownEvents: mock.fn(),
+                saveShutdownConfirmationEvents: mock.fn(),
+                saveLatestStatus: mock.fn(),
+            };
+            const shutdownManager = new ShutdownManager({ instanceStore: store, shutdownTTL: 60, audit });
+            const tracker = new InstanceTracker({ instanceStore: store, metricsStore: store, shutdownManager, audit });
+            return { tracker, counts };
+        }
+
+        function state(id, extra = {}) {
+            return {
+                instanceId: id,
+                instanceType: 'test',
+                status: { provisioning: false },
+                timestamp: Date.now(),
+                metadata: { group: 'g' },
+                ...extra,
+            };
+        }
+
+        test('trimCurrent issues exactly one recursive GET of the shutdown subtree', async () => {
+            await store.saveInstanceStatus(wctx, 'g', state('i-running'));
+            await store.saveInstanceStatus(wctx, 'g', state('i-shutting-down'));
+            await store.saveInstanceStatus(
+                wctx,
+                'g',
+                state('i-expired-shutdown', { timestamp: Date.now() - 90 * 1000 }),
+            );
+            await store.saveInstanceStatus(wctx, 'g', state('i-expired-idle', { timestamp: Date.now() - 90 * 1000 }));
+            await store.setShutdownStatus(
+                wctx,
+                [
+                    { instanceId: 'i-shutting-down', group: 'g' },
+                    { instanceId: 'i-expired-shutdown', group: 'g' },
+                ],
+                'shutdown',
+                60,
+            );
+            const { tracker, counts } = countingTracker();
+
+            const states = await tracker.trimCurrent(wctx, 'g');
+
+            assert.deepStrictEqual(
+                states.map((s) => s.instanceId),
+                ['i-running'],
+                'shutting-down instances are filtered out',
+            );
+            assert.strictEqual(counts.shutdown, 1, 'shutdown subtree must be read once, not twice');
+            assert.strictEqual(counts.states, 1);
+            assert.strictEqual(counts.confirmation, 1);
+            // expiry policy unchanged: the shutting-down state got shutdownStatusTTL (60s < 90s -> expired too),
+            // the idle one idleTTL; both expired keys are trimmed from the KV
+            assert.ok(!mockConsul.keys().includes('autoscaler/group-data/g/states/i-expired-idle'));
+            assert.ok(!mockConsul.keys().includes('autoscaler/group-data/g/states/i-expired-shutdown'));
+            assert.ok(mockConsul.keys().includes('autoscaler/group-data/g/states/i-shutting-down'));
+        });
+
+        test('trimCurrent on an empty group still reaps expired shutdown keys with a single read', async () => {
+            await writeExpiredTTLValue(mockConsul, 'autoscaler/group-data/g/shutdown/i-gone', 'shutdown');
+            const { tracker, counts } = countingTracker();
+
+            assert.deepStrictEqual(await tracker.trimCurrent(wctx, 'g'), []);
+            assert.strictEqual(counts.shutdown, 1);
+            assert.ok(!mockConsul.keys().includes('autoscaler/group-data/g/shutdown/i-gone'), 'expired key reaped');
+        });
+
+        test('trimCurrent(filterShutdown=false) reads the shutdown subtree at most once', async () => {
+            await store.saveInstanceStatus(wctx, 'g', state('i-running'));
+            const { tracker, counts } = countingTracker();
+
+            const states = await tracker.trimCurrent(wctx, 'g', false);
+            assert.deepStrictEqual(
+                states.map((s) => s.instanceId),
+                ['i-running'],
+            );
+            assert.strictEqual(counts.shutdown, 1);
+            assert.strictEqual(counts.confirmation, 0);
+        });
+    });
+
+    describe('migrateLegacyGroupData', () => {
+        test('moves nested legacy keys under groupsPrefix to groupDataPrefix and removes them', async () => {
+            await store.upsertInstanceGroup(wctx, group);
+            const legacyState = JSON.stringify({ instanceId: 'i-1', metadata: { group: 'test' } });
+            const legacyShutdown = JSON.stringify({ status: 'shutdown', expires: Date.now() + 60000 });
+            const legacyProtected = JSON.stringify({ status: 'isScaleDownProtected', expires: 0 });
+            await mockConsul.kv.set('autoscaler/groups/test/states/i-1', legacyState);
+            await mockConsul.kv.set('autoscaler/groups/test/shutdown/i-1', legacyShutdown);
+            await mockConsul.kv.set('autoscaler/groups/test/protected/i-1', legacyProtected);
+
+            const summary = await store.migrateLegacyGroupData(wctx);
+
+            assert.deepStrictEqual(summary, { moved: 3, skipped: 0, deleted: 3 });
+            assert.deepStrictEqual(mockConsul.keys().sort(), [
+                'autoscaler/group-data/test/protected/i-1',
+                'autoscaler/group-data/test/shutdown/i-1',
+                'autoscaler/group-data/test/states/i-1',
+                'autoscaler/groups/test',
+            ]);
+            assert.strictEqual((await mockConsul.kv.get('autoscaler/group-data/test/states/i-1')).Value, legacyState);
+            assert.strictEqual(
+                (await mockConsul.kv.get('autoscaler/group-data/test/shutdown/i-1')).Value,
+                legacyShutdown,
+            );
+            assert.strictEqual(
+                (await mockConsul.kv.get('autoscaler/group-data/test/protected/i-1')).Value,
+                legacyProtected,
+            );
+            // the moved data is readable through the normal store paths
+            assert.deepStrictEqual(await store.getShutdownStatuses(wctx, 'test', ['i-1']), [true]);
+            assert.deepStrictEqual(await store.areScaleDownProtected(wctx, 'test', ['i-1']), [true]);
+            assert.strictEqual(wctx.logger.info.mock.calls.length, 1, 'summary logged at info');
+            assert.deepStrictEqual(wctx.logger.info.mock.calls[0].arguments[1].moved, 3);
+        });
+
+        test('does not overwrite an existing target but still removes the legacy key', async () => {
+            const current = JSON.stringify({ instanceId: 'i-1', timestamp: 2 });
+            await mockConsul.kv.set('autoscaler/group-data/test/states/i-1', current);
+            await mockConsul.kv.set(
+                'autoscaler/groups/test/states/i-1',
+                JSON.stringify({ instanceId: 'i-1', timestamp: 1 }),
+            );
+            await mockConsul.kv.set('autoscaler/groups/test/states/i-2', JSON.stringify({ instanceId: 'i-2' }));
+
+            const summary = await store.migrateLegacyGroupData(wctx);
+
+            assert.deepStrictEqual(summary, { moved: 1, skipped: 1, deleted: 2 });
+            assert.strictEqual((await mockConsul.kv.get('autoscaler/group-data/test/states/i-1')).Value, current);
+            assert.ok(mockConsul.keys().includes('autoscaler/group-data/test/states/i-2'));
+            assert.ok(!mockConsul.keys().some((k) => k.startsWith('autoscaler/groups/test/')), 'legacy keys removed');
+        });
+
+        test('is a no-op on a clean tree and idempotent', async () => {
+            await store.upsertInstanceGroup(wctx, group);
+            await store.saveInstanceStatus(wctx, 'test', {
+                instanceId: 'i-1',
+                instanceType: 'test',
+                status: { provisioning: false },
+                timestamp: Date.now(),
+                metadata: { group: 'test' },
+            });
+            const before = mockConsul.keys().sort();
+
+            assert.deepStrictEqual(await store.migrateLegacyGroupData(wctx), { moved: 0, skipped: 0, deleted: 0 });
+            assert.deepStrictEqual(mockConsul.keys().sort(), before);
+
+            await mockConsul.kv.set('autoscaler/groups/test/states/i-2', JSON.stringify({ instanceId: 'i-2' }));
+            assert.deepStrictEqual(await store.migrateLegacyGroupData(wctx), { moved: 1, skipped: 0, deleted: 1 });
+            assert.deepStrictEqual(await store.migrateLegacyGroupData(wctx), { moved: 0, skipped: 0, deleted: 0 });
+        });
     });
 });

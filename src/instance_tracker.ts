@@ -443,24 +443,37 @@ export class InstanceTracker {
         return this.instanceStore.fetchInstanceStates(ctx, group);
     }
 
-    async filterOutAndTrimExpiredStates(
+    // Fetches the group's (already expiry-trimmed) states and, when the shutdown filter is going to need
+    // them and the store can supply both in one read (see InstanceStore.fetchInstanceStatesWithShutdownStatuses),
+    // the store-side shutdown statuses as well, so Consul mode does not sweep the shutdown subtree twice
+    // per trimCurrent. Otherwise shutdownStatuses is undefined and filterOutInstancesShuttingDown asks the
+    // ShutdownManager as before.
+    private async fetchStatesForTrim(
         ctx: Context,
         group: string,
-        states: InstanceState[],
-    ): Promise<InstanceState[]> {
-        return this.instanceStore.filterOutAndTrimExpiredStates(ctx, group, states);
+        needShutdownStatuses: boolean,
+    ): Promise<{ states: InstanceState[]; shutdownStatuses?: boolean[] }> {
+        if (needShutdownStatuses && this.instanceStore.fetchInstanceStatesWithShutdownStatuses) {
+            return this.instanceStore.fetchInstanceStatesWithShutdownStatuses(ctx, group);
+        }
+        return { states: await this.getGroupInstanceStates(ctx, group) };
     }
 
     async trimCurrent(ctx: Context, group: string, filterShutdown = true): Promise<InstanceState[]> {
         // fetchInstanceStates already trims expired states inside the store (the single source of the
         // expiry policy for both providers), so we don't re-filter here — that was a redundant second
         // recursive KV sweep in Consul mode.
-        const states = await this.getGroupInstanceStates(ctx, group);
+        const { states, shutdownStatuses } = await this.fetchStatesForTrim(ctx, group, filterShutdown);
         ctx.logger.debug(`instance states`, { group, states });
 
         if (filterShutdown) {
             const filterShutdownStart = process.hrtime();
-            const statesExceptShutDown = await this.filterOutInstancesShuttingDown(ctx, group, states);
+            const statesExceptShutDown = await this.filterOutInstancesShuttingDown(
+                ctx,
+                group,
+                states,
+                shutdownStatuses,
+            );
             const filterShutdownEnd = process.hrtime(filterShutdownStart);
             ctx.logger.debug(`instance filtered states, with no shutdown instances: ${statesExceptShutDown}`, {
                 group,
@@ -497,15 +510,19 @@ export class InstanceTracker {
         return shutdownStatus;
     }
 
+    // `knownShutdownStatuses` (index-aligned with `states`) lets a caller that already holds the store's
+    // shutdown statuses for these states skip the second lookup; when absent they are fetched here.
     async filterOutInstancesShuttingDown(
         ctx: Context,
         group: string,
         states: InstanceState[],
+        knownShutdownStatuses?: boolean[],
     ): Promise<InstanceState[]> {
         const instanceIds = states.map((state) => {
             return state.instanceId;
         });
-        const shutdownStatuses = await this.shutdownManager.getShutdownStatuses(ctx, group, instanceIds);
+        const shutdownStatuses =
+            knownShutdownStatuses ?? (await this.shutdownManager.getShutdownStatuses(ctx, group, instanceIds));
 
         const shutdownConfirmations = await this.shutdownManager.getShutdownConfirmations(ctx, group, instanceIds);
 

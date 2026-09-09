@@ -20,8 +20,14 @@ import MetricsStore from '../metrics_store';
 import ReservationStore from '../reservation_store';
 import { Context } from '../context';
 
+// `true` when Iface's member K is optional (`m?: ...`). Uses Pick rather than `undefined extends Iface[K]`
+// because strictNullChecks is off in this project, so optionality never shows up in the member's type.
+type IsOptionalMember<Iface, K extends keyof Iface> = object extends Pick<Iface, K> ? true : false;
+
 // For every method on Iface: `true` when Impl has a method of the same name whose parameter-count type
 // covers the interface's (an implementation may add optional/defaulted params, never drop required ones).
+// An optional interface method (e.g. InstanceStore.fetchInstanceStatesWithShutdownStatuses) may be absent
+// from an implementation, but when present it is arity-checked like any other.
 type SameArity<Impl, Iface> = {
     [K in keyof Iface]: Iface[K] extends (...a: infer A) => unknown
         ? K extends keyof Impl
@@ -30,7 +36,7 @@ type SameArity<Impl, Iface> = {
                     ? true
                     : false
                 : false
-            : false
+            : IsOptionalMember<Iface, K>
         : true;
 };
 // Collapses the per-method map to `true` only when every entry is `true`; otherwise `never`, so the
@@ -50,6 +56,16 @@ type DriftedStore = { getShutdownConfirmation(ctx: Context, instanceId: string):
 // @ts-expect-error a 2-parameter implementation of a 3-parameter interface method must be rejected
 const driftIsRejected: AllTrue<SameArity<DriftedStore, Pick<InstanceStore, 'getShutdownConfirmation'>>> = true;
 
+// Self-checks for optional members: an implementation may omit one, but an implemented one with too few
+// parameters is still rejected, and a REQUIRED member may never be omitted.
+type OptionalIface = { maybe?(ctx: Context, group: string): Promise<void> };
+type RequiredIface = { must(ctx: Context, group: string): Promise<void> };
+const omittedOptionalIsAccepted: AllTrue<SameArity<{ unrelated(): void }, OptionalIface>> = true;
+// @ts-expect-error an implemented optional method with fewer parameters than the interface must be rejected
+const driftedOptionalIsRejected: AllTrue<SameArity<{ maybe(ctx: Context): Promise<void> }, OptionalIface>> = true;
+// @ts-expect-error a missing required method must be rejected
+const omittedRequiredIsRejected: AllTrue<SameArity<{ unrelated(): void }, RequiredIface>> = true;
+
 test('store implementations match their interface arity (enforced at compile time)', () => {
     assert.ok(redisImplementsInstanceStore);
     assert.ok(redisImplementsMetricsStore);
@@ -58,4 +74,7 @@ test('store implementations match their interface arity (enforced at compile tim
     assert.ok(consulImplementsReservationStore);
     assert.ok(prometheusImplementsMetricsStore);
     assert.ok(driftIsRejected);
+    assert.ok(omittedOptionalIsAccepted);
+    assert.ok(driftedOptionalIsRejected);
+    assert.ok(omittedRequiredIsRejected);
 });

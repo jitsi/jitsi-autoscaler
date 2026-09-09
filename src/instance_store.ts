@@ -180,9 +180,18 @@ export interface InstanceState {
 
 export interface InstanceStore {
     // instance related methods
+    // fetchInstanceStates trims expired states inside the store (the single source of the expiry policy for
+    // both providers, see instance_state_expiry.ts) and returns only the still-valid ones.
     fetchInstanceStates: { (ctx: Context, group: string): Promise<InstanceState[]> };
     saveInstanceStatus: { (ctx: Context, group: string, state: InstanceState): Promise<boolean> };
-    filterOutAndTrimExpiredStates: { (ctx: Context, group: string, states: InstanceState[]): Promise<InstanceState[]> };
+    // Optional single-round-trip form of fetchInstanceStates + getShutdownStatuses. A store whose
+    // shutdown-status lookup is a whole-group read independent of the instance ids (Consul's recursive GET)
+    // implements this so InstanceTracker.trimCurrent reads the shutdown map once instead of twice; a store
+    // without it (Redis, whose lookup is a per-id pipeline) is served by the two separate calls. The
+    // returned shutdownStatuses array is index-aligned with states.
+    fetchInstanceStatesWithShutdownStatuses?: {
+        (ctx: Context, group: string): Promise<{ states: InstanceState[]; shutdownStatuses: boolean[] }>;
+    };
 
     // shutdown related methods
     setShutdownStatus: {

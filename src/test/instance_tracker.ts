@@ -439,6 +439,98 @@ describe('InstanceTracker', () => {
         });
     });
 
+    // Review #6: trimCurrent must read the store's shutdown statuses once. A store that offers the combined
+    // fetchInstanceStatesWithShutdownStatuses is used for both the states and the shutdown filter; a store
+    // without it (Redis) still goes through fetchInstanceStates + ShutdownManager.getShutdownStatuses.
+    describe('trimCurrent shutdown-status lookup', () => {
+        function states() {
+            return [
+                {
+                    instanceId: 'i-running',
+                    instanceType: 'JVB',
+                    status: { provisioning: false },
+                    metadata: { group: groupName },
+                },
+                {
+                    instanceId: 'i-shutdown',
+                    instanceType: 'JVB',
+                    status: { provisioning: false },
+                    metadata: { group: groupName },
+                },
+            ];
+        }
+
+        function tracker(store, sm) {
+            return new InstanceTracker({ instanceStore: store, metricsStore: store, shutdownManager: sm, audit });
+        }
+
+        test('uses the combined store read and does not ask the ShutdownManager for shutdown statuses', async () => {
+            const store = {
+                fetchInstanceStates: mock.fn(async () => {
+                    throw new Error('must not be called when the combined read is available');
+                }),
+                fetchInstanceStatesWithShutdownStatuses: mock.fn(async () => ({
+                    states: states(),
+                    shutdownStatuses: [false, true],
+                })),
+            };
+            const sm = {
+                getShutdownStatuses: mock.fn(async () => {
+                    throw new Error('second shutdown lookup must not happen');
+                }),
+                getShutdownConfirmations: mock.fn(async (_ctx, _group, ids) => ids.map(() => false)),
+            };
+
+            const result = await tracker(store, sm).trimCurrent(context, groupName);
+
+            assert.deepStrictEqual(
+                result.map((s) => s.instanceId),
+                ['i-running'],
+            );
+            assert.strictEqual(store.fetchInstanceStatesWithShutdownStatuses.mock.callCount(), 1);
+            assert.strictEqual(sm.getShutdownStatuses.mock.callCount(), 0);
+            assert.strictEqual(sm.getShutdownConfirmations.mock.callCount(), 1);
+        });
+
+        test('falls back to fetchInstanceStates + ShutdownManager when the store lacks the combined read', async () => {
+            const store = { fetchInstanceStates: mock.fn(async () => states()) };
+            const sm = {
+                getShutdownStatuses: mock.fn(async () => [false, true]),
+                getShutdownConfirmations: mock.fn(async (_ctx, _group, ids) => ids.map(() => false)),
+            };
+
+            const result = await tracker(store, sm).trimCurrent(context, groupName);
+
+            assert.deepStrictEqual(
+                result.map((s) => s.instanceId),
+                ['i-running'],
+            );
+            assert.strictEqual(store.fetchInstanceStates.mock.callCount(), 1);
+            assert.strictEqual(sm.getShutdownStatuses.mock.callCount(), 1);
+            assert.deepStrictEqual(sm.getShutdownStatuses.mock.calls[0].arguments.slice(1), [
+                groupName,
+                ['i-running', 'i-shutdown'],
+            ]);
+        });
+
+        test('filterShutdown=false uses the plain fetchInstanceStates and no shutdown lookups', async () => {
+            const store = {
+                fetchInstanceStates: mock.fn(async () => states()),
+                fetchInstanceStatesWithShutdownStatuses: mock.fn(async () => {
+                    throw new Error('combined read not needed without the shutdown filter');
+                }),
+            };
+            const sm = { getShutdownStatuses: mock.fn(), getShutdownConfirmations: mock.fn() };
+
+            const result = await tracker(store, sm).trimCurrent(context, groupName, false);
+
+            assert.strictEqual(result.length, 2);
+            assert.strictEqual(store.fetchInstanceStates.mock.callCount(), 1);
+            assert.strictEqual(sm.getShutdownStatuses.mock.callCount(), 0);
+            assert.strictEqual(sm.getShutdownConfirmations.mock.callCount(), 0);
+        });
+    });
+
     // P2: the tracker must forward the full scaling window and the per-period step to the metrics store,
     // so a Prometheus-backed store neither truncates long windows nor coarsens sub-60s periods.
     describe('metrics window forwarding (P2)', () => {

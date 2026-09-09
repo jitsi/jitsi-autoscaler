@@ -198,8 +198,17 @@ for (const provider of providers) {
             await store.setValue(ctx, 'k', 'v', 60);
             assert.strictEqual(await store.checkValue(ctx, 'k'), true);
 
-            await store.setValue(ctx, 'k-exp', 'v', -1);
-            assert.strictEqual(await store.checkValue(ctx, 'k-exp'), false);
+            // Neither store accepts a negative TTL (real Redis errors on `EX -1`, ConsulStore.writeTTLValue
+            // throws), so expiry is exercised by advancing the clock past a short TTL instead.
+            mock.timers.enable({ apis: ['Date'], now: Date.now() });
+            try {
+                await store.setValue(ctx, 'k-exp', 'v', 1);
+                assert.strictEqual(await store.checkValue(ctx, 'k-exp'), true);
+                mock.timers.tick(2000);
+                assert.strictEqual(await store.checkValue(ctx, 'k-exp'), false);
+            } finally {
+                mock.timers.reset();
+            }
         });
 
         test('reservations save / list / delete / grace', async () => {

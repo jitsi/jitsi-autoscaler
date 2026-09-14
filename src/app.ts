@@ -1,5 +1,5 @@
 import './polyfills';
-import config from './config';
+import config, { redactedConfig } from './config';
 import express from 'express';
 import * as context from './context';
 import Consul from 'consul';
@@ -276,7 +276,7 @@ const instanceGroupManager = new InstanceGroupManager({
     sanityJobsCreationGracePeriod: config.SanityJobsCreationGracePeriodSec,
 });
 
-logger.info('Starting up autoscaler service with config', { config });
+logger.info('Starting up autoscaler service with config', { config: redactedConfig() });
 
 logger.info('Initializing instance group manager...');
 const start = Date.now();
@@ -1041,19 +1041,22 @@ async function gracefulShutdown(signal: string) {
         logger.error('[Process] Error draining job queue', { err });
     }
 
-    // 4. Shut down lock manager
+    // 4. Shut down lock manager. Only the consul one holds anything of its own; the redis one
+    // rides on the shared client closed in step 5.
     try {
         if (lockManager.shutdown) {
             await lockManager.shutdown();
+            logger.info('[Process] Lock manager shut down');
         }
-        logger.info('[Process] Lock manager shut down');
     } catch (err) {
         logger.error('[Process] Error shutting down lock manager', { err });
     }
 
     // 5. Disconnect Redis
     try {
-        await redisClient.quit();
+        if (redisClient.status !== 'end') {
+            await redisClient.quit();
+        }
         logger.info('[Process] Redis disconnected');
     } catch (err) {
         logger.error('[Process] Error disconnecting Redis', { err });

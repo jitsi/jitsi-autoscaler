@@ -511,7 +511,7 @@ export class RedisLockManager implements AutoscalerLockManager {
             },
         );
         this.groupProcessingLockManager.on('clientError', (err) => {
-            this.logger.error('A redis error has occurred on the autoscalerLock:', err);
+            this.logger.error('A redis error has occurred on the autoscalerLock', { err });
         });
         this.groupProcessingLockManager.on('error', (err) => {
             // Ignore cases where a resource is explicitly marked as locked on a client.
@@ -519,7 +519,7 @@ export class RedisLockManager implements AutoscalerLockManager {
                 return;
             }
 
-            this.logger.error('A redis error has occurred on the autoscalerLock:', err);
+            this.logger.error('A redis error has occurred on the autoscalerLock', { err });
         });
     }
 
@@ -543,7 +543,7 @@ export class RedisLockManager implements AutoscalerLockManager {
         return new RedLocker(lock);
     }
 
-    async shutdown(): Promise<void> {
-        await this.groupProcessingLockManager.quit();
-    }
+    // No shutdown(): Redlock's quit() only calls quit() on the clients it was handed, and the
+    // one it has here is the shared client the caller owns and closes itself. Quitting it from
+    // here left the caller's own quit() rejecting with "Connection is closed" on every shutdown.
 }

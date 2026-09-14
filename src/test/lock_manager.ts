@@ -4,7 +4,7 @@ import AutoscalerLogger from '../logger';
 import assert from 'node:assert';
 import test, { describe, mock } from 'node:test';
 
-import { RedLocker, ConsulLocker, ConsulLockManager } from '../lock_manager';
+import { RedLocker, ConsulLocker, ConsulLockManager, RedisLockManager } from '../lock_manager';
 
 const asLogger = new AutoscalerLogger({ logLevel: 'debug' });
 const logger = asLogger.createLogger('debug');
@@ -36,6 +36,23 @@ describe('lock release safety (L4)', () => {
         };
         const locker = new ConsulLocker(client, 'session-1', 'some/key');
         await assert.doesNotReject(() => locker.release(ctx));
+    });
+});
+
+describe('redis connection ownership', () => {
+    // Redlock.quit() quits the clients it was handed, and the only one it has is the shared client
+    // the app owns. Closing it from the lock manager made the app's own quit() reject with
+    // "Connection is closed." on every single shutdown.
+    test('RedisLockManager does not close the shared redis client', () => {
+        const redisClient = { quit: mock.fn(async () => 'OK'), on: mock.fn(), defineCommand: mock.fn() };
+        const lm = new RedisLockManager(logger, { redisClient, groupLockTTLMs: 1000, jobCreationLockTTL: 1000 });
+
+        assert.strictEqual(
+            lm.shutdown,
+            undefined,
+            'RedisLockManager must not expose shutdown(): it does not own the connection',
+        );
+        assert.strictEqual(redisClient.quit.mock.callCount(), 0, 'the shared client must not be quit here');
     });
 });
 

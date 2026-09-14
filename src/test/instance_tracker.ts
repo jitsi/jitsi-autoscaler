@@ -543,7 +543,11 @@ describe('InstanceTracker', () => {
 
             const call = mockStore.fetchInstanceMetrics.mock.calls.at(-1);
             assert.strictEqual(call.arguments[1], groupName, 'group name is forwarded');
-            assert.strictEqual(call.arguments[2], 7200, 'windowSeconds must cover every period (24 * 300s)');
+            assert.strictEqual(
+                call.arguments[2],
+                7500,
+                'windowSeconds must cover every period plus the older guard period ((24 + 1) * 300s)',
+            );
             assert.strictEqual(call.arguments[3], scalePeriod, 'stepSeconds must be the scale period');
         });
 
@@ -553,8 +557,80 @@ describe('InstanceTracker', () => {
             await instanceTracker.getMetricInventoryPerPeriod(context, groupName, 3, 10);
 
             const call = mockStore.fetchInstanceMetrics.mock.calls.at(-1);
-            assert.strictEqual(call.arguments[2], 30);
+            assert.strictEqual(call.arguments[2], 40, '(3 + 1 guard) * 10s');
             assert.strictEqual(call.arguments[3], 10);
+        });
+    });
+
+    describe('gap fill-in at the oldest evaluated period', () => {
+        // Index 0 is the newest period, index periodsCount - 1 the oldest. The fill-in copies from the
+        // next-older period, so the oldest evaluated period needs the extra guard period as its source.
+        const periods = 10;
+        const scalePeriod = 60;
+        const instanceId = 'i-fill';
+        function sample(secondsAgo: number, value = 0.5) {
+            return { instanceId, value, timestamp: Date.now() - secondsAgo * 1000 };
+        }
+        // one sample in the middle of every period from newest (idx 0) to `oldestIdx`, skipping `skipIdx`
+        function samples(oldestIdx: number, skipIdx: number[] = []) {
+            return Array.from({ length: oldestIdx + 1 }, (_, idx) => idx)
+                .filter((idx) => !skipIdx.includes(idx))
+                .map((idx) => sample(idx * scalePeriod + scalePeriod / 2));
+        }
+
+        test('returns exactly periodsCount periods, never the guard period', async () => {
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => samples(periods));
+            const inventory = await instanceTracker.getMetricInventoryPerPeriod(
+                context,
+                groupName,
+                periods,
+                scalePeriod,
+            );
+            assert.strictEqual(inventory.length, periods);
+        });
+
+        test('fills a gap in the oldest evaluated period from the guard period', async () => {
+            // the instance reported in the guard period (idx 10) and in idx 8, but not in idx 9
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => samples(periods, [periods - 1]));
+            const inventory = await instanceTracker.getMetricInventoryPerPeriod(
+                context,
+                groupName,
+                periods,
+                scalePeriod,
+            );
+            assert.strictEqual(inventory.length, periods);
+            assert.strictEqual(inventory[periods - 1].length, 1, 'oldest evaluated period is filled in');
+            assert.strictEqual(inventory[periods - 1][0].instanceId, instanceId);
+            assert.ok(
+                inventory.every((period) => Number.isFinite(instanceTracker.computeSummaryMetric(period, true))),
+                'no period summarises to NaN',
+            );
+        });
+
+        test('does not fabricate metrics for an instance younger than the window (cold start)', async () => {
+            // the instance only exists for the newest 9 periods: nothing in idx 9 or the guard period
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => samples(periods - 2));
+            const inventory = await instanceTracker.getMetricInventoryPerPeriod(
+                context,
+                groupName,
+                periods,
+                scalePeriod,
+            );
+            assert.strictEqual(inventory.length, periods);
+            assert.strictEqual(inventory[periods - 1].length, 0, 'oldest period stays empty');
+            assert.ok(Number.isNaN(instanceTracker.computeSummaryMetric(inventory[periods - 1], true)));
+        });
+
+        test('still does not fill a two-period hole', async () => {
+            mockStore.fetchInstanceMetrics.mock.mockImplementationOnce(() => samples(periods, [4, 5]));
+            const inventory = await instanceTracker.getMetricInventoryPerPeriod(
+                context,
+                groupName,
+                periods,
+                scalePeriod,
+            );
+            assert.strictEqual(inventory[4].length, 0);
+            assert.strictEqual(inventory[5].length, 0);
         });
     });
 });

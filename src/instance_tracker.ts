@@ -324,17 +324,24 @@ export class InstanceTracker {
 
         await this.cleanInstanceMetrics(ctx, group);
 
+        // Bucket one extra, older "guard" period beyond the ones the caller evaluates. The gap fill-in below
+        // copies an instance's metric from the next-older period, so without the guard the oldest evaluated
+        // period has no source and can never be filled: a sidecar whose report interval aliases with the
+        // scale period leaves it empty a few percent of the time, and the autoscaler then (correctly) refuses
+        // to evaluate the scale-down window that contains it. The guard period is bucketed and used as a
+        // fill source only; it is dropped from the returned inventory.
+        const bucketCount = periodsCount + 1;
         const instancesInPeriods = <string[][]>[];
-        for (let periodIdx = 0; periodIdx < periodsCount; periodIdx++) {
+        for (let periodIdx = 0; periodIdx < bucketCount; periodIdx++) {
             metricPoints[periodIdx] = [];
             instancesInPeriods[periodIdx] = [];
         }
 
         const inventoryStart = process.hrtime();
-        // Window the metrics fetch to the full range the periods span and request per-period resolution,
-        // so a Prometheus-backed store does not truncate long scaling windows or coarsen sub-60s periods
-        // (the Redis store ignores both arguments).
-        const windowSeconds = periodsCount * periodDurationSeconds;
+        // Window the metrics fetch to the full range the periods (plus the guard period) span and request
+        // per-period resolution, so a Prometheus-backed store does not truncate long scaling windows or
+        // coarsen sub-60s periods (the Redis store ignores both arguments).
+        const windowSeconds = bucketCount * periodDurationSeconds;
         const items = await this.fetchInstanceMetrics(ctx, group, windowSeconds, periodDurationSeconds);
 
         const instancesInMetrics = <string[]>[];
@@ -342,7 +349,7 @@ export class InstanceTracker {
             if (itemJson) {
                 // const itemJson = JSON.parse(item);
                 const periodIdx = Math.floor((currentTime - itemJson.timestamp) / (periodDurationSeconds * 1000));
-                if (periodIdx >= 0 && periodIdx < periodsCount) {
+                if (periodIdx >= 0 && periodIdx < bucketCount) {
                     metricPoints[periodIdx].push(itemJson);
                     if (!instancesInMetrics.includes(itemJson.instanceId)) {
                         instancesInMetrics.push(itemJson.instanceId);
@@ -354,8 +361,8 @@ export class InstanceTracker {
             }
         });
 
-        // loop through all periods except the last, and fill in missing metrics
-        for (let periodIdx = periodsCount - 2; periodIdx >= 0; periodIdx--) {
+        // loop through all periods except the last (the guard period), and fill in missing metrics
+        for (let periodIdx = bucketCount - 2; periodIdx >= 0; periodIdx--) {
             instancesInMetrics
                 .filter((instanceId) => {
                     return !instancesInPeriods[periodIdx].includes(instanceId);
@@ -385,6 +392,9 @@ export class InstanceTracker {
                     }
                 });
         }
+
+        // drop the guard period: callers only ever asked for periodsCount periods
+        metricPoints.length = periodsCount;
 
         const inventoryEnd = process.hrtime(inventoryStart);
         ctx.logger.debug(`instance metric periods: `, { group, periodsCount, periodDurationSeconds, metricPoints });

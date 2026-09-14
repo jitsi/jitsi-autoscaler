@@ -131,7 +131,7 @@ groupList.forEach((group) => {
     }
 });
 
-export default {
+const config = {
     HTTPServerPort: env.PORT,
     LogLevel: env.LOG_LEVEL,
     ConsulHost: env.CONSUL_HOST,
@@ -215,3 +215,21 @@ export default {
     ReservationExpiryLookaheadSec: env.RESERVATION_EXPIRY_LOOKAHEAD_SEC,
     SeleniumGridFetchTimeoutMs: env.SELENIUM_GRID_FETCH_TIMEOUT_MS,
 };
+
+// Config keys holding credentials. These must never reach the log store, which is why the
+// startup config dump goes through redactedConfig() rather than logging `config` directly.
+const secretKeys: (keyof typeof config)[] = ['RedisPassword', 'DigitalOceanAPIToken'];
+
+// A copy of the config that is safe to log. Unset secrets stay empty so it is still visible
+// which of them were never configured.
+export function redactedConfig(): Record<string, unknown> {
+    const redacted: Record<string, unknown> = { ...config };
+    for (const key of secretKeys) {
+        if (config[key]) {
+            redacted[key] = '<redacted>';
+        }
+    }
+    return redacted;
+}
+
+export default config;

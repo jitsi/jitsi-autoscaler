@@ -95,6 +95,10 @@ export class ASAPPubKeyFetcher {
 async function fetchPublicKey(baseUrl: string, kid: string): Promise<string> {
     const hashedKid = sha256(kid);
     const reqUrl = `${baseUrl}/${hashedKid}.pem`;
-    const response = await got(reqUrl, { timeout: { request: KEY_FETCH_TIMEOUT_MS }, retry: { limit: 1 } });
+    // No got-level retry. got 11 can schedule a retry after the request promise has already rejected; the
+    // retried request then never gets an 'error' listener, and when its timeout fires the unhandled 'error'
+    // event kills the process (seen as a crash loop while the key server was unreachable).
+    // A transient failure is not negatively cached, so the next request for the kid fetches again anyway.
+    const response = await got(reqUrl, { timeout: { request: KEY_FETCH_TIMEOUT_MS }, retry: { limit: 0 } });
     return response.body;
 }

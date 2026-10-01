@@ -70,8 +70,11 @@ export class NomadClient {
         this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_CLOUD_PROVIDER_REQUEST_TIMEOUT_MS;
     }
 
+    // No got-level retry: got 11 can schedule a retry after the request promise has already rejected, and the
+    // retried request's timeout then raises an unhandled 'error' event that kills the process (see asap.ts).
+    // Callers run on periodic loops, so a failed call is simply made again on the next cycle.
     private requestOptions() {
-        return { timeout: { request: this.requestTimeoutMs } };
+        return { timeout: { request: this.requestTimeoutMs }, retry: { limit: 0 } };
     }
 
     // list nomad jobs

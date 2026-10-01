@@ -3,6 +3,7 @@
 
 import assert from 'node:assert';
 import http from 'node:http';
+import net from 'node:net';
 import test, { afterEach, beforeEach, describe, mock } from 'node:test';
 import sha256 from 'sha256';
 
@@ -110,7 +111,7 @@ describe('ASAPPubKeyFetcher', () => {
     });
 
     describe('key URL construction', () => {
-        test('requests <baseUrl>/<sha256(kid)>.pem with the key-server timeout and a single retry', async () => {
+        test('requests <baseUrl>/<sha256(kid)>.pem with the key-server timeout and no got-level retry', async () => {
             stubGot(() => Promise.resolve({ body: 'PEM' }));
             const fetcher = new ASAPPubKeyFetcher(baseUrl, 3600);
             const kid = 'jitsi/some-key-id';
@@ -122,7 +123,7 @@ describe('ASAPPubKeyFetcher', () => {
             // The raw kid must never leak into the URL; only its hash is used as the file name.
             assert.ok(!fetchCalls[0].url.includes(kid));
             assert.deepStrictEqual(fetchCalls[0].options.timeout, { request: KEY_FETCH_TIMEOUT_MS });
-            assert.deepStrictEqual(fetchCalls[0].options.retry, { limit: 1 });
+            assert.deepStrictEqual(fetchCalls[0].options.retry, { limit: 0 });
         });
 
         test('fetches the PEM from a real HTTP key server at the hashed path', async () => {
@@ -188,8 +189,7 @@ describe('ASAPPubKeyFetcher', () => {
             let hits = 0;
             const server = http.createServer((_request, response) => {
                 hits++;
-                if (hits <= 2) {
-                    // got retries once (retry.limit 1), so the first secretCallback consumes two hits.
+                if (hits === 1) {
                     response.statusCode = 503;
                     response.end('unavailable');
                     return;
@@ -206,11 +206,10 @@ describe('ASAPPubKeyFetcher', () => {
                     assert.match(err.message, /503/);
                     return true;
                 });
-                const hitsAfterFailure = hits;
-                assert.ok(hitsAfterFailure >= 1);
+                assert.strictEqual(hits, 1);
 
                 assert.strictEqual(await fetcher.secretCallback(req, tokenFor('kid-1')), 'RECOVERED-PEM');
-                assert.ok(hits > hitsAfterFailure);
+                assert.strictEqual(hits, 2);
             } finally {
                 await new Promise((resolve) => server.close(resolve));
             }
@@ -535,6 +534,39 @@ describe('ASAPPubKeyFetcher', () => {
             shouldFail = false;
             assert.strictEqual(await fetcher.secretCallback(req, tokenFor('slow-kid')), 'PEM-OK');
             assert.strictEqual(fetchCalls.length, 2);
+        });
+
+        test('a dropped connection leaves no retried request running behind the rejected caller', async () => {
+            // Regression for the 2026-09-27 pilot crash loop. got 11 retried the key fetch after its promise had
+            // already rejected; the retried request had no 'error' listener, so its request timeout raised an
+            // unhandled 'error' event and killed the process. Real got against a real socket: the first
+            // connection is dropped (a retryable error), and any later one is held open, as a dead network would.
+            const sockets = [];
+            const server = net.createServer((socket) => {
+                sockets.push(socket);
+                socket.on('error', () => {});
+                if (sockets.length === 1) {
+                    socket.destroy();
+                }
+            });
+            await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+            try {
+                const port = server.address().port;
+                const fetcher = new ASAPPubKeyFetcher(`https://127.0.0.1:${port}/keys`, 3600);
+
+                await assert.rejects(fetcher.secretCallback(req, tokenFor('kid-1')), (err) => {
+                    assert.strictEqual(err.name, 'UnauthorizedError');
+                    assert.strictEqual(err.code, 'invalid_token');
+                    return true;
+                });
+
+                // got's first retry would fire about 1s after the failure. Wait past it: nothing may reconnect.
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+                assert.strictEqual(sockets.length, 1);
+            } finally {
+                sockets.forEach((socket) => socket.destroy());
+                await new Promise((resolve) => server.close(resolve));
+            }
         });
 
         test('repeated timeouts keep asking the key server rather than short-circuiting', async () => {

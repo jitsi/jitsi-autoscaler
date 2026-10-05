@@ -1,0 +1,32 @@
+# Manual govern8-gated prod-blue deploy for this service (JIT-15941).
+# Calls the shared reusable workflow in vo_meetings_jaas_ci_cd.
+
+name: "Deploy to prod-blue"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "Image tag to deploy to prod-blue (e.g. 20260120-298c643b)"
+        required: true
+        type: string
+      rp_ticket:
+        description: "Existing RP-XXXX to attach (leave empty to fasttrack a new one)"
+        required: false
+        type: string
+        default: ''
+      enforce_gate:
+        description: "Enforce the govern8 gate: a DENY blocks the deploy. Unchecking opts out of blocking only — the deploy is still published/recorded to govern8 either way."
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  deploy-prod:
+    uses: 8x8/vo_meetings_jaas_ci_cd/.github/workflows/deploy_prod.yaml@master
+    secrets: inherit
+    with:
+      chart_name: jitsi-autoscaler
+      version_tag: ${{ inputs.version_tag }}
+      rp_ticket: ${{ inputs.rp_ticket }}
+      enforce_gate: ${{ inputs.enforce_gate }}

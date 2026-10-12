@@ -2,7 +2,7 @@
 // @ts-nocheck
 
 import assert from 'node:assert';
-import test, { afterEach, describe, mock } from 'node:test';
+import test, { afterEach, beforeEach, describe, mock } from 'node:test';
 
 import ScheduledScalingProcessor from '../scheduled_scaling_processor';
 
@@ -631,7 +631,17 @@ describe('ScheduledScalingProcessor', () => {
             enabled: true,
         });
 
+        // processScheduledScalingByGroup reads the wall clock, and the exit-period tests rely on their
+        // Monday 03:00-04:00 period being inactive. Pin the clock to Wednesday 14:00 America/New_York
+        // (us-ashburn-1) so those tests don't fail when the suite runs inside that hour.
+        const fixedNow = new Date('2026-03-18T18:00:00Z');
+
+        beforeEach(() => {
+            mock.timers.enable({ apis: ['Date'], now: fixedNow });
+        });
+
         afterEach(() => {
+            mock.timers.reset();
             context = initContext();
             instanceGroupManager.getInstanceGroup.mock.resetCalls();
             instanceGroupManager.upsertInstanceGroup.mock.resetCalls();
@@ -761,7 +771,7 @@ describe('ScheduledScalingProcessor', () => {
         test('restores baseline desiredCount when exiting period that explicitly set it', async () => {
             context = initContext();
             const baseOptions = { ...currentScalingOptions };
-            // Period with explicit desiredCount, narrow time window so findActivePeriod returns null
+            // Period with explicit desiredCount, narrow time window so findActivePeriod returns null at fixedNow
             const expiredPeakPeriod = {
                 ...alwaysPeakPeriod,
                 dayOfWeek: [1],
@@ -796,7 +806,7 @@ describe('ScheduledScalingProcessor', () => {
         test('preserves live desiredCount on exit when period did not set it', async () => {
             context = initContext();
             const baseOptions = { ...currentScalingOptions }; // desiredCount=2
-            // Period that only sets minDesired, NOT desiredCount
+            // Period that only sets minDesired, NOT desiredCount; inactive at fixedNow
             const minOnlyPeriod = {
                 name: 'min-only',
                 dayOfWeek: [1],

@@ -594,6 +594,17 @@ describe('reconnectOnReadonly', () => {
         assert.equal(reconnectOnReadonly(err), true);
     });
 
+    test('reconnects on a READONLY reply from a Lua script', () => {
+        const redis6 = new Error(
+            "ERR Error running script (call to f_d223ed8c): @user_script:1: @user_script: 1: -READONLY You can't write against a read only replica.",
+        );
+        const redis7 = new Error(
+            "READONLY You can't write against a read only replica. script: d223ed8c, on @user_script:1.",
+        );
+        assert.equal(reconnectOnReadonly(redis6), true);
+        assert.equal(reconnectOnReadonly(redis7), true);
+    });
+
     test('does not reconnect on other errors', () => {
         assert.equal(reconnectOnReadonly(new Error('ERR wrong number of arguments')), false);
         assert.equal(reconnectOnReadonly(new Error('Connection is closed.')), false);

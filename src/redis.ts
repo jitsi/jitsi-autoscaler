@@ -17,8 +17,9 @@ type PipelineResult = [error: Error | null, result: unknown];
 // A connection to a replica (stale after a failover, or a wrong master tag) fails every write with READONLY.
 // Reconnect but reject the command: resending it (return 2) never settles while the host still resolves to a
 // replica, because maxRetriesPerRequest is null.
+// Redis 6 wraps a READONLY from a Lua script (Redlock) as "ERR Error running script ... -READONLY ...".
 export function reconnectOnReadonly(err: Error): boolean {
-    return err.message.startsWith('READONLY');
+    return /(^|-)READONLY /.test(err.message);
 }
 
 export interface RedisMetricsOptions {

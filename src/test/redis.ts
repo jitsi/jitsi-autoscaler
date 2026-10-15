@@ -2,7 +2,7 @@
 // @ts-nocheck
 import assert from 'node:assert';
 import test, { describe, mock, beforeEach, afterEach } from 'node:test';
-import RedisStore from '../redis';
+import RedisStore, { reconnectOnReadonly } from '../redis';
 import Redis from 'ioredis';
 import { Context } from '../context';
 import { MockRedisClient } from './mock-redis-client';
@@ -585,5 +585,18 @@ describe('RedisStore with Mock Redis Client', () => {
         const warnings = context.logger.warn.mock.calls.filter((c) => String(c.arguments[0]).includes('no timestamp'));
         assert.equal(warnings.length, 1, 'expect exactly one explicit warning about the missing timestamp');
         assert.equal(warnings[0].arguments[1].group, group, 'expect the warning to carry the group');
+    });
+});
+
+describe('reconnectOnReadonly', () => {
+    test('reconnects and resends the command on a READONLY reply', () => {
+        const err = new Error("READONLY You can't write against a read only replica.");
+        assert.equal(reconnectOnReadonly(err), 2);
+    });
+
+    test('does not reconnect on other errors', () => {
+        assert.equal(reconnectOnReadonly(new Error('ERR wrong number of arguments')), false);
+        assert.equal(reconnectOnReadonly(new Error('Connection is closed.')), false);
+        assert.equal(reconnectOnReadonly(new Error('LOADING Redis is loading the dataset in memory')), false);
     });
 });

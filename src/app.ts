@@ -28,7 +28,7 @@ import SanityLoop from './sanity_loop';
 import MetricsLoop from './metrics_loop';
 import ScalingManager from './scaling_options_manager';
 import ScheduledScalingProcessor from './scheduled_scaling_processor';
-import RedisStore from './redis';
+import RedisStore, { reconnectOnReadonly } from './redis';
 import ConsulStore from './consul';
 import PrometheusClient from './prometheus';
 import MetricsStore from './metrics_store';
@@ -78,6 +78,13 @@ const redisOptions = <RedisOptions>{
         const delay = Math.min(times * 1000, 30000);
         logger.info(`[Redis] Reconnecting in ${delay}ms (attempt ${times})`);
         return delay;
+    },
+    reconnectOnError(err: Error) {
+        const reconnect = reconnectOnReadonly(err);
+        if (reconnect) {
+            logger.warn('[Redis] READONLY reply, reconnecting to find the primary', { err });
+        }
+        return reconnect;
     },
     maxRetriesPerRequest: null,
 };

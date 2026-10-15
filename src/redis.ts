@@ -14,6 +14,13 @@ import Redis, { ChainableCommander } from 'ioredis';
 
 type PipelineResult = [error: Error | null, result: unknown];
 
+// After a failover the old primary is demoted to a replica but keeps the connection open,
+// so every write fails with READONLY until the client reconnects to the new primary.
+// 2 also resends the rejected command; that is safe because a replica never ran it.
+export function reconnectOnReadonly(err: Error): false | 2 {
+    return err.message.startsWith('READONLY') ? 2 : false;
+}
+
 export interface RedisMetricsOptions {
     redisClient: Redis;
     redisScanCount: number;

@@ -86,7 +86,10 @@ const redisOptions = <RedisOptions>{
         const reconnect = reconnectOnReadonly(err);
         if (reconnect && !redisReadonlyWarned) {
             redisReadonlyWarned = true;
-            logger.warn('[Redis] READONLY reply, reconnecting to find the primary', { err });
+            logger.warn('[Redis] READONLY reply, reconnecting to find the primary', {
+                err,
+                replica: redisClient.stream?.remoteAddress,
+            });
         }
         return reconnect;
     },

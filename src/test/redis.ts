@@ -4,6 +4,7 @@ import assert from 'node:assert';
 import test, { describe, mock, beforeEach, afterEach } from 'node:test';
 import RedisStore, { reconnectOnReadonly } from '../redis';
 import Redis from 'ioredis';
+import net from 'node:net';
 import { Context } from '../context';
 import { MockRedisClient } from './mock-redis-client';
 
@@ -589,7 +590,7 @@ describe('RedisStore with Mock Redis Client', () => {
 });
 
 describe('reconnectOnReadonly', () => {
-    test('reconnects without resending the command on a READONLY reply', () => {
+    test('reconnects on a plain READONLY reply', () => {
         const err = new Error("READONLY You can't write against a read only replica.");
         assert.equal(reconnectOnReadonly(err), true);
     });
@@ -609,5 +610,56 @@ describe('reconnectOnReadonly', () => {
         assert.equal(reconnectOnReadonly(new Error('ERR wrong number of arguments')), false);
         assert.equal(reconnectOnReadonly(new Error('Connection is closed.')), false);
         assert.equal(reconnectOnReadonly(new Error('LOADING Redis is loading the dataset in memory')), false);
+    });
+
+    // Guards the ioredis contract: a true return must reject the command and reconnect, not resend it forever.
+    test('ioredis rejects the write and reconnects when a replica replies READONLY', async () => {
+        let connections = 0;
+        const server = net.createServer((socket) => {
+            connections++;
+            socket.on('data', (data) => {
+                const names = data
+                    .toString()
+                    .split('\r\n')
+                    .filter((_line, i, lines) => i > 1 && lines[i - 2].startsWith('*'));
+                for (const name of names) {
+                    if (name.toUpperCase() === 'SET') {
+                        socket.write("-READONLY You can't write against a read only replica.\r\n");
+                    } else if (name.toUpperCase() === 'INFO') {
+                        socket.write('$0\r\n\r\n');
+                    } else {
+                        socket.write('+OK\r\n');
+                    }
+                }
+            });
+        });
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const client = new Redis({
+            host: '127.0.0.1',
+            port: server.address().port,
+            reconnectOnError: reconnectOnReadonly,
+            maxRetriesPerRequest: null,
+            retryStrategy: () => 10,
+        });
+        client.on('error', () => undefined);
+        let timer;
+        try {
+            const rejectsAndReconnects = async () => {
+                await assert.rejects(client.set('key', 'value'), /READONLY/);
+                while (connections < 2) {
+                    await new Promise((resolve) => setTimeout(resolve, 10));
+                }
+            };
+            await Promise.race([
+                rejectsAndReconnects(),
+                new Promise((_resolve, reject) => {
+                    timer = setTimeout(() => reject(new Error('SET did not reject and reconnect')), 2000);
+                }),
+            ]);
+        } finally {
+            clearTimeout(timer);
+            client.disconnect();
+            await new Promise((resolve) => server.close(resolve));
+        }
     });
 });

@@ -29,6 +29,8 @@ import MetricsLoop from './metrics_loop';
 import ScalingManager from './scaling_options_manager';
 import ScheduledScalingProcessor from './scheduled_scaling_processor';
 import RedisStore, { reconnectOnReadonly } from './redis';
+import { reconnectQueueClientOnReadonly } from './queue_redis';
+import { createClient } from 'redis';
 import ConsulStore from './consul';
 import PrometheusClient from './prometheus';
 import MetricsStore from './metrics_store';
@@ -392,13 +394,17 @@ const sanityLoop = new SanityLoop({
 // Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
 const jobManager = new JobManager({
     logger,
-    queueRedisOptions: {
-        host: config.RedisHost,
-        port: config.RedisPort,
-        password: config.RedisPassword ? config.RedisPassword : undefined,
-        db: config.RedisDb ? config.RedisDb : undefined,
-        tls: config.RedisTLS ? {} : undefined,
-    },
+    queueRedisClient: reconnectQueueClientOnReadonly(
+        createClient({
+            host: config.RedisHost,
+            port: config.RedisPort,
+            password: config.RedisPassword ? config.RedisPassword : undefined,
+            db: config.RedisDb ? config.RedisDb : undefined,
+            tls: config.RedisTLS ? {} : undefined,
+        }),
+        logger,
+        'job queue',
+    ),
     lockManager,
     instanceGroupManager,
     instanceLauncher,

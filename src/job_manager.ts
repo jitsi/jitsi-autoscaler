@@ -3,7 +3,7 @@ import InstanceGroupManager from './instance_group';
 import * as context from './context';
 import { nanoid } from 'nanoid/non-secure';
 import { Logger } from 'winston';
-import { ClientOpts } from 'redis';
+import { RedisClient } from 'redis';
 import InstanceLauncher from './instance_launcher';
 import AutoscaleProcessor from './autoscaler';
 import { AutoscalerLock, AutoscalerLockManager } from './lock';
@@ -15,7 +15,7 @@ import { Context } from './context';
 
 export interface JobManagerOptions {
     logger: Logger;
-    queueRedisOptions: ClientOpts;
+    queueRedisClient: RedisClient;
     lockManager: AutoscalerLockManager;
     instanceGroupManager: InstanceGroupManager;
     instanceLauncher: InstanceLauncher;
@@ -122,12 +122,14 @@ export default class JobManager {
         this.sanityLoopProcessingTimeoutMs = options.sanityLoopProcessingTimeoutMs;
         this.jobsConcurrency = options.jobsConcurrency;
 
-        this.jobQueue = this.createQueue(JobManager.jobQueueName, options.queueRedisOptions);
+        this.jobQueue = this.createQueue(JobManager.jobQueueName, options.queueRedisClient);
     }
 
-    createQueue(queueName: string, redisClientOptions: ClientOpts): Queue {
+    createQueue(queueName: string, redisClient: RedisClient): Queue {
         const newQueue = new Queue(queueName, {
-            redis: redisClientOptions,
+            redis: redisClient,
+            // Bee-Queue quits a client it was given only with this flag. The client is not shared.
+            quitCommandClient: true,
             removeOnSuccess: true,
             removeOnFailure: true,
         });

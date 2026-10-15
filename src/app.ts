@@ -71,6 +71,9 @@ const consulClient = new Consul({
     secure: config.ConsulSecure,
 });
 
+// Every in-flight write on a replica connection replies READONLY, so warn once per connection.
+let redisReadonlyWarned = false;
+
 const redisOptions = <RedisOptions>{
     host: config.RedisHost,
     port: config.RedisPort,
@@ -81,7 +84,8 @@ const redisOptions = <RedisOptions>{
     },
     reconnectOnError(err: Error) {
         const reconnect = reconnectOnReadonly(err);
-        if (reconnect) {
+        if (reconnect && !redisReadonlyWarned) {
+            redisReadonlyWarned = true;
             logger.warn('[Redis] READONLY reply, reconnecting to find the primary', { err });
         }
         return reconnect;
@@ -109,6 +113,7 @@ redisClient.on('connect', () => {
     logger.info('[Redis] Connected');
 });
 redisClient.on('ready', () => {
+    redisReadonlyWarned = false;
     logger.info('[Redis] Ready');
 });
 

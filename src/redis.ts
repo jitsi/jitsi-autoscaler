@@ -14,11 +14,11 @@ import Redis, { ChainableCommander } from 'ioredis';
 
 type PipelineResult = [error: Error | null, result: unknown];
 
-// After a failover the old primary is demoted to a replica but keeps the connection open,
-// so every write fails with READONLY until the client reconnects to the new primary.
-// 2 also resends the rejected command; that is safe because a replica never ran it.
-export function reconnectOnReadonly(err: Error): false | 2 {
-    return err.message.startsWith('READONLY') ? 2 : false;
+// A connection to a replica (stale after a failover, or a wrong master tag) fails every write with READONLY.
+// Reconnect but reject the command: resending it (return 2) never settles while the host still resolves to a
+// replica, because maxRetriesPerRequest is null.
+export function reconnectOnReadonly(err: Error): boolean {
+    return err.message.startsWith('READONLY');
 }
 
 export interface RedisMetricsOptions {

@@ -589,9 +589,9 @@ describe('RedisStore with Mock Redis Client', () => {
 });
 
 describe('reconnectOnReadonly', () => {
-    test('reconnects and resends the command on a READONLY reply', () => {
+    test('reconnects without resending the command on a READONLY reply', () => {
         const err = new Error("READONLY You can't write against a read only replica.");
-        assert.equal(reconnectOnReadonly(err), 2);
+        assert.equal(reconnectOnReadonly(err), true);
     });
 
     test('does not reconnect on other errors', () => {

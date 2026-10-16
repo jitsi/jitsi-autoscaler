@@ -390,8 +390,7 @@ const sanityLoop = new SanityLoop({
     instanceGroupManager,
 });
 
-// Each Queue in JobManager has its own Redis connection (other than the one in RedisClient)
-// Bee-Queue also uses different a Redis library, so we map redisOptions to the object expected by Bee-Queue
+// Bee-Queue needs a redis 3 client, not ioredis, so the job queue gets its own client built from the same config.
 const jobManager = new JobManager({
     logger,
     queueRedisClient: reconnectQueueClientOnReadonly(

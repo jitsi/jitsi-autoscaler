@@ -6,7 +6,8 @@ import { Duplex } from 'node:stream';
 import test, { afterEach, describe, mock } from 'node:test';
 import { RedisClient } from 'redis';
 import { isClient } from 'bee-queue/lib/redis';
-import { reconnectQueueClientOnReadonly } from '../queue_redis';
+import { buildCache, shas } from 'bee-queue/lib/lua';
+import { reconnectQueueClientOnReadonly, reloadQueueScriptsOnReady } from '../queue_redis';
 
 // Mirrors the redis 3 RedisClient members that the hook uses.
 class FakeRedisClient extends EventEmitter {
@@ -126,4 +127,48 @@ describe('reconnectQueueClientOnReadonly', () => {
             client.end(false);
         });
     }
+});
+
+describe('reloadQueueScriptsOnReady', () => {
+    async function waitFor(check) {
+        for (let i = 0; i < 100 && !check(); i++) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.ok(check());
+    }
+
+    function makeClient(scriptReply) {
+        const client = new FakeRedisClient();
+        client.script = mock.fn(scriptReply);
+        const logger = { error: mock.fn() };
+        reloadQueueScriptsOnReady(client, logger, 'job queue');
+        return { client, logger };
+    }
+
+    test('loads only the missing scripts on each ready', async () => {
+        // shas fills in only after Bee-Queue first reads its script files.
+        await buildCache({ script: (_op, _arg, done) => done(null, [1]) });
+        assert.ok(Object.keys(shas).length > 1);
+        const present = Object.values(shas)[0];
+        const { client } = makeClient((op, arg, done) =>
+            done(null, op === 'exists' ? [arg === present ? 1 : 0] : 'sha'),
+        );
+        const loads = () => client.script.mock.calls.filter((c) => c.arguments[0] === 'load').length;
+        const scriptCount = Object.keys(shas).length;
+
+        client.emit('ready');
+        await waitFor(() => loads() === scriptCount - 1);
+        client.emit('ready');
+        await waitFor(() => loads() === 2 * (scriptCount - 1));
+    });
+
+    test('logs a failed reload', async () => {
+        const { client, logger } = makeClient((_op, _arg, done) => done(new Error('ERR boom')));
+        client.emit('ready');
+        await waitFor(() => logger.error.mock.callCount() === 1);
+        assert.match(
+            logger.error.mock.calls[0].arguments[0],
+            /Failed to reload the Bee-Queue scripts on the job queue/,
+        );
+    });
 });

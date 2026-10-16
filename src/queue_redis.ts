@@ -2,6 +2,10 @@ import { ClientOpts, RedisClient } from 'redis';
 import { Logger } from 'winston';
 import { reconnectOnReadonly } from './redis';
 
+// Bee-Queue ships no types for its script loader.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { buildCache } = require('bee-queue/lib/lua') as { buildCache(client: RedisClient): Promise<unknown> };
+
 interface RedisClientInternals {
     return_error(err: Error): void;
     stream: { destroy(): void };
@@ -39,5 +43,18 @@ export function reconnectQueueClientOnReadonly(client: RedisClient, logger: Logg
     client.duplicate = (options?: ClientOpts) =>
         reconnectQueueClientOnReadonly(duplicate.call(client, options), logger, name);
 
+    return client;
+}
+
+// Redis 7 does not copy loaded scripts to a replica, and Bee-Queue loads its scripts only at connect, then calls them
+// by hash. After a failover the new primary has none, so each job write fails with NOSCRIPT until a restart.
+// buildCache() loads only the missing scripts. Use it on the command client only: the event client is in subscriber
+// mode, which rejects SCRIPT.
+export function reloadQueueScriptsOnReady(client: RedisClient, logger: Logger, name: string): RedisClient {
+    client.on('ready', () => {
+        buildCache(client).catch((err: Error) => {
+            logger.error(`[Redis] Failed to reload the Bee-Queue scripts on the ${name} client`, { err });
+        });
+    });
     return client;
 }

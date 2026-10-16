@@ -29,7 +29,7 @@ import MetricsLoop from './metrics_loop';
 import ScalingManager from './scaling_options_manager';
 import ScheduledScalingProcessor from './scheduled_scaling_processor';
 import RedisStore, { reconnectOnReadonly } from './redis';
-import { reconnectQueueClientOnReadonly } from './queue_redis';
+import { reconnectQueueClientOnReadonly, reloadQueueScriptsOnReady } from './queue_redis';
 import { createClient } from 'redis';
 import ConsulStore from './consul';
 import PrometheusClient from './prometheus';
@@ -393,14 +393,18 @@ const sanityLoop = new SanityLoop({
 // Bee-Queue needs a redis 3 client, not ioredis, so the job queue gets its own client built from the same config.
 const jobManager = new JobManager({
     logger,
-    queueRedisClient: reconnectQueueClientOnReadonly(
-        createClient({
-            host: config.RedisHost,
-            port: config.RedisPort,
-            password: config.RedisPassword ? config.RedisPassword : undefined,
-            db: config.RedisDb ? config.RedisDb : undefined,
-            tls: config.RedisTLS ? {} : undefined,
-        }),
+    queueRedisClient: reloadQueueScriptsOnReady(
+        reconnectQueueClientOnReadonly(
+            createClient({
+                host: config.RedisHost,
+                port: config.RedisPort,
+                password: config.RedisPassword ? config.RedisPassword : undefined,
+                db: config.RedisDb ? config.RedisDb : undefined,
+                tls: config.RedisTLS ? {} : undefined,
+            }),
+            logger,
+            'job queue',
+        ),
         logger,
         'job queue',
     ),

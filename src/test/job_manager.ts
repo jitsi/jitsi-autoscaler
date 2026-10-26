@@ -147,12 +147,12 @@ describe('JobManager', () => {
         const sanityLoop = { reportUntrackedInstances: mock.fn(async () => true) };
         const metricsLoop = { saveMetricQueueWaiting: mock.fn(async () => true) };
 
-        const queueRedisOptions = { host: 'redis.test', port: 6379 };
+        const queueRedisClient = { name: 'fake redis client' };
 
         const before = FakeQueue.instances.length;
         const jobManager = new JobManager({
             logger,
-            queueRedisOptions,
+            queueRedisClient,
             lockManager,
             instanceGroupManager,
             instanceLauncher,
@@ -180,7 +180,7 @@ describe('JobManager', () => {
             scheduledScalingProcessor,
             sanityLoop,
             metricsLoop,
-            queueRedisOptions,
+            queueRedisClient,
             queue,
             jobManager,
         };
@@ -194,11 +194,12 @@ describe('JobManager', () => {
     }
 
     describe('queue construction', () => {
-        test('creates the AutoscalerJobs queue with the redis options and cleanup settings', () => {
-            const { queue, queueRedisOptions } = makeHarness();
+        test('creates the AutoscalerJobs queue with the redis client and cleanup settings', () => {
+            const { queue, queueRedisClient } = makeHarness();
             assert.strictEqual(queue.name, 'AutoscalerJobs');
             assert.deepStrictEqual(queue.settings, {
-                redis: queueRedisOptions,
+                redis: queueRedisClient,
+                quitCommandClient: true,
                 removeOnSuccess: true,
                 removeOnFailure: true,
             });

@@ -14,6 +14,15 @@ import Redis, { ChainableCommander } from 'ioredis';
 
 type PipelineResult = [error: Error | null, result: unknown];
 
+// A connection to a replica (stale after a failover, or a wrong master tag) fails every write with READONLY.
+// Reconnect but reject the command: resending it (return 2) never settles while the host still resolves to a
+// replica. app.ts sets no maxRetriesPerRequest limit, and a numeric limit would not trip either, because each
+// reconnect succeeds and resets the retry count.
+// Redis 6 wraps a READONLY from a Lua script (Redlock) as "ERR Error running script ... -READONLY ...".
+export function reconnectOnReadonly(err: Error): boolean {
+    return /(^|-)READONLY /.test(err.message);
+}
+
 export interface RedisMetricsOptions {
     redisClient: Redis;
     redisScanCount: number;
